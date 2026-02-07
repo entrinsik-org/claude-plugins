@@ -1,0 +1,17 @@
+{
+  "name": "entrinsik-plugins",
+  "owner": { "name": "Entrinsik" },
+  "metadata": {
+    "description": "Claude Code plugins for Informer development",
+    "pluginRoot": "./plugins"
+  },
+  "plugins": [
+    {
+      "name": "magic-reports",
+      "source": "./plugins/magic-reports",
+      "description": "Skills for building Informer Magic Reports with Vite",
+      "version": "1.0.0",
+      "author": { "name": "Entrinsik" }
+    }
+  ]
+}
