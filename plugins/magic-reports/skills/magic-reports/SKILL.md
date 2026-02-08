@@ -353,6 +353,71 @@ const theme = window.__INFORMER__?.theme; // 'light' or 'dark'
 
 In dev mode, the Vite plugin mocks this with placeholder values (theme defaults to `'light'`).
 
+### Opening a Chat from a Report
+
+Reports can trigger an AI chat in Informer GO with context from the report. This lets users click a data point, insight, or button and land in a chat pre-loaded with relevant context.
+
+```javascript
+__INFORMER__.openChat({
+    prompt: 'Why did revenue spike in Q4?',           // Initial message (optional)
+    context: { revenue: 1250000, quarter: 'Q4' },     // Data passed to the AI as context
+    instructions: 'Focus on year-over-year trends',   // System instructions for the AI
+    skills: ['dataset:admin:sales-data']               // Datasets/libraries to attach
+});
+```
+
+| Option | Type | Description |
+|--------|------|-------------|
+| `prompt` | `string` | Initial user message sent to the AI. If omitted, chat opens empty with context loaded. |
+| `context` | `object` | Arbitrary key-value data injected into the AI's context. Use this for data points, filters, selected rows, etc. |
+| `instructions` | `string` | System-level instructions that guide the AI's behavior for this chat. |
+| `skills` | `string[]` | Resources to attach, formatted as `"type:id"` — e.g. `"dataset:admin:orders"`, `"library:abc123"`. |
+
+The report's identity (`id`, `name`, `url`) is automatically included as the chat's source — you don't need to pass it.
+
+**How it works:**
+- On **Capacitor** (mobile/tablet): The report iframe sends a `postMessage` to the parent app. The report viewer dismisses, the gallery closes, and a new chat opens with the starter context.
+- On **Desktop** (new tab): The message is sent via `window.opener` to the GO app that opened the report.
+
+**Example — chart click handler:**
+```javascript
+chart.on('click', (point) => {
+    __INFORMER__.openChat({
+        prompt: `Tell me about ${point.label}`,
+        context: {
+            field: point.field,
+            value: point.value,
+            filters: currentFilters
+        },
+        skills: ['dataset:admin:sales-data']
+    });
+});
+```
+
+**Example — insight card:**
+```javascript
+document.querySelector('.insight').addEventListener('click', () => {
+    __INFORMER__.openChat({
+        prompt: 'What should we do about this?',
+        context: {
+            insight: 'AWS spend trending 18% over budget',
+            currentSpend: 68400,
+            budget: 58000
+        },
+        instructions: 'The user is asking about a cost optimization insight. Suggest concrete actions.'
+    });
+});
+```
+
+**Dev mode:** `__INFORMER__.openChat()` is not available in local Vite dev mode since there is no parent GO app. You can mock it for testing:
+
+```javascript
+if (!window.__INFORMER__?.openChat) {
+    window.__INFORMER__ = window.__INFORMER__ || {};
+    window.__INFORMER__.openChat = (opts) => console.log('openChat:', opts);
+}
+```
+
 ### Responding to Theme
 
 Use the theme value to adapt your report's appearance:
