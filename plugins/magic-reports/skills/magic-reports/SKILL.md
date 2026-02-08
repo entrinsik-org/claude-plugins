@@ -355,29 +355,40 @@ In dev mode, the Vite plugin mocks this with placeholder values (theme defaults 
 
 ### Opening a Chat from a Report
 
-Reports can trigger an AI chat in Informer GO with context from the report. This lets users click a data point, insight, or button and land in a chat pre-loaded with relevant context.
+Reports can trigger an AI chat in Informer GO with context from the report. This lets users click a data point, insight, or button and land in a chat pre-loaded with relevant context and the right tools.
+
+Since the chat originates from a report, the Informer API skill is **automatically enabled** — the AI gets `apiCall` and `searchRoutes` tools without any extra configuration.
+
+**Important:** Your `instructions` should spell out which APIs to call. The report knows what data it's working with — tell the AI the specific datasets, integrations, or query endpoints to use. Without this guidance, the AI has access to the full API but no direction.
 
 ```javascript
 __INFORMER__.openChat({
-    prompt: 'Why did revenue spike in Q4?',           // Initial message (optional)
-    context: { revenue: 1250000, quarter: 'Q4' },     // Data passed to the AI as context
-    instructions: 'Focus on year-over-year trends',   // System instructions for the AI
-    skills: ['dataset:admin:sales-data']               // Datasets/libraries to attach
+    prompt: 'Why did revenue spike in Q4?',
+    context: { revenue: 1250000, quarter: 'Q4' },
+    instructions: 'Use the Informer API to query the sales-data dataset (admin:sales-data) ' +
+        'for year-over-year Q4 trends. Use the Salesforce integration to pull Opportunity ' +
+        'records for pipeline context.'
 });
 ```
 
 | Option | Type | Description |
 |--------|------|-------------|
 | `prompt` | `string` | Initial user message sent to the AI. If omitted, chat opens empty with context loaded. |
-| `context` | `object` | Arbitrary key-value data injected into the AI's context. Use this for data points, filters, selected rows, etc. |
-| `instructions` | `string` | System-level instructions that guide the AI's behavior for this chat. |
-| `skills` | `string[]` | Resources to attach, formatted as `"type:id"` — e.g. `"dataset:admin:orders"`, `"library:abc123"`. |
+| `context` | `object` | Data points injected into the AI's context — current state, filters, selected rows, etc. |
+| `instructions` | `string` | **Tell the AI which APIs to call.** Name specific datasets, integrations, queries, and what to focus on. |
+| `skills` | `string[]` | Additional resources to attach: `"dataset:owner:slug"`, `"library:id"` (optional). |
+
+The AI automatically receives:
+- **`apiCall`** — Make authenticated requests to any Informer API endpoint
+- **`searchRoutes`** — Discover available API endpoints and their parameters
+
+The AI can query datasets, execute saved queries, and call integrations — but it needs your `instructions` to know _which ones_ and _why_.
 
 The report's identity (`id`, `name`, `url`) is automatically included as the chat's source — you don't need to pass it.
 
-**How it works:**
-- On **Capacitor** (mobile/tablet): The report iframe sends a `postMessage` to the parent app. The report viewer dismisses, the gallery closes, and a new chat opens with the starter context.
-- On **Desktop** (new tab): The message is sent via `window.opener` to the GO app that opened the report.
+**How it works across platforms:**
+- **Capacitor** (mobile/tablet): `postMessage` to parent app. Gallery and report dismiss, new chat opens.
+- **Electron** (desktop): IPC bridge between the report's BrowserWindow and the main app window.
 
 **Example — chart click handler:**
 ```javascript
@@ -389,7 +400,9 @@ chart.on('click', (point) => {
             value: point.value,
             filters: currentFilters
         },
-        skills: ['dataset:admin:sales-data']
+        instructions: `Use the Informer API to search the sales-data dataset. ` +
+            `The user clicked on ${point.field}=${point.value}. ` +
+            `Analyze trends and related records.`
     });
 });
 ```
@@ -404,7 +417,9 @@ document.querySelector('.insight').addEventListener('click', () => {
             currentSpend: 68400,
             budget: 58000
         },
-        instructions: 'The user is asking about a cost optimization insight. Suggest concrete actions.'
+        instructions: 'The user is viewing a cost optimization insight. ' +
+            'Use the Informer API to query the cloud-costs dataset for detailed breakdown. ' +
+            'Suggest concrete actions to reduce spend.'
     });
 });
 ```
@@ -416,6 +431,314 @@ if (!window.__INFORMER__?.openChat) {
     window.__INFORMER__ = window.__INFORMER__ || {};
     window.__INFORMER__.openChat = (opts) => console.log('openChat:', opts);
 }
+```
+
+### Registering Tools (Report Bridge)
+
+Reports can register tools that the AI can call at runtime to get fresh data from the report. This enables **bidirectional** communication — instead of sending a static snapshot via `openChat()`, the AI can ask the report for its current state on-demand.
+
+The most common tool is `getContext`, which returns the report's current filters, selections, and visible data.
+
+```javascript
+__INFORMER__.registerTool({
+    name: 'getContext',
+    description: 'Returns the current report state including active filters, selected data, and summary metrics.',
+    schema: {
+        type: 'object',
+        properties: {},
+        additionalProperties: false
+    },
+    handler: () => {
+        return {
+            filters: getCurrentFilters(),
+            selectedRows: getSelectedRows(),
+            metrics: getSummaryMetrics(),
+            view: getCurrentView()
+        };
+    }
+});
+```
+
+| Option | Type | Description |
+|--------|------|-------------|
+| `name` | `string` | **Required.** Tool name — exposed to the AI as `report_<name>` (e.g., `report_getContext`). |
+| `description` | `string` | What the tool does. The AI reads this to decide when to call it. |
+| `schema` | `object` | JSON Schema for the tool's input parameters. Use `{}` properties for no-arg tools. |
+| `handler` | `function` | **Required.** Called when the AI invokes the tool. Can return a value or a Promise. The return value is serialized to JSON and sent back to the AI. |
+
+**How it works:**
+1. Report calls `registerTool()` during initialization (before user clicks "Ask AI")
+2. The handler stays local in the report; only metadata (name, description, schema) is sent to GO
+3. When the user opens a chat from the report, the AI sees `report_getContext` as an available tool
+4. If the AI calls it, GO sends a message back to the report, the handler runs, and the result is returned to the AI
+
+**Timing:** Tools must be registered before `openChat()` is called. Register them on page load or after your app initializes. The tool appears in the AI's available tools on the next chat message.
+
+**Cleanup:** Tools are automatically unregistered when the report page unloads (via `beforeunload`).
+
+**Example — dashboard with live filters:**
+```javascript
+// Register on page load
+__INFORMER__.registerTool({
+    name: 'getContext',
+    description: 'Get the current dashboard state: active filters, date range, and visible KPIs.',
+    schema: { type: 'object', properties: {} },
+    handler: () => ({
+        dateRange: { start: startDate, end: endDate },
+        region: selectedRegion,
+        department: selectedDepartment,
+        kpis: {
+            totalRevenue: revenueEl.textContent,
+            openDeals: dealsEl.textContent,
+            conversionRate: rateEl.textContent
+        }
+    })
+});
+
+// Later, user clicks "Ask AI"
+askButton.addEventListener('click', () => {
+    __INFORMER__.openChat({
+        prompt: 'Why is the conversion rate dropping?',
+        instructions: 'Use report_getContext to see the current dashboard state. ' +
+            'Then query the sales-data dataset (admin:sales-data) for trends.'
+    });
+});
+```
+
+**Example — tool with parameters:**
+```javascript
+__INFORMER__.registerTool({
+    name: 'getRowDetails',
+    description: 'Get detailed data for a specific row by its ID.',
+    schema: {
+        type: 'object',
+        properties: {
+            rowId: { type: 'string', description: 'The row ID to look up' }
+        },
+        required: ['rowId']
+    },
+    handler: (args) => {
+        const row = dataStore.getRow(args.rowId);
+        return row || { error: 'Row not found' };
+    }
+});
+```
+
+**Dev mode:** `registerTool()` is not available in local Vite dev mode. Mock it for testing:
+
+```javascript
+if (!window.__INFORMER__?.registerTool) {
+    window.__INFORMER__ = window.__INFORMER__ || {};
+    window.__INFORMER__.registerTool = (def) => console.log('registerTool:', def.name);
+}
+```
+
+### AI Completions from Reports
+
+Reports can call Informer's AI directly for inline insights, structured data extraction, or interactive chat. Use the `go_everyday` model slug for all requests. Three endpoints are available:
+
+| Endpoint | Response | Tools | Use Case |
+|----------|----------|-------|----------|
+| `_chat` | SSE stream | Yes | Interactive AI with tool calling |
+| `_completion` | SSE stream | No | Simple text generation |
+| `_object` | JSON | No | Structured data extraction |
+
+**Data access:** Add the endpoints to your `data-access.yaml`:
+```yaml
+apis:
+  - POST /api/models/go_everyday/_chat
+  - POST /api/models/go_everyday/_completion
+  - POST /api/models/go_everyday/_object
+```
+
+#### Streaming Chat (`_chat`)
+
+The only endpoint that supports tools. Use this when the AI needs to call functions or when you want multi-turn conversations.
+
+```javascript
+const response = await fetch('/api/models/go_everyday/_chat', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+        messages: [
+            {
+                role: 'user',
+                parts: [{ type: 'text', text: 'Summarize the sales trend' }]
+            }
+        ],
+        system: 'You are a data analyst. Be concise.',
+        tools: {
+            getData: {
+                description: 'Fetch current sales data from the dashboard',
+                inputSchema: {
+                    type: 'object',
+                    properties: {
+                        metric: { type: 'string', description: 'Which metric to fetch' }
+                    },
+                    required: ['metric']
+                }
+            }
+        }
+    })
+});
+```
+
+**Reading the SSE stream:**
+
+```javascript
+async function streamChat(messages, options = {}) {
+    const response = await fetch('/api/models/go_everyday/_chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ messages, ...options })
+    });
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let fullText = '';
+
+    while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        const chunk = decoder.decode(value, { stream: true });
+        // Each SSE chunk is a line like: 0:"text piece"\n
+        // For simple text extraction, accumulate the raw text
+        for (const line of chunk.split('\n')) {
+            if (line.startsWith('0:')) {
+                try {
+                    const text = JSON.parse(line.slice(2));
+                    if (typeof text === 'string') {
+                        fullText += text;
+                        onTextUpdate?.(fullText); // callback for live rendering
+                    }
+                } catch {}
+            }
+        }
+    }
+
+    return fullText;
+}
+```
+
+**Full `_chat` payload options:**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `messages` | `array` | **Required.** Conversation history. Each message has `role` and `parts`. |
+| `system` | `string` | System prompt — sets the AI's behavior and context. |
+| `tools` | `object` | Tool definitions (name → `{ description, inputSchema }`). Only works with `_chat`. |
+| `functions` | `string[]` | Built-in server functions: `"evaluateMath"`, `"webSearch"`, etc. |
+| `toolkitIds` | `string[]` | Server-side toolkit IDs to attach. |
+| `maxSteps` | `number` | Max tool-calling round trips (default: 20). |
+| `outputSize` | `string` | `"small"`, `"medium"` (default), or `"large"` — controls max output length. |
+
+#### Simple Completion (`_completion`)
+
+Fastest path for one-shot text generation. No tools, no multi-turn.
+
+```javascript
+const response = await fetch('/api/models/go_everyday/_completion', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+        prompt: 'Write a one-sentence summary of this data: ' + JSON.stringify(chartData)
+    })
+});
+
+// Same SSE stream format as _chat
+const text = await readStream(response);
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `prompt` | `string` | **Required.** The text prompt. |
+| `messages` | `array` | Optional prior messages for context. |
+
+#### Structured Output (`_object`)
+
+Returns a JSON object matching a schema. Not streaming — returns a single JSON response.
+
+```javascript
+const response = await fetch('/api/models/go_everyday/_object', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+        messages: [
+            {
+                role: 'user',
+                parts: [{
+                    type: 'text',
+                    text: `Analyze this data and extract insights:\n${JSON.stringify(salesData)}`
+                }]
+            }
+        ],
+        schema: {
+            type: 'object',
+            properties: {
+                summary: { type: 'string', description: 'One paragraph overview' },
+                trend: { type: 'string', enum: ['up', 'down', 'flat'] },
+                topMetric: { type: 'string' },
+                recommendations: {
+                    type: 'array',
+                    items: { type: 'string' }
+                }
+            },
+            required: ['summary', 'trend', 'recommendations']
+        }
+    })
+});
+
+const insights = await response.json();
+// { summary: "...", trend: "up", topMetric: "Revenue", recommendations: ["...", "..."] }
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `messages` | `array` | **Required.** Messages to analyze. |
+| `schema` | `object` | **Required.** JSON Schema defining the output structure. |
+| `outputSize` | `string` | `"small"`, `"medium"` (default), or `"large"`. |
+
+**Dev mode:** All three endpoints work in local dev mode — the Vite proxy handles authentication automatically.
+
+#### Defensive Parsing for `_object` Responses
+
+The `_object` endpoint uses `go_everyday` (Haiku-class) which sometimes deviates from the provided JSON schema. Common failure modes:
+
+- **Array fields returned as strings** — e.g. `risks: "some text"` instead of `risks: ["some text"]`
+- **Array items scattered into top-level keys** — e.g. `item_1: "...", item_2: "..."` instead of a proper array
+- **Enum values slightly off** — missing or novel labels
+- **Numbers as strings** — e.g. `score: "75"` instead of `score: 75`
+
+Always normalize `_object` responses before using them. Never call `.map()` or access array methods on a response field without checking its type first. Write a normalizer function that:
+
+1. Validates each field's type and coerces when possible (`typeof x === 'string'` → wrap in array)
+2. Collects scattered `item_N` keys back into arrays
+3. Clamps numeric ranges
+4. Falls back to sensible defaults for missing/malformed fields
+
+**Reinforce the schema in the prompt text itself** — include a concrete JSON example showing the exact shape you expect. This gives the model two signals (prompt + schema) and significantly reduces drift:
+
+```javascript
+const resp = await fetch('/api/models/go_everyday/_object', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+        messages: [{
+            role: 'user',
+            parts: [{
+                type: 'text',
+                // Include explicit JSON shape example at the end of the prompt
+                text: `Analyze this data...\n\nRespond with JSON only: { "summary": "<text>", "items": ["<item1>", "<item2>"] }`
+            }]
+        }],
+        schema: { /* formal schema here */ }
+    })
+});
+
+const raw = await resp.json();
+// NEVER use raw directly — always normalize first
+const result = normalize(raw);
 ```
 
 ### Responding to Theme
