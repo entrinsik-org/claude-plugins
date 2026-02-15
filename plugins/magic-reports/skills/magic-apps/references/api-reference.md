@@ -178,6 +178,34 @@ await fetch('/api/integrations/salesforce/request', {
 });
 ```
 
+## Server Routes
+
+### /api/_server/{path}
+
+Call server-side route handlers defined in the app's `server/` directory. All HTTP methods are supported — the method is dispatched to the matching exported function in the handler file.
+
+```javascript
+// GET request
+const orders = await fetch('/api/_server/orders').then(r => r.json());
+
+// POST with body
+const order = await fetch('/api/_server/orders', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ customer: 'Acme Corp', total: 1500 })
+}).then(r => r.json());
+
+// Dynamic route parameter
+const order = await fetch('/api/_server/orders/abc123').then(r => r.json());
+
+// POST to nested route
+await fetch('/api/_server/orders/abc123/approve', { method: 'POST' });
+```
+
+Server routes use the same authentication as the rest of the app's API proxy. They have direct access to the app's Postgres workspace via `query()` and can make authenticated API calls via `fetch()`.
+
+See the [Server-Side Routes section](../SKILL.md#server-side-routes) in the main skill doc for handler structure and examples.
+
 ## Data Access Configuration
 
 Create `data-access.yaml` in your project root to declare which APIs your app needs. Without this file, all API access is blocked when published.
