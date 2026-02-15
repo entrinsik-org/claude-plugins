@@ -610,6 +610,16 @@ Each handler function receives a single context object with these properties:
 | `request.body` | `any` | Request body (parsed JSON for POST/PUT/PATCH) |
 | `request.headers` | `object` | Request headers |
 | `request.roles` | `string[]` | The viewer's assigned role IDs (see [App Roles](#app-roles)) |
+| `request.user` | `object` | Current user identity (see below) |
+
+**`request.user` object:**
+
+| Property | Type | Description |
+|----------|------|-------------|
+| `request.user.username` | `string` | Login username |
+| `request.user.displayName` | `string` | User's display name |
+| `request.user.email` | `string\|null` | Email address |
+| `request.user.timezone` | `string\|null` | Timezone (e.g. `America/New_York`) |
 
 ### Return Values
 
