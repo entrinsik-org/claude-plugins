@@ -10,7 +10,7 @@
       "name": "magic-reports",
       "source": "./plugins/magic-reports",
       "description": "Skills for building Informer Apps (/magic-apps) and Magic Reports (/magic-reports)",
-      "version": "2.1.0",
+      "version": "2.2.0",
       "author": { "name": "Entrinsik" }
     }
   ]
