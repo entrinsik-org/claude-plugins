@@ -1,6 +1,6 @@
 ---
 name: magic-apps
-description: Building Informer Apps with local Vite development. Covers the dev/publish workflow, key Informer APIs, and the built-in AI copilot sidebar.
+description: Building Informer Apps with local Vite development. Covers the dev/publish workflow, key Informer APIs, app persistence (SQL workspace + migrations), and the built-in AI copilot sidebar.
 ---
 
 # Informer App Development
@@ -11,6 +11,7 @@ An Informer App is a custom HTML/JS/CSS application that runs inside Informer. I
 - Query Informer datasets (Elasticsearch-indexed data)
 - Execute saved queries
 - Make authenticated requests to external APIs via integrations (Salesforce, etc.)
+- **Store and query its own data** in a dedicated Postgres workspace (with SQL migrations)
 - Render charts, tables, and interactive visualizations
 - Include a **built-in AI copilot** sidebar that can query your data and answer questions in context
 
@@ -38,6 +39,12 @@ INFORMER_USER=admin
 INFORMER_PASS=yourpassword
 ```
 
+If your app uses persistence (see [Persistence](#persistence-app-workspace)), you'll also have:
+```
+INFORMER_DEV_WORKSPACE=admin:my-app-dev
+```
+This is set automatically by `npm run workspace:init`.
+
 ### Deploying (`npm run deploy`)
 
 Builds your project and uploads to Informer:
@@ -45,8 +52,9 @@ Builds your project and uploads to Informer:
 2. Snapshots the library for rollback
 3. Clears existing files
 4. Uploads all built assets from `dist/`
-5. Uploads `data-access.yaml` from project root (if it exists)
-6. App is viewable at `/api/apps/{owner}:{slug}/view`
+5. Uploads `data-access.yaml` and `informer.yaml` from project root (if they exist)
+6. If `migrations/` exists, runs pending SQL migrations against the app's workspace
+7. App is viewable at `/api/apps/{owner}:{slug}/view`
 
 ### Package.json Configuration
 
@@ -262,26 +270,51 @@ const result = await response.json();
 const records = result.data.records;
 ```
 
-## Data Access Configuration
+## App Configuration (`informer.yaml`)
 
-When your app is published and shared, you must declare which APIs it needs access to. Create a `data-access.yaml` file in your project root (it will be published with your app).
-
-**Important:** Without this file, all API access is blocked when the app runs in Informer.
-
-### Basic Example
+Apps are configured with an `informer.yaml` file in the project root. This single file declares **data access** (which APIs the app can call), **roles** (for role-based UIs), and other app-level settings. It's uploaded automatically on deploy.
 
 ```yaml
-# data-access.yaml
+# informer.yaml
 
-datasets:
-  - admin:sales-data
-  - admin:customers
+access:
+  datasets:
+    - admin:sales-data
+    - admin:customers
+  queries:
+    - admin:monthly-summary
+  integrations:
+    - salesforce
 
-queries:
-  - admin:monthly-summary
+roles:
+  - id: viewer
+    name: Viewer
+    description: Can view reports but not take actions
+  - id: approver
+    name: Approver
+    description: Can approve or reject requests
+```
 
-integrations:
-  - salesforce
+The `access:` section controls which APIs the app can call when shared. The `roles:` section defines custom roles for role-based UI (see [App Roles](#app-roles)).
+
+**Important:** Without an `access:` section (or a standalone `data-access.yaml`), all API access is blocked when the app runs in Informer.
+
+> **Legacy note:** You can also use a standalone `data-access.yaml` file (without the `access:` wrapper key). If both files exist, `informer.yaml` takes precedence. New apps should use `informer.yaml` since it supports both access and roles in one file.
+
+### Basic Data Access Example
+
+```yaml
+# informer.yaml
+access:
+  datasets:
+    - admin:sales-data
+    - admin:customers
+
+  queries:
+    - admin:monthly-summary
+
+  integrations:
+    - salesforce
 ```
 
 ### With Row-Level Security
@@ -289,16 +322,18 @@ integrations:
 Restrict data based on the viewing user's profile:
 
 ```yaml
-datasets:
-  # Users only see their region's data
-  - id: admin:orders
-    filter:
-      region: $user.custom.region
+# informer.yaml
+access:
+  datasets:
+    # Users only see their region's data
+    - id: admin:orders
+      filter:
+        region: $user.custom.region
 
-  # Users only see their own records
-  - id: admin:sales
-    filter:
-      sales_rep: $user.username
+    # Users only see their own records
+    - id: admin:sales
+      filter:
+        sales_rep: $user.username
 ```
 
 ### Integration with Credentials
@@ -306,12 +341,14 @@ datasets:
 Pass user-specific credentials to external APIs:
 
 ```yaml
-integrations:
-  - id: partner-api
-    headers:
-      Authorization: Bearer $user.custom.partnerToken
-    params:
-      client_id: $tenant.id
+# informer.yaml
+access:
+  integrations:
+    - id: partner-api
+      headers:
+        Authorization: Bearer $user.custom.partnerToken
+      params:
+        client_id: $tenant.id
 ```
 
 ### Available Variables
@@ -338,8 +375,273 @@ integrations:
 For edge cases, you can also whitelist raw API paths:
 
 ```yaml
-apis:
-  - POST /api/custom/endpoint
+# informer.yaml
+access:
+  apis:
+    - POST /api/custom/endpoint
+```
+
+## Persistence (App Workspace)
+
+Apps can opt into a **dedicated Postgres schema** for storing and querying custom data. This is ideal for apps that need CRUD operations, form submissions, workflow state, or any data that belongs to the app itself rather than coming from external datasources or datasets.
+
+### How It Works
+
+When your project has a `migrations/` directory containing `.sql` files, Informer provisions a dedicated Postgres schema for the app. The schema is:
+- **Tenant-isolated** — owned by the tenant role, inaccessible to other tenants
+- **Lazily provisioned** — created on first query or explicit migration
+- **Automatically cleaned up** — dropped when the app is deleted
+
+### Migration Files
+
+Create a `migrations/` directory in your project root. Add numbered `.sql` files that run in alphabetical order:
+
+```
+my-app/
+  migrations/
+    001-create-orders.sql
+    002-add-status-column.sql
+    003-add-indexes.sql
+  src/
+    main.js
+  index.html
+  package.json
+```
+
+Each migration file contains standard SQL:
+
+```sql
+-- migrations/001-create-orders.sql
+CREATE TABLE orders (
+    id SERIAL PRIMARY KEY,
+    customer TEXT NOT NULL,
+    total NUMERIC(10,2) DEFAULT 0,
+    status TEXT DEFAULT 'pending',
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+```
+
+```sql
+-- migrations/002-add-line-items.sql
+CREATE TABLE line_items (
+    id SERIAL PRIMARY KEY,
+    order_id INTEGER REFERENCES orders(id) ON DELETE CASCADE,
+    product TEXT NOT NULL,
+    quantity INTEGER DEFAULT 1,
+    price NUMERIC(10,2) NOT NULL
+);
+
+CREATE INDEX line_items_order_idx ON line_items (order_id);
+```
+
+**Rules:**
+- Files must end in `.sql` and are sorted alphabetically (use numeric prefixes)
+- Each migration runs exactly once — Informer tracks completed migrations in a `_migrations` table
+- Migrations are **append-only** — never modify a migration that has already been deployed. Add a new file instead.
+- Each migration runs in its own transaction
+
+### Querying the Workspace (`/api/_query`)
+
+From your app code, use `POST /api/_query` to execute SQL against the workspace:
+
+```javascript
+const response = await fetch('/api/_query', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+        sql: 'SELECT * FROM orders WHERE status = $1 ORDER BY created_at DESC',
+        params: ['pending']
+    })
+});
+
+const { rows, rowCount, fields } = await response.json();
+```
+
+**Request:**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `sql` | `string` | **Required.** Parameterized SQL query. Use `$1`, `$2`, etc. for parameters. |
+| `params` | `array` | Parameter values (default: `[]`). |
+| `timeout` | `number` | Query timeout in ms (default/max: `30000`). |
+
+**Response:**
+
+```json
+{
+    "rows": [{ "id": 1, "customer": "Acme Corp", "total": 1500.00, "status": "pending" }],
+    "rowCount": 1,
+    "fields": [
+        { "name": "id", "dataTypeID": 23 },
+        { "name": "customer", "dataTypeID": 25 },
+        { "name": "total", "dataTypeID": 1700 },
+        { "name": "status", "dataTypeID": 25 }
+    ]
+}
+```
+
+**Helper function (recommended):**
+
+```javascript
+async function query(sql, params = []) {
+    const response = await fetch('/api/_query', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sql, params })
+    });
+    if (!response.ok) {
+        const err = await response.json().catch(() => ({}));
+        throw new Error(err.message || `Query failed: ${response.status}`);
+    }
+    return response.json();
+}
+
+// Usage
+const { rows } = await query('SELECT * FROM orders WHERE customer = $1', ['Acme Corp']);
+const { rows: [totals] } = await query('SELECT COUNT(*) as count, SUM(total) as revenue FROM orders');
+```
+
+**Common patterns:**
+
+```javascript
+// INSERT and return the new row
+const { rows: [order] } = await query(
+    'INSERT INTO orders (customer, total, status) VALUES ($1, $2, $3) RETURNING *',
+    ['Acme Corp', 1500, 'pending']
+);
+
+// UPDATE
+await query('UPDATE orders SET status = $1 WHERE id = $2', ['shipped', order.id]);
+
+// DELETE
+await query('DELETE FROM orders WHERE id = $1', [order.id]);
+
+// Aggregation
+const { rows: [stats] } = await query(`
+    SELECT status, COUNT(*) as count, SUM(total) as revenue
+    FROM orders
+    GROUP BY status
+    ORDER BY revenue DESC
+`);
+
+// JOIN
+const { rows } = await query(`
+    SELECT o.*, json_agg(li.*) as items
+    FROM orders o
+    LEFT JOIN line_items li ON li.order_id = o.id
+    WHERE o.id = $1
+    GROUP BY o.id
+`, [orderId]);
+```
+
+**Security notes:**
+- Always use parameterized queries (`$1`, `$2`) — never interpolate user input into SQL strings
+- The workspace schema is set automatically — don't prefix table names with a schema
+- Each query has a 30-second timeout
+
+### Data Access for `_query`
+
+The `_query` endpoint is automatically available to apps that have a `migrations/` directory. No `data-access.yaml` entry is needed — the route uses the app's own authentication token (the same cookie that serves the app's HTML).
+
+### Local Development with Workspaces
+
+In dev mode, your app needs a **dev workspace** — a separate datasource on the Informer server that acts as your local database. This keeps development completely isolated from the deployed app's production data.
+
+**Setup:**
+
+```bash
+# 1. Create a dev workspace (one-time)
+npm run workspace:init
+# → Creates workspace datasource "{slug}-dev" on the Informer server
+# → Runs all migrations/*.sql files
+# → Saves INFORMER_DEV_WORKSPACE=admin:my-app-dev to .env
+
+# 2. Start dev server — /api/_query calls proxy to your dev workspace
+npm run dev
+```
+
+**Ongoing workflow:**
+
+```bash
+# After adding new migration files
+npm run workspace:migrate
+
+# Start fresh (drop all tables, re-run all migrations)
+npm run workspace:reset
+```
+
+**How it works in dev mode:**
+- The Vite plugin intercepts `POST /api/_query` requests
+- Forwards them to `POST /api/datasources/{workspaceId}/_sql` on the Informer server
+- Your app code uses the same `fetch('/api/_query', ...)` calls in both dev and production
+
+**Add these scripts to `package.json`:**
+
+```json
+{
+    "scripts": {
+        "workspace:init": "informer-workspace init",
+        "workspace:migrate": "informer-workspace migrate",
+        "workspace:reset": "informer-workspace reset"
+    }
+}
+```
+
+These scripts are added automatically if you run `informer-init`.
+
+### Full Example: CRUD App
+
+```
+my-order-tracker/
+  migrations/
+    001-create-orders.sql
+    002-create-line-items.sql
+  public/
+    favicon.svg
+  src/
+    main.js
+  informer.yaml
+  index.html
+  package.json
+  .env
+```
+
+```javascript
+// src/main.js
+
+async function query(sql, params = []) {
+    const res = await fetch('/api/_query', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sql, params })
+    });
+    if (!res.ok) throw new Error(`Query failed: ${res.status}`);
+    return res.json();
+}
+
+// Load orders
+async function loadOrders() {
+    const { rows } = await query('SELECT * FROM orders ORDER BY created_at DESC LIMIT 50');
+    renderOrderTable(rows);
+}
+
+// Create order
+async function createOrder(customer, total) {
+    const { rows: [order] } = await query(
+        'INSERT INTO orders (customer, total) VALUES ($1, $2) RETURNING *',
+        [customer, total]
+    );
+    loadOrders(); // refresh
+    return order;
+}
+
+// Delete order
+async function deleteOrder(id) {
+    await query('DELETE FROM orders WHERE id = $1', [id]);
+    loadOrders(); // refresh
+}
+
+loadOrders();
 ```
 
 ## App Context
@@ -350,9 +652,73 @@ When running inside Informer (not dev mode), the app receives context:
 const appId = window.__INFORMER__?.report?.id;
 const appName = window.__INFORMER__?.report?.name;
 const theme = window.__INFORMER__?.theme; // 'light' or 'dark'
+const roles = window.__INFORMER__?.roles; // string[] of assigned role IDs
 ```
 
-In dev mode, the Vite plugin mocks this with placeholder values (theme defaults to `'light'`).
+In dev mode, the Vite plugin mocks this with placeholder values (theme defaults to `'light'`, roles defaults to `[]`).
+
+## App Roles
+
+Apps can define custom roles that publishers assign when sharing. This enables role-based UIs — showing or hiding features based on the viewer's role.
+
+### Defining Roles
+
+Add a `roles:` section to your `informer.yaml` (see [App Configuration](#app-configuration-informeryaml)):
+
+```yaml
+# informer.yaml
+roles:
+  - id: viewer
+    name: Viewer
+    description: Can view reports but not take actions
+  - id: approver
+    name: Approver
+    description: Can approve or reject requests
+  - id: manager
+    name: Manager
+    description: Full management access
+```
+
+Each role has:
+- `id` (required) — string identifier used in code
+- `name` (required) — display name shown in share dialogs
+- `description` (optional) — help text shown in share dialogs
+
+### Reading Roles in App Code
+
+```javascript
+const roles = window.__INFORMER__?.roles || [];
+
+if (roles.includes('approver')) {
+    showApprovalPanel();
+}
+
+if (roles.includes('manager')) {
+    showAdminSettings();
+}
+```
+
+`roles` is a flat `string[]` of role IDs. It's always an array (empty if no roles are defined or assigned).
+
+### How Role Assignment Works
+
+- **Internal shares** — when a Publisher shares the app with a team/user, they can select which roles to assign via checkboxes in the share dialog
+- **External links** — when creating an external share link, the Publisher selects roles in the Configure step; those roles are baked into the token
+- **Publisher+ on the owning team** — automatically receives all defined roles (admin override)
+- **No `roles:` section** — if `informer.yaml` has no `roles:` key, `window.__INFORMER__.roles` is `[]` (binary access, no role-based features)
+- **Removed roles** — if a role is removed from `informer.yaml`, it silently disappears from users' role arrays; existing shares retain the stale role ID but it's filtered out at view time
+
+### Mock Roles in Dev Mode
+
+Configure mock roles in `vite.config.js`:
+
+```javascript
+import informer from 'vite-plugin-informer';
+
+export default {
+    plugins: [informer({ mock: { roles: ['approver', 'manager'] } })]
+};
+```
 
 ## Built-in App Copilot
 
