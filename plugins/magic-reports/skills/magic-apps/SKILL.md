@@ -1,6 +1,6 @@
 ---
 name: magic-apps
-description: Building Informer Apps with local Vite development. Covers the dev/publish workflow, key Informer APIs, app persistence (SQL workspace + migrations), and the built-in AI copilot sidebar.
+description: Building Informer Apps with local Vite development. Covers the dev/publish workflow, key Informer APIs, app persistence (SQL workspace + migrations), server-side route handlers, and the built-in AI copilot sidebar.
 ---
 
 # Informer App Development
@@ -12,6 +12,7 @@ An Informer App is a custom HTML/JS/CSS application that runs inside Informer. I
 - Execute saved queries
 - Make authenticated requests to external APIs via integrations (Salesforce, etc.)
 - **Store and query its own data** in a dedicated Postgres workspace (with SQL migrations)
+- **Run server-side JavaScript handlers** in sandboxed V8 isolates (with direct DB access)
 - Render charts, tables, and interactive visualizations
 - Include a **built-in AI copilot** sidebar that can query your data and answer questions in context
 
@@ -52,9 +53,11 @@ Builds your project and uploads to Informer:
 2. Snapshots the library for rollback
 3. Clears existing files
 4. Uploads all built assets from `dist/`
-5. Uploads `data-access.yaml` and `informer.yaml` from project root (if they exist)
-6. If `migrations/` exists, runs pending SQL migrations against the app's workspace
-7. App is viewable at `/api/apps/{owner}:{slug}/view`
+5. Uploads `informer.yaml` and `data-access.yaml` from project root (if they exist)
+6. Uploads `migrations/` directory (if it exists)
+7. Uploads `server/` directory (if it exists)
+8. Runs deploy: pending SQL migrations + server-route scanning + handler bundling
+9. App is viewable at `/api/apps/{owner}:{slug}/view`
 
 ### Package.json Configuration
 
@@ -440,140 +443,32 @@ CREATE INDEX line_items_order_idx ON line_items (order_id);
 - Migrations are **append-only** — never modify a migration that has already been deployed. Add a new file instead.
 - Each migration runs in its own transaction
 
-### Querying the Workspace (`/api/_query`)
+### Querying the Workspace
 
-From your app code, use `POST /api/_query` to execute SQL against the workspace:
+All database access goes through [server-side route handlers](#server-side-routes). The `query()` callback in server handlers executes SQL against the app's workspace — see [Using `query()`](#using-query) for details.
 
-```javascript
-const response = await fetch('/api/_query', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-        sql: 'SELECT * FROM orders WHERE status = $1 ORDER BY created_at DESC',
-        params: ['pending']
-    })
-});
-
-const { rows, rowCount, fields } = await response.json();
-```
-
-**Request:**
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `sql` | `string` | **Required.** Parameterized SQL query. Use `$1`, `$2`, etc. for parameters. |
-| `params` | `array` | Parameter values (default: `[]`). |
-| `timeout` | `number` | Query timeout in ms (default/max: `30000`). |
-
-**Response:**
-
-```json
-{
-    "rows": [{ "id": 1, "customer": "Acme Corp", "total": 1500.00, "status": "pending" }],
-    "rowCount": 1,
-    "fields": [
-        { "name": "id", "dataTypeID": 23 },
-        { "name": "customer", "dataTypeID": 25 },
-        { "name": "total", "dataTypeID": 1700 },
-        { "name": "status", "dataTypeID": 25 }
-    ]
-}
-```
-
-**Helper function (recommended):**
-
-```javascript
-async function query(sql, params = []) {
-    const response = await fetch('/api/_query', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ sql, params })
-    });
-    if (!response.ok) {
-        const err = await response.json().catch(() => ({}));
-        throw new Error(err.message || `Query failed: ${response.status}`);
-    }
-    return response.json();
-}
-
-// Usage
-const { rows } = await query('SELECT * FROM orders WHERE customer = $1', ['Acme Corp']);
-const { rows: [totals] } = await query('SELECT COUNT(*) as count, SUM(total) as revenue FROM orders');
-```
-
-**Common patterns:**
-
-```javascript
-// INSERT and return the new row
-const { rows: [order] } = await query(
-    'INSERT INTO orders (customer, total, status) VALUES ($1, $2, $3) RETURNING *',
-    ['Acme Corp', 1500, 'pending']
-);
-
-// UPDATE
-await query('UPDATE orders SET status = $1 WHERE id = $2', ['shipped', order.id]);
-
-// DELETE
-await query('DELETE FROM orders WHERE id = $1', [order.id]);
-
-// Aggregation
-const { rows: [stats] } = await query(`
-    SELECT status, COUNT(*) as count, SUM(total) as revenue
-    FROM orders
-    GROUP BY status
-    ORDER BY revenue DESC
-`);
-
-// JOIN
-const { rows } = await query(`
-    SELECT o.*, json_agg(li.*) as items
-    FROM orders o
-    LEFT JOIN line_items li ON li.order_id = o.id
-    WHERE o.id = $1
-    GROUP BY o.id
-`, [orderId]);
-```
-
-**Security notes:**
-- Always use parameterized queries (`$1`, `$2`) — never interpolate user input into SQL strings
-- The workspace schema is set automatically — don't prefix table names with a schema
-- Each query has a 30-second timeout
-
-### Data Access for `_query`
-
-The `_query` endpoint is automatically available to apps that have a `migrations/` directory. No `data-access.yaml` entry is needed — the route uses the app's own authentication token (the same cookie that serves the app's HTML).
+There is no client-side query endpoint. Client code calls server routes via `fetch('/api/_server/...')`, and server handlers use `query()` for database access.
 
 ### Local Development with Workspaces
 
-In dev mode, your app needs a **dev workspace** — a separate datasource on the Informer server that acts as your local database. This keeps development completely isolated from the deployed app's production data.
+In dev mode, the Vite plugin automatically provisions a **dev workspace** — a separate Postgres schema on the Informer server. This keeps development completely isolated from the deployed app's production data.
 
-**Setup:**
+**Auto-provisioning:** When your project has a `migrations/` directory and `.env` is configured with `INFORMER_URL`, the Vite plugin:
+1. Creates a workspace datasource `{slug}-dev` on the server (first run)
+2. Runs all pending `migrations/*.sql` files
+3. Saves `INFORMER_DEV_WORKSPACE=admin:{slug}-dev` to `.env`
 
-```bash
-# 1. Create a dev workspace (one-time)
-npm run workspace:init
-# → Creates workspace datasource "{slug}-dev" on the Informer server
-# → Runs all migrations/*.sql files
-# → Saves INFORMER_DEV_WORKSPACE=admin:my-app-dev to .env
+Server route `query()` calls use this dev workspace automatically during local development.
 
-# 2. Start dev server — /api/_query calls proxy to your dev workspace
-npm run dev
-```
-
-**Ongoing workflow:**
+**Manual workspace management:**
 
 ```bash
-# After adding new migration files
+# Re-run pending migrations
 npm run workspace:migrate
 
 # Start fresh (drop all tables, re-run all migrations)
 npm run workspace:reset
 ```
-
-**How it works in dev mode:**
-- The Vite plugin intercepts `POST /api/_query` requests
-- Forwards them to `POST /api/datasources/{workspaceId}/_sql` on the Informer server
-- Your app code uses the same `fetch('/api/_query', ...)` calls in both dev and production
 
 **Add these scripts to `package.json`:**
 
@@ -596,6 +491,10 @@ my-order-tracker/
   migrations/
     001-create-orders.sql
     002-create-line-items.sql
+  server/
+    orders/
+      index.js           → GET,POST /orders
+      [id].js            → GET,PUT,DELETE /orders/:id
   public/
     favicon.svg
   src/
@@ -609,40 +508,392 @@ my-order-tracker/
 ```javascript
 // src/main.js
 
-async function query(sql, params = []) {
-    const res = await fetch('/api/_query', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ sql, params })
-    });
-    if (!res.ok) throw new Error(`Query failed: ${res.status}`);
-    return res.json();
-}
-
 // Load orders
 async function loadOrders() {
-    const { rows } = await query('SELECT * FROM orders ORDER BY created_at DESC LIMIT 50');
-    renderOrderTable(rows);
+    const response = await fetch('/api/_server/orders');
+    const orders = await response.json();
+    renderOrderTable(orders);
 }
 
 // Create order
 async function createOrder(customer, total) {
-    const { rows: [order] } = await query(
-        'INSERT INTO orders (customer, total) VALUES ($1, $2) RETURNING *',
-        [customer, total]
-    );
+    const response = await fetch('/api/_server/orders', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ customer, total })
+    });
+    if (!response.ok) {
+        const err = await response.json();
+        alert(err.error);
+        return;
+    }
     loadOrders(); // refresh
-    return order;
 }
 
 // Delete order
 async function deleteOrder(id) {
-    await query('DELETE FROM orders WHERE id = $1', [id]);
+    await fetch(`/api/_server/orders/${id}`, { method: 'DELETE' });
     loadOrders(); // refresh
 }
 
 loadOrders();
 ```
+
+## Server-Side Routes
+
+Apps can include **server-side JavaScript handlers** that run on the Informer server in sandboxed V8 isolates. These handlers have direct access to the app's Postgres workspace and can make authenticated API calls — ideal for business logic, data transformations, webhooks, or anything that shouldn't run in the browser.
+
+### How It Works
+
+1. Create a `server/` directory in your project root
+2. Add `.js` handler files using file-convention routing (like Next.js)
+3. Run `npm run deploy` — Informer scans, bundles, and registers routes automatically
+4. Your app calls server routes via `fetch('/api/_server/...')`
+
+Handler code runs in an **isolated-vm V8 isolate** — a separate V8 heap with no access to Node.js APIs, the filesystem, or the network. All I/O goes through injected callbacks (`query` and `fetch`).
+
+### File-Convention Routing
+
+File paths under `server/` map to URL routes:
+
+| File | Route | Example URL |
+|------|-------|-------------|
+| `server/index.js` | `/` | `/api/_server/` |
+| `server/orders/index.js` | `/orders` | `/api/_server/orders` |
+| `server/orders/[id].js` | `/orders/:id` | `/api/_server/orders/abc123` |
+| `server/orders/[id]/approve.js` | `/orders/:id/approve` | `/api/_server/orders/abc123/approve` |
+
+- `[param]` segments become dynamic route parameters (available as `request.params.param`)
+- `index.js` files map to the parent directory path
+
+### Handler Structure
+
+Each handler file exports **named functions** for each HTTP method it supports:
+
+```javascript
+// server/orders/index.js
+
+export async function GET({ query, request }) {
+    const rows = await query('SELECT * FROM orders ORDER BY created_at DESC LIMIT 50');
+    return rows;
+}
+
+export async function POST({ query, request }) {
+    const { customer, total } = request.body;
+    const rows = await query(
+        'INSERT INTO orders (customer, total) VALUES ($1, $2) RETURNING *',
+        [customer, total]
+    );
+    return { status: 201, body: rows[0] };
+}
+```
+
+**Supported methods:** `GET`, `POST`, `PUT`, `PATCH`, `DELETE`
+
+Each handler function receives a single context object with these properties:
+
+| Property | Type | Description |
+|----------|------|-------------|
+| `query` | `async (sql, params?) => rows` | Execute SQL against the app's workspace. Returns an array of row objects. |
+| `fetch` | `async (path, options?) => { status, body }` | Make an authenticated API call through Informer (subject to the app's whitelist). |
+| `env` | `object` | App environment variables (from app settings). |
+| `request` | `object` | The incoming request (see below). |
+
+**`request` object:**
+
+| Property | Type | Description |
+|----------|------|-------------|
+| `request.method` | `string` | HTTP method (`GET`, `POST`, etc.) |
+| `request.path` | `string` | Matched route path (e.g. `/orders/:id`) |
+| `request.params` | `object` | Route parameters (e.g. `{ id: 'abc123' }`) |
+| `request.query` | `object` | Query string parameters |
+| `request.body` | `any` | Request body (parsed JSON for POST/PUT/PATCH) |
+| `request.headers` | `object` | Request headers |
+| `request.roles` | `string[]` | The viewer's assigned role IDs (see [App Roles](#app-roles)) |
+
+### Return Values
+
+Handlers can return values in two formats:
+
+**Simple value** — automatically wrapped as a 200 JSON response:
+```javascript
+export async function GET({ query }) {
+    const rows = await query('SELECT * FROM orders');
+    return rows; // → 200, Content-Type: application/json
+}
+```
+
+**Response object** — full control over status, headers, and body:
+```javascript
+export async function POST({ query, request }) {
+    const { customer } = request.body;
+    if (!customer) {
+        return { status: 400, body: { error: 'Customer is required' } };
+    }
+
+    const rows = await query(
+        'INSERT INTO orders (customer) VALUES ($1) RETURNING *',
+        [customer]
+    );
+    return { status: 201, body: rows[0] };
+}
+```
+
+**No return value** — returns 204 No Content:
+```javascript
+export async function DELETE({ query, request }) {
+    await query('DELETE FROM orders WHERE id = $1', [request.params.id]);
+    // implicit 204
+}
+```
+
+### Using `query()`
+
+The `query` callback executes SQL against the app's Postgres workspace — the same schema managed by `migrations/`. It takes a SQL string and an optional params array, and returns the result rows directly.
+
+```javascript
+export async function GET({ query, request }) {
+    // Parameterized query (always use $1, $2, etc.)
+    const orders = await query(
+        'SELECT * FROM orders WHERE status = $1 ORDER BY created_at DESC',
+        [request.query.status || 'pending']
+    );
+
+    // Aggregation
+    const [stats] = await query(`
+        SELECT COUNT(*) as count, SUM(total) as revenue
+        FROM orders WHERE status = 'completed'
+    `);
+
+    return { orders, stats };
+}
+```
+
+All `query()` calls within a single request share the same database connection, which is automatically closed when the handler completes.
+
+### Using `fetch()`
+
+The `fetch` callback makes authenticated API calls through Informer, using the viewer's credentials. It goes through the same whitelist as client-side API calls, so the endpoint must be allowed in `informer.yaml`.
+
+```javascript
+export async function GET({ fetch }) {
+    // Fetch data from a dataset
+    const result = await fetch('datasets/admin:sales-data/_search', {
+        method: 'POST',
+        body: { query: { match_all: {} }, size: 100 }
+    });
+
+    return result.body.hits.hits.map(h => h._source);
+}
+
+export async function POST({ fetch, request }) {
+    // Call an integration
+    const result = await fetch('integrations/salesforce/request', {
+        method: 'POST',
+        body: {
+            url: '/data/v59.0/sobjects/Contact',
+            method: 'POST',
+            data: request.body
+        }
+    });
+
+    return { status: result.status, body: result.body };
+}
+```
+
+The `path` argument is relative to `/api/` — pass `'datasets/admin:sales-data/_search'`, not `'/api/datasets/...'`.
+
+### Handler Config
+
+Handlers can export a `config` object to customize behavior:
+
+```javascript
+// server/webhooks/stripe.js
+
+export const config = {
+    timeout: 60000,            // Wall-clock timeout in ms (default: 30000)
+    roles: ['admin', 'manager'] // Restrict to specific roles (see App Roles)
+};
+
+export async function POST({ query, request }) {
+    // Only users with 'admin' or 'manager' role can reach this handler
+    const event = request.body;
+    await query('INSERT INTO webhook_events (type, payload) VALUES ($1, $2)', [
+        event.type,
+        JSON.stringify(event)
+    ]);
+    return { status: 200, body: { received: true } };
+}
+```
+
+| Config | Type | Default | Description |
+|--------|------|---------|-------------|
+| `timeout` | `number` | `30000` | Wall-clock timeout in ms. Handler is killed if it exceeds this. |
+| `roles` | `string[]` | `[]` (open) | If set, only viewers with at least one matching role can call this route. Returns 403 otherwise. |
+
+### Sandbox Constraints
+
+Server handlers run in a sandboxed V8 isolate. This means:
+
+- **No Node.js APIs** — no `require()`, `fs`, `http`, `process`, `Buffer`, etc.
+- **No network access** — all external calls must go through `fetch()` (which enforces the whitelist)
+- **No filesystem** — use `query()` for persistence
+- **128 MB memory limit** — the isolate is killed if it exceeds this
+- **Wall-clock timeout** — defaults to 30s, configurable via `config.timeout`
+- **Ephemeral** — a fresh isolate is created for each request; no state persists between calls
+
+### Calling Server Routes from App Code
+
+Server routes are accessed through the app's view API proxy at `/api/_server/`:
+
+```javascript
+// GET /api/_server/orders
+const response = await fetch('/api/_server/orders');
+const orders = await response.json();
+
+// POST /api/_server/orders
+const response = await fetch('/api/_server/orders', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ customer: 'Acme Corp', total: 1500 })
+});
+const newOrder = await response.json();
+
+// GET /api/_server/orders/abc123
+const response = await fetch('/api/_server/orders/abc123');
+const order = await response.json();
+
+// POST /api/_server/orders/abc123/approve
+const response = await fetch('/api/_server/orders/abc123/approve', {
+    method: 'POST'
+});
+```
+
+Server routes use the same authentication as the rest of the app's API proxy — the view token cookie is automatically included.
+
+### Project Structure with Server Routes
+
+```
+my-app/
+  migrations/
+    001-create-orders.sql
+    002-create-line-items.sql
+  server/
+    index.js              → GET /
+    orders/
+      index.js            → GET,POST /orders
+      [id].js             → GET,PUT,DELETE /orders/:id
+      [id]/
+        approve.js        → POST /orders/:id/approve
+        line-items.js     → GET,POST /orders/:id/line-items
+  public/
+    favicon.svg
+  src/
+    main.js
+  informer.yaml
+  index.html
+  package.json
+  .env
+```
+
+### Full Example: Orders API
+
+**Migration:**
+```sql
+-- migrations/001-create-orders.sql
+CREATE TABLE orders (
+    id SERIAL PRIMARY KEY,
+    customer TEXT NOT NULL,
+    total NUMERIC(10,2) DEFAULT 0,
+    status TEXT DEFAULT 'pending',
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+```
+
+**Server handlers:**
+```javascript
+// server/orders/index.js
+
+export async function GET({ query, request }) {
+    const status = request.query.status;
+    if (status) {
+        return await query('SELECT * FROM orders WHERE status = $1 ORDER BY created_at DESC', [status]);
+    }
+    return await query('SELECT * FROM orders ORDER BY created_at DESC LIMIT 100');
+}
+
+export async function POST({ query, request }) {
+    const { customer, total } = request.body;
+    if (!customer) {
+        return { status: 400, body: { error: 'Customer is required' } };
+    }
+    const [order] = await query(
+        'INSERT INTO orders (customer, total) VALUES ($1, $2) RETURNING *',
+        [customer, total || 0]
+    );
+    return { status: 201, body: order };
+}
+```
+
+```javascript
+// server/orders/[id].js
+
+export async function GET({ query, request }) {
+    const [order] = await query('SELECT * FROM orders WHERE id = $1', [request.params.id]);
+    if (!order) return { status: 404, body: { error: 'Order not found' } };
+    return order;
+}
+
+export async function PUT({ query, request }) {
+    const { customer, total, status } = request.body;
+    const [order] = await query(
+        'UPDATE orders SET customer = COALESCE($1, customer), total = COALESCE($2, total), status = COALESCE($3, status) WHERE id = $4 RETURNING *',
+        [customer, total, status, request.params.id]
+    );
+    if (!order) return { status: 404, body: { error: 'Order not found' } };
+    return order;
+}
+
+export async function DELETE({ query, request }) {
+    const [order] = await query('DELETE FROM orders WHERE id = $1 RETURNING id', [request.params.id]);
+    if (!order) return { status: 404, body: { error: 'Order not found' } };
+}
+```
+
+**Client code:**
+```javascript
+// src/main.js
+
+async function loadOrders() {
+    const response = await fetch('/api/_server/orders');
+    const orders = await response.json();
+    renderTable(orders);
+}
+
+async function createOrder(customer, total) {
+    const response = await fetch('/api/_server/orders', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ customer, total })
+    });
+    if (!response.ok) {
+        const err = await response.json();
+        alert(err.error);
+        return;
+    }
+    loadOrders();
+}
+```
+
+### Local Development
+
+Server routes run locally during `npm run dev` via Vite's `ssrLoadModule()`. The Vite plugin:
+1. Detects a `server/` directory in your project
+2. Mounts middleware at `/api/_server` that loads and executes your handler files
+3. Passes the dev workspace connection to `query()` and proxies `fetch()` to the Informer server
+4. Supports HMR — editing a server handler file takes effect immediately without restarting
+
+No extra configuration is needed beyond having `.env` set up with `INFORMER_URL` and credentials. If your handlers use `query()`, ensure `migrations/` exists so the workspace is auto-provisioned (see [Local Development with Workspaces](#local-development-with-workspaces)).
 
 ## App Context
 
