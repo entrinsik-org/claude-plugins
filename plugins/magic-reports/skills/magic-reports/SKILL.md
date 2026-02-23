@@ -224,6 +224,8 @@ Integrations are authenticated connections to external APIs (Salesforce, REST AP
 
 ### Make Integration Request
 
+The response is a true HTTP proxy — the upstream status code, headers, and body are returned directly.
+
 ```javascript
 const response = await fetch(`/api/integrations/${slugOrId}/request`, {
     method: 'POST',
@@ -236,12 +238,7 @@ const response = await fetch(`/api/integrations/${slugOrId}/request`, {
         headers: { /* extra headers */ }     // Additional headers
     })
 });
-const result = await response.json();
-
-// Response structure:
-// result.status - HTTP status code
-// result.data - response body from the external API
-// result.error - true if upstream returned an error status
+const result = await response.json();  // body is the upstream response directly
 ```
 
 **Salesforce example:**
@@ -258,7 +255,7 @@ const response = await fetch('/api/integrations/salesforce/request', {
     })
 });
 const result = await response.json();
-const records = result.data.records;
+const records = result.records;
 ```
 
 ## Data Access Configuration

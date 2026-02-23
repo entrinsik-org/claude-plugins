@@ -122,10 +122,10 @@ const result = await fetch('/api/integrations').then(r => r.json());
 ```
 
 ### POST /api/integrations/{id}/request
-Make an authenticated request through an integration.
+Make an authenticated request through an integration. The response is a true HTTP proxy — the upstream status code, headers, and body are returned directly on the response.
 
 ```javascript
-const result = await fetch(`/api/integrations/${slugOrId}/request`, {
+const response = await fetch(`/api/integrations/${slugOrId}/request`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -135,18 +135,19 @@ const result = await fetch(`/api/integrations/${slugOrId}/request`, {
         data: { key: 'value' },     // Request body (POST/PUT/PATCH)
         headers: {}                 // Additional headers
     })
-}).then(r => r.json());
+});
 
-// result.status - HTTP status
-// result.data - Response body
-// result.error - true if error status
+// response.status - upstream HTTP status code
+// response.headers - upstream response headers (content-type, etc.)
+// await response.json() - parsed JSON body (for JSON APIs)
+// await response.arrayBuffer() - raw bytes (for binary content like images)
 ```
 
 **Salesforce examples:**
 
 ```javascript
 // SOQL query
-await fetch('/api/integrations/salesforce/request', {
+const response = await fetch('/api/integrations/salesforce/request', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -155,9 +156,10 @@ await fetch('/api/integrations/salesforce/request', {
         params: { q: "SELECT Id, Name FROM Account LIMIT 10" }
     })
 });
+const result = await response.json();
 
 // Get record
-await fetch('/api/integrations/salesforce/request', {
+const response = await fetch('/api/integrations/salesforce/request', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -165,9 +167,10 @@ await fetch('/api/integrations/salesforce/request', {
         method: 'GET'
     })
 });
+const account = await response.json();
 
 // Create record
-await fetch('/api/integrations/salesforce/request', {
+const response = await fetch('/api/integrations/salesforce/request', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -176,6 +179,7 @@ await fetch('/api/integrations/salesforce/request', {
         data: { FirstName: 'John', LastName: 'Doe', Email: 'john@example.com' }
     })
 });
+const created = await response.json();
 ```
 
 ## Server Routes
