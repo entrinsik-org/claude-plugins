@@ -363,6 +363,8 @@ Integrations are authenticated connections to external APIs (Salesforce, REST AP
 
 ### Make Integration Request
 
+The response is a true HTTP proxy — the upstream status code, headers, and body are returned directly.
+
 ```javascript
 const response = await fetch(`/api/integrations/${slugOrId}/request`, {
     method: 'POST',
@@ -375,12 +377,7 @@ const response = await fetch(`/api/integrations/${slugOrId}/request`, {
         headers: { /* extra headers */ }     // Additional headers
     })
 });
-const result = await response.json();
-
-// Response structure:
-// result.status - HTTP status code
-// result.data - response body from the external API
-// result.error - true if upstream returned an error status
+const result = await response.json();  // body is the upstream response directly
 ```
 
 **Salesforce example:**
@@ -397,7 +394,7 @@ const response = await fetch('/api/integrations/salesforce/request', {
     })
 });
 const result = await response.json();
-const records = result.data.records;
+const records = result.records;
 ```
 
 ## App Configuration (`informer.yaml`)
@@ -998,6 +995,7 @@ Each handler function receives a single context object with these properties:
 |----------|------|-------------|
 | `query` | `async (sql, params?) => rows` | Execute SQL against the app's workspace. Returns an array of row objects. |
 | `fetch` | `async (path, options?) => { status, body }` | Make an authenticated API call through Informer (subject to the app's whitelist). |
+| `respond` | `async (body) => void` | Send an early HTTP response while the handler continues running in the background. See [Using `respond()`](#using-respond). |
 | `env` | `object` | App environment variables (from app settings). |
 | `request` | `object` | The incoming request (see below). |
 
@@ -1114,6 +1112,54 @@ export async function POST({ fetch, request }) {
 ```
 
 The `path` argument is relative to `/api/` — pass `'datasets/admin:sales-data/_search'`, not `'/api/datasets/...'`.
+
+### Using `respond()`
+
+The `respond` callback sends an early HTTP response to the caller while the handler keeps running in the background. This is useful when an external caller has a tight response deadline (e.g. Slack's 3-second limit for slash commands) but the handler needs more time to complete its work.
+
+```javascript
+// server/slack/commands.js
+
+export const config = { timeout: 25000 };
+
+export async function POST({ query, fetch, respond, request }) {
+    const { text, response_url } = request.body;
+
+    // Ack immediately — the HTTP response is sent now
+    await respond({ response_type: 'ephemeral', text: 'Processing your request...' });
+
+    // Everything below runs in the background (isolate stays alive)
+    const result = await fetch('datasets/admin:sales-data/_search', {
+        method: 'POST',
+        body: { query: { match_all: {} }, size: 50 }
+    });
+
+    // Post the real answer back via response_url
+    await fetch('integrations/slack/request', {
+        method: 'POST',
+        body: { url: response_url, method: 'POST', data: { text: `Found ${result.body.hits.total} records` } }
+    });
+}
+```
+
+**Key behavior:**
+
+- Only the **first** `respond()` call takes effect — subsequent calls are ignored
+- The response body is always sent as **200 JSON** (`Content-Type: application/json`)
+- The isolate, database connection, and timeout all remain active until the handler fully returns (or times out)
+- If background work throws an error after `respond()`, the error is logged server-side but does **not** affect the already-sent response
+- If `respond()` is never called, the handler returns normally — `respond` is entirely opt-in
+
+**When to use `respond()`:**
+
+- Webhook receivers with tight deadlines (Slack, Stripe, GitHub)
+- Fire-and-forget patterns where the caller only needs an acknowledgment
+- Long-running operations where you want to ack first, then process asynchronously
+
+**When NOT to use `respond()`:**
+
+- Normal CRUD handlers — just return the result directly
+- When the caller needs the actual result in the response body
 
 ### Handler Config
 
