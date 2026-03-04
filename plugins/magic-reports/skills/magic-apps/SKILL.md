@@ -21,6 +21,14 @@ Apps are stored in Informer libraries and served through the Informer UI. (You m
 
 ## Local Development Workflow
 
+### Vite Plugin
+
+Install the Informer Vite plugin as a dev dependency:
+
+```bash
+npm install -D @entrinsik/vite-plugin-informer@2.3.0
+```
+
 ### Development Mode (`npm run dev`)
 
 The Vite plugin proxies `/api/*` requests to your Informer server with Basic auth. This means:
@@ -71,8 +79,7 @@ The `informer` section in `package.json` controls deploy metadata:
 {
   "informer": {
     "name": "Sales Dashboard",
-    "description": "Regional sales performance overview",
-    "id": "a1b2c3d4-..."
+    "description": "Regional sales performance overview"
   }
 }
 ```
@@ -81,7 +88,7 @@ The `informer` section in `package.json` controls deploy metadata:
 |-------|-------------|
 | `name` | Display name in Informer (falls back to package `name`) |
 | `description` | App description |
-| `id` | App UUID (auto-saved after first deploy) |
+| `id` | App UUID — **do not set manually**. The first `npm run deploy` creates the app and writes the `id` back to `package.json` automatically. |
 
 ### App Icon (favicon.svg)
 
@@ -1594,7 +1601,7 @@ if (roles.includes('manager')) {
 Configure mock roles in `vite.config.js`:
 
 ```javascript
-import informer from 'vite-plugin-informer';
+import informer from '@entrinsik/vite-plugin-informer';
 
 export default {
     plugins: [informer({ mock: { roles: ['approver', 'manager'] } })]
@@ -2276,7 +2283,7 @@ body { background: var(--bg); color: var(--text); }
 To override the theme in dev mode, pass `mock.theme` in `vite.config.js`:
 
 ```javascript
-import informer from 'vite-plugin-informer';
+import informer from '@entrinsik/vite-plugin-informer';
 
 export default {
     plugins: [informer({ mock: { theme: 'dark' } })]
