@@ -1,6 +1,6 @@
 ---
 name: magic-apps
-description: Building Informer Apps with local Vite development. Covers the dev/publish workflow, key Informer APIs, widgets, app persistence (SQL workspace + migrations), server-side route handlers, and the built-in AI copilot sidebar.
+description: Building Informer Apps with local Vite development. Covers the dev/publish workflow, key Informer APIs, widgets, app persistence (SQL workspace + migrations), server-side route handlers, event-driven AI agents with toolkit integration, and the built-in AI copilot sidebar.
 ---
 
 # Informer App Development
@@ -15,6 +15,7 @@ An Informer App is a custom HTML/JS/CSS application that runs inside Informer. I
 - **Run server-side JavaScript handlers** in sandboxed V8 isolates (with direct DB access)
 - Render charts, tables, and interactive visualizations
 - Include a **built-in AI copilot** sidebar that can query your data and answer questions in context
+- Define **AI agents** that react to events, execute tools, and chain together for automated workflows
 
 Apps are stored in Informer libraries and served through the Informer UI. (You may see the term "Magic Report" in older documentation — Apps are the current name for the same concept.)
 
@@ -56,8 +57,11 @@ Builds your project and uploads to Informer:
 5. Uploads `informer.yaml` and `data-access.yaml` from project root (if they exist)
 6. Uploads `migrations/` directory (if it exists)
 7. Uploads `server/` directory (if it exists)
-8. Runs deploy: pending SQL migrations + server-route scanning + handler bundling
-9. App is viewable at `/api/apps/{owner}:{slug}/view`
+8. Uploads `tools/` directory (if it exists)
+9. Uploads `webhooks/` directory (if it exists)
+10. Runs deploy: pending SQL migrations + server-route scanning + webhook scanning + handler bundling + tool bundling + resource reference validation + agent upsert from `informer.yaml`
+    - **Resource refs are validated**: all datasets, queries, datasources, integrations, and toolkits declared in `informer.yaml` must exist — deploy fails with a clear error if any are missing
+11. App is viewable at `/api/apps/{owner}:{slug}/view`
 
 ### Package.json Configuration
 
@@ -996,7 +1000,14 @@ Each handler function receives a single context object with these properties:
 | `query` | `async (sql, params?) => rows` | Execute SQL against the app's workspace. Returns an array of row objects. |
 | `fetch` | `async (path, options?) => { status, body }` | Make an authenticated API call through Informer (subject to the app's whitelist). |
 | `respond` | `async (body) => void` | Send an early HTTP response while the handler continues running in the background. See [Using `respond()`](#using-respond). |
-| `env` | `object` | App environment variables (from app settings). |
+| `emit` | `async (event, payload) => void` | Emit an app event to trigger agents. Creates an `AppEvent` record and notifies the event dispatcher. |
+| `crypto` | `object` | Cryptographic helpers. `crypto.hmac(algorithm, key, data, encoding?)` computes an HMAC digest (default encoding: `'hex'`). |
+| `base64Decode` | `async (encoded) => string` | Decode a base64 string to UTF-8 text (handles multi-byte characters correctly, unlike `atob`). |
+| `base64Encode` | `async (string) => string` | Encode a UTF-8 string to base64. |
+| `base64UrlDecode` | `async (encoded) => string` | Decode a base64url string to UTF-8 text (for URL-safe base64 like Gmail API payloads). |
+| `base64UrlEncode` | `async (string) => string` | Encode a UTF-8 string to base64url. |
+| `markdown` | `async (text) => string` | Convert markdown text to HTML using `marked`. Useful for generating formatted email bodies from markdown content. |
+| `env` | `object` | App environment variables (from `app.defn.env`). Set via `PUT /api/apps/{id}` with `defn.env`. |
 | `request` | `object` | The incoming request (see below). |
 
 **`request` object:**
@@ -1008,6 +1019,7 @@ Each handler function receives a single context object with these properties:
 | `request.params` | `object` | Route parameters (e.g. `{ id: 'abc123' }`) |
 | `request.query` | `object` | Query string parameters |
 | `request.body` | `any` | Request body (parsed JSON for POST/PUT/PATCH) |
+| `request.rawBody` | `string\|null` | Raw request body string (for HMAC signature verification). Only available on webhook routes. |
 | `request.headers` | `object` | Request headers |
 | `request.roles` | `string[]` | The viewer's assigned role IDs (see [App Roles](#app-roles)) |
 | `request.user` | `object` | Current user identity (see below) |
@@ -1196,6 +1208,9 @@ Server handlers run in a sandboxed V8 isolate. This means:
 - **No Node.js APIs** — no `require()`, `fs`, `http`, `process`, `Buffer`, etc.
 - **No network access** — all external calls must go through `fetch()` (which enforces the whitelist)
 - **No filesystem** — use `query()` for persistence
+- **`btoa()` and `atob()` are available** — base64 encode/decode strings (Latin-1 only, per spec)
+- **UTF-8 base64 helpers** — `base64Decode()`, `base64Encode()`, `base64UrlDecode()`, `base64UrlEncode()` are async functions that correctly handle multi-byte UTF-8 characters (e.g. smart quotes, emoji). **Prefer these over `atob()`/`btoa()` for any text that may contain non-ASCII characters.**
+- **`markdown(text)`** — async function that converts markdown text to HTML using `marked`. Useful for generating formatted email bodies.
 - **128 MB memory limit** — the isolate is killed if it exceeds this
 - **Wall-clock timeout** — defaults to 30s, configurable via `config.timeout`
 - **Ephemeral** — a fresh isolate is created for each request; no state persists between calls
@@ -1352,6 +1367,163 @@ Server routes run locally during `npm run dev` via Vite's `ssrLoadModule()`. The
 4. Supports HMR — editing a server handler file takes effect immediately without restarting
 
 No extra configuration is needed beyond having `.env` set up with `INFORMER_URL` and credentials. If your handlers use `query()`, ensure `migrations/` exists so the workspace is auto-provisioned (see [Local Development with Workspaces](#local-development-with-workspaces)).
+
+## Webhooks (Public Endpoints)
+
+Apps can expose **public webhook endpoints** that receive requests from external services (Gmail push notifications, Slack commands, Stripe events, etc.) without requiring Informer authentication. Webhook handlers run as the app owner — they have full access to `query()`, `fetch()`, and `emit()`.
+
+### How It Works
+
+1. Create a `webhooks/` directory in your project root
+2. Add `.js` handler files using the same file-convention routing as `server/`
+3. Run `npm run deploy` — Informer scans, bundles, and registers webhook routes as public
+4. External services POST to `/api/apps/{naturalId}/_hook/{path}`
+
+### File-Convention Routing
+
+File paths under `webhooks/` map to URL routes, same pattern as `server/`:
+
+| File | Route | Public URL |
+|------|-------|------------|
+| `webhooks/gmail/push.js` | `/gmail/push` | `/api/apps/{id}/_hook/gmail/push` |
+| `webhooks/stripe/payment.js` | `/stripe/payment` | `/api/apps/{id}/_hook/stripe/payment` |
+| `webhooks/slack/commands.js` | `/slack/commands` | `/api/apps/{id}/_hook/slack/commands` |
+
+### Handler Structure
+
+Webhook handlers use the same export pattern as server routes. The handler context includes `crypto` for HMAC verification and `request.rawBody` for the original request bytes:
+
+```javascript
+// webhooks/gmail/push.js
+
+export const config = { timeout: 15000 };
+
+export async function POST({ query, request, fetch, emit, crypto, env }) {
+    // request.body — parsed JSON payload
+    // request.rawBody — original body string (for HMAC verification)
+    // request.headers — raw request headers
+    // crypto.hmac() — compute HMAC digests
+    // env — app environment variables (secrets, config)
+
+    const payload = request.body;
+
+    // Process the webhook
+    await query('INSERT INTO webhook_log (source, payload) VALUES ($1, $2)',
+        ['gmail', JSON.stringify(payload)]);
+
+    // Trigger an agent via event
+    await emit('gmail_notification', { historyId: payload.historyId });
+
+    return { status: 200, body: { ok: true } };
+}
+```
+
+### Key Differences from Server Routes
+
+| | Server Routes (`server/`) | Webhook Routes (`webhooks/`) |
+|---|---|---|
+| **URL prefix** | `/api/apps/{id}/view/api/_server/` | `/api/apps/{id}/_hook/` |
+| **Authentication** | Requires session/token (viewer's identity) | None — public endpoint |
+| **`request.user`** | Current viewer's identity | `null` |
+| **`request.roles`** | Viewer's assigned roles | `[]` |
+| **`fetch()` runs as** | The viewer | The app owner (team admin) |
+| **Use case** | App-internal CRUD, user-specific logic | External service callbacks |
+
+### Sandbox Capabilities
+
+Webhook handlers have the same sandbox capabilities as server routes:
+
+| Callback | Description |
+|----------|-------------|
+| `query(sql, params?)` | Execute SQL against the app's workspace |
+| `fetch(path, options?)` | Make authenticated API calls (runs as app owner) |
+| `emit(event, payload?)` | Fire app events (trigger agents) |
+| `respond(body)` | Send early response while handler continues in background |
+| `crypto.hmac(algorithm, key, data, encoding?)` | Compute HMAC digest (delegates to Node.js `crypto` on the host). Default encoding: `'hex'`. |
+| `base64Decode(encoded)` | Decode base64 to UTF-8 string (async). Handles multi-byte characters correctly. |
+| `base64Encode(string)` | Encode UTF-8 string to base64 (async). |
+| `base64UrlDecode(encoded)` | Decode base64url to UTF-8 string (async). Ideal for Gmail API payloads. |
+| `base64UrlEncode(string)` | Encode UTF-8 string to base64url (async). |
+| `markdown(text)` | Convert markdown text to HTML (async). Uses `marked`. |
+| `env` | App environment variables from `app.defn.env` |
+
+Webhook routes also provide `request.rawBody` — the original request body as a string, preserving the exact bytes sent by the caller. Use this for HMAC signature verification (not `request.body`, which is parsed JSON).
+
+### Webhook Verification
+
+Since webhook endpoints are public, **the handler is responsible for verifying authenticity**. The sandbox provides `crypto.hmac()` for HMAC signature verification and `env` for storing secrets.
+
+**HMAC signature verification** (GitHub, Stripe, Shopify):
+
+```javascript
+// webhooks/github.js
+export async function POST({ crypto, request, env }) {
+    const signature = request.headers['x-hub-signature-256'];
+    if (!signature) return { status: 401, body: { error: 'Missing signature' } };
+
+    // Compute HMAC over the raw body bytes (not parsed JSON)
+    const expected = await crypto.hmac('sha256', env.GITHUB_WEBHOOK_SECRET, request.rawBody);
+    if (signature !== `sha256=${expected}`) {
+        return { status: 401, body: { error: 'Invalid signature' } };
+    }
+
+    // Signature valid — process the event
+    const event = request.body;
+    await query('INSERT INTO webhook_log (source, event, payload) VALUES ($1, $2, $3)',
+        ['github', request.headers['x-github-event'], JSON.stringify(event)]);
+
+    return { ok: true };
+}
+```
+
+**Shared secret** (custom integrations):
+
+```javascript
+// webhooks/my-callback.js
+export async function POST({ request, env }) {
+    if (request.headers['x-webhook-secret'] !== env.CALLBACK_SECRET) {
+        return { status: 401, body: { error: 'Unauthorized' } };
+    }
+
+    // Secret matches — process the payload
+    return { received: true };
+}
+```
+
+**Setting environment variables:** Store secrets in `app.defn.env` via the app update endpoint:
+
+```javascript
+await fetch(`/api/apps/${appId}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+        defn: { env: { GITHUB_WEBHOOK_SECRET: 'your-secret-here' } }
+    })
+});
+```
+
+### Project Structure with Webhooks
+
+```
+my-app/
+  webhooks/
+    gmail/
+      push.js               → POST /gmail/push
+    stripe/
+      payment.js            → POST /stripe/payment
+    slack/
+      commands.js            → POST /slack/commands
+  server/
+    orders/
+      index.js              → GET,POST /orders (authenticated)
+  tools/
+    send_email.js
+  migrations/
+    001-create-tables.sql
+  informer.yaml
+  index.html
+  package.json
+```
 
 ## App Context
 
@@ -2110,6 +2282,441 @@ export default {
     plugins: [informer({ mock: { theme: 'dark' } })]
 };
 ```
+
+## Agents (Event-Driven AI Automation)
+
+Apps can define **agents** — AI-powered workflows that listen for events, execute tools, and chain together to automate complex tasks. Agents are declared in `informer.yaml`, run server-side in isolated V8 sandboxes, and have access to the app's workspace database, API whitelist, and custom tools.
+
+### Defining Agents in `informer.yaml`
+
+Add an `agents:` section to your `informer.yaml`:
+
+```yaml
+# informer.yaml
+access:
+  datasets:
+    - admin:sales-data
+
+agents:
+  order-processor:
+    description: "Processes new orders and updates inventory"
+    instructions: |
+      You are an order processing agent. When triggered by a new order event,
+      validate the order, check inventory levels, and update the database.
+      Use the check_inventory tool to verify stock before confirming.
+    model: go_everyday
+    tools:
+      - check_inventory
+      - update_status
+    on:
+      - order_created
+
+  daily-report:
+    description: "Generates a daily summary report"
+    instructions: |
+      Generate a summary of today's activity. Query the orders table
+      for today's records and calculate totals. Post results to Slack.
+    model: go_everyday
+    webSearch: true
+    tools:
+      - send_notification
+    toolkits:
+      - admin:slack-notifications
+    assistants:
+      - admin:report-writer
+    cron: "0 8 * * 1-5"   # Weekdays at 8:00 AM
+
+events:
+  order_created:
+    description: "Fired when a new order is submitted"
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `description` | `string` | Display name/description shown in the Agents UI |
+| `instructions` | `string` | System prompt for the AI model — tells the agent what to do |
+| `model` | `string` | AI model slug (default: `go_everyday`) |
+| `tools` | `string[]` | Tool names from the app's `tools/` directory |
+| `toolkits` | `string[]` | Informer toolkit IDs (naturalId or UUID) to attach — their tools become available to the agent |
+| `assistants` | `string[]` | Informer assistant IDs (naturalId or UUID) — their instructions are merged into the agent's system prompt |
+| `on` | `string \| string[]` | Event name(s) that trigger this agent |
+| `cron` | `string` | 5-field cron expression for scheduled execution (e.g. `"0 8 * * 1-5"` = weekdays at 8 AM) |
+| `webSearch` | `boolean` | Enable web search (default: `false`). When enabled, the AI model can search the web for current information during execution. |
+
+The optional `events:` section documents available events (for reference only — events don't need to be declared to work).
+
+### Tools
+
+Agents use tools defined in your app's `tools/` directory. Each tool is a `.js` file that exports a `description`, `schema`, and `handler`:
+
+```
+my-app/
+  tools/
+    check_inventory.js
+    update_status.js
+    notifications/
+      send_notification.js    → tool name: "notifications_send_notification"
+  server/
+    orders/index.js
+  migrations/
+    001-create-orders.sql
+  informer.yaml
+```
+
+**Tool file structure:**
+
+```javascript
+// tools/check_inventory.js
+
+export const description = 'Check inventory levels for a product';
+
+export const schema = {
+    type: 'object',
+    properties: {
+        productId: { type: 'string', description: 'The product ID to check' },
+        quantity: { type: 'number', description: 'Required quantity' }
+    },
+    required: ['productId', 'quantity']
+};
+
+export async function handler(args, { query, fetch, emit, context }) {
+    const [product] = await query(
+        'SELECT * FROM inventory WHERE product_id = $1',
+        [args.productId]
+    );
+
+    if (!product) {
+        return { available: false, error: 'Product not found' };
+    }
+
+    return {
+        available: product.stock >= args.quantity,
+        currentStock: product.stock,
+        requested: args.quantity
+    };
+}
+```
+
+**Handler context:**
+
+| Property | Type | Description |
+|----------|------|-------------|
+| `query` | `async (sql, params?) => rows` | Execute SQL against the app's workspace |
+| `fetch` | `async (path, options?) => { status, body }` | Make authenticated API calls (subject to whitelist) |
+| `emit` | `async (event, payload) => void` | Emit an event to trigger other agents |
+| `markdown` | `async (text) => string` | Convert markdown text to HTML |
+| `context` | `object` | `{ appId, agentId, runId, trigger }` |
+
+**Tool naming:** The tool name is derived from the file path relative to `tools/`. Nested directories use underscores: `tools/notifications/send_email.js` → `notifications_send_email`.
+
+### Toolkits
+
+In addition to custom tools defined in the `tools/` directory, agents can use **Informer toolkits** — shared tool collections managed at the system level (MCP servers, custom toolkits, etc.). Declare them in the agent's `toolkits` array using the toolkit's naturalId or UUID:
+
+```yaml
+# informer.yaml
+agents:
+  research-agent:
+    description: "Researches topics using external tools"
+    instructions: |
+      Use the available tools to research the requested topic.
+      Summarize findings and store results in the workspace.
+    tools:
+      - save_results
+    toolkits:
+      - admin:web-scraper
+      - admin:slack-notifications
+    on: research_requested
+```
+
+**How toolkit integration works:**
+
+1. **At deploy time**, each toolkit ref is validated — deploy **fails hard** if a referenced toolkit doesn't exist. Resolved refs are stored in the `app_toolkit` junction table.
+2. **At agent execution time**, the agent executor loads all toolkits declared on the agent, fetches their namespaced tool definitions, and merges them into the agent's available tools alongside any custom `tools/` directory tools.
+3. Toolkit **system instructions** (if configured) are appended to the agent's system prompt automatically.
+4. Tool names from toolkits are namespaced to avoid collisions (e.g., `web-scraper:fetch_page`).
+
+**Toolkits vs. custom tools:**
+
+| Feature | Custom tools (`tools/`) | Toolkits |
+|---------|------------------------|----------|
+| Defined in | App's `tools/` directory | System-level toolkit config |
+| Scope | Single app | Shared across apps/chats |
+| Execution | V8 sandbox (app context) | Toolkit driver (MCP, custom, etc.) |
+| Deploy validation | Warns on missing refs | Fails on missing refs |
+| Use case | App-specific logic | Shared capabilities (APIs, MCP servers) |
+
+### Assistants
+
+Agents can reference Informer assistants to inherit their instructions. Each referenced assistant's system prompt is merged into the agent's own instructions, allowing you to compose agent behavior from reusable assistant personas.
+
+```yaml
+agents:
+  support-agent:
+    description: "Customer support with a specialized persona"
+    instructions: |
+      Process support tickets and escalate critical issues.
+    assistants:
+      - admin:support-persona
+    on: support_request
+```
+
+**How assistant integration works:**
+
+1. **At deploy time**, each assistant ref is validated — deploy **fails hard** if a referenced assistant doesn't exist. Use either naturalId (`owner:slug`) or UUID.
+2. **At agent execution time**, the executor loads each assistant and collects its `instructions` field.
+3. Assistant instructions are prepended to the system prompt **before** toolkit instructions.
+
+### Events
+
+Events are the trigger mechanism for agents. They can be emitted from:
+
+1. **Server-side route handlers** — using the `emit()` callback
+2. **Other agent tools** — using `emit()` in a tool handler (enables agent chaining)
+3. **Manual triggers** — via the Agents UI or API (uses `_manual` event name)
+
+**Emitting events from server routes:**
+
+```javascript
+// server/orders/index.js
+
+export async function POST({ query, emit, request }) {
+    const { customer, total } = request.body;
+    const [order] = await query(
+        'INSERT INTO orders (customer, total) VALUES ($1, $2) RETURNING *',
+        [customer, total]
+    );
+
+    // Trigger agents listening for 'order_created'
+    await emit('order_created', { orderId: order.id, customer, total });
+
+    return { status: 201, body: order };
+}
+```
+
+**Emitting events from tools (agent chaining):**
+
+```javascript
+// tools/update_status.js
+
+export const description = 'Update order status and notify downstream';
+
+export const schema = {
+    type: 'object',
+    properties: {
+        orderId: { type: 'string' },
+        status: { type: 'string', enum: ['confirmed', 'shipped', 'delivered'] }
+    },
+    required: ['orderId', 'status']
+};
+
+export async function handler(args, { query, emit }) {
+    await query(
+        'UPDATE orders SET status = $1 WHERE id = $2',
+        [args.status, args.orderId]
+    );
+
+    // Chain: trigger another agent
+    await emit('order_status_changed', {
+        orderId: args.orderId,
+        newStatus: args.status
+    });
+
+    return { updated: true };
+}
+```
+
+### Cron Scheduling
+
+Agents can run on a schedule using standard 5-field cron expressions (`minute hour dom month dow`). When an agent has a `cron` field, the event dispatcher automatically triggers it at the scheduled time using the `_cron` event.
+
+```yaml
+agents:
+  daily-digest:
+    description: "Send daily activity digest"
+    instructions: |
+      Query today's activity and send a summary notification.
+    tools:
+      - send_notification
+    cron: "0 8 * * 1-5"   # Weekdays at 8:00 AM
+
+  hourly-sync:
+    description: "Sync external data every hour"
+    instructions: |
+      Fetch latest records from the external API and upsert into the workspace.
+    tools:
+      - fetch_external_data
+      - upsert_records
+    cron: "0 * * * *"     # Every hour on the hour
+```
+
+**Common cron patterns:**
+
+| Expression | Schedule |
+|-----------|----------|
+| `0 8 * * *` | Daily at 8:00 AM |
+| `0 8 * * 1-5` | Weekdays at 8:00 AM |
+| `*/15 * * * *` | Every 15 minutes |
+| `0 0 * * 0` | Sundays at midnight |
+| `0 9 1 * *` | First of every month at 9:00 AM |
+
+**How it works:**
+- At deploy time, the cron expression is validated and the next fire time (`nextRunAt`) is computed
+- The event dispatcher sweeps for agents whose `nextRunAt` has passed (using `FOR UPDATE SKIP LOCKED` for cluster safety)
+- When fired, the agent receives a `_cron` event with `{ cron, scheduledAt }` as the payload
+- After execution, `nextRunAt` is recomputed for the next occurrence
+- Only **active** agents with a valid cron expression are scheduled
+
+**Cron + event triggers can coexist** — an agent can have both `cron` and `on` fields. It will run on schedule AND when matching events are emitted.
+
+Updating an agent's status to `stopped` via the API clears its `nextRunAt`. Reactivating it recomputes the next fire time.
+
+### How Agent Execution Works
+
+1. An event is emitted (via `emit()`, cron schedule, or manual trigger)
+2. An `AppEvent` record is created with `status: 'pending'`
+3. The event dispatcher (real-time via Redis + periodic sweep fallback) picks it up
+4. All **active** agents whose `on` triggers include the event name are found
+5. For each matching agent, an execution loop runs:
+   - Creates an `AppAgentRun` record
+   - Loads the AI model and tool bundles from `tools/`
+   - Loads assistant instructions declared in the agent's `assistants` array and merges them into the system prompt
+   - Loads toolkit tools declared in the agent's `toolkits` array (namespaced tool defs + system instructions)
+   - Calls the AI with the system prompt (from `instructions` + assistant instructions + toolkit instructions), the event payload, and all available tools
+   - The AI can call tools (up to 20 steps) — custom tools run in isolated V8 sandboxes, toolkit tools delegate to their driver
+   - Run is marked `completed` or `failed` with execution steps and token usage
+
+**Sandbox constraints** (same as server routes):
+- No Node.js APIs (`require`, `fs`, `http`, etc.)
+- No direct network access — use `fetch()` (enforces whitelist)
+- 128 MB memory limit per isolate
+- 30-second timeout per tool execution
+
+### Agent Status
+
+Agents have a `status` field: `active` or `stopped`. Only active agents respond to events. You can toggle status via:
+
+- **The Agents UI** — click the play/stop button next to an agent
+- **The API** — `PUT /api/apps/{id}/agents/{agentId}` with `{ "status": "active" }`
+
+When you redeploy, agents defined in `informer.yaml` are upserted. Agents removed from YAML are set to `stopped`. Runtime instruction overrides (`instructionsOverride`) are preserved across deploys.
+
+### Agent REST API
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/apps/{id}/agents` | List all agents |
+| GET | `/api/apps/{id}/agents/{agentId}` | Get agent details |
+| PUT | `/api/apps/{id}/agents/{agentId}` | Update agent (instructions, status, model) |
+| GET | `/api/apps/{id}/agents/{agentId}/runs` | List runs (paginated, newest first) |
+| GET | `/api/apps/{id}/agents/{agentId}/runs/{runId}` | Get run details with step-by-step log |
+| POST | `/api/apps/{id}/agents/{agentId}/_trigger` | Manually trigger (payload: `{ event, payload }`) |
+
+### Local Development
+
+Agents run locally during `npm run dev` via the Vite plugin. The plugin:
+
+1. Detects a `tools/` directory or `agents:` section in `informer.yaml`
+2. Mounts middleware at `/api/_agent` that loads agent definitions and tool handlers
+3. Loads tool handlers via `ssrLoadModule` (same as server routes) — HMR works for tool code
+4. Proxies AI calls to the Informer server's `_chat` endpoint
+
+**Local agent endpoints:**
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/_agent` | List agents from `informer.yaml` |
+| POST | `/api/_agent/{name}/_trigger` | Run agent locally with tool dispatch |
+
+**Triggering locally:**
+
+```javascript
+// From your app's frontend code during dev
+const response = await fetch('/api/_agent/validate-order/_trigger', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+        event: 'order_created',
+        payload: { orderId: 123, customer: 'Acme Corp', total: 1500 }
+    })
+});
+
+const result = await response.json();
+// { agent: 'validate-order', trigger: 'order_created', status: 'completed', tokens: 450, steps: [...] }
+```
+
+**Differences from production:**
+- `emit()` is a no-op in dev mode (logs to console instead of creating events)
+- AI calls proxy through the Informer server — the model must be configured there
+- No agent run records are persisted locally
+- Tool code reloads on save (HMR)
+
+### Project Structure with Agents
+
+```
+my-app/
+  tools/
+    check_inventory.js        ← Agent tool
+    update_status.js          ← Agent tool
+    notifications/
+      send_email.js           ← Nested tool (name: notifications_send_email)
+  server/
+    orders/
+      index.js                ← Emits events via emit()
+  migrations/
+    001-create-orders.sql
+    002-create-inventory.sql
+  public/
+    favicon.svg
+  src/
+    main.js
+  informer.yaml               ← Declares agents, tools, events, access
+  index.html
+  package.json
+```
+
+### Full Example: Order Processing Pipeline
+
+```yaml
+# informer.yaml
+access:
+  datasets:
+    - admin:products
+
+agents:
+  validate-order:
+    description: "Validates new orders and checks inventory"
+    instructions: |
+      When an order_created event arrives, use check_inventory for each item.
+      If all items are in stock, use update_status to set the order to 'confirmed'.
+      If any item is out of stock, set it to 'backordered'.
+    tools:
+      - check_inventory
+      - update_status
+    on: order_created
+
+  send-confirmation:
+    description: "Sends order confirmation emails"
+    instructions: |
+      When an order is confirmed (order_status_changed with newStatus='confirmed'),
+      use the Slack toolkit to notify the sales channel, then use send_email for the customer.
+    tools:
+      - notifications_send_email
+    toolkits:
+      - admin:slack-notifications
+    on: order_status_changed
+
+  daily-order-summary:
+    description: "Generates a daily order summary"
+    instructions: |
+      Query yesterday's orders, calculate totals and trends,
+      and send a summary notification to the ops team.
+    tools:
+      - send_notification
+    cron: "0 7 * * 1-5"   # Weekdays at 7:00 AM
+```
+
+This creates an automated pipeline: order submitted → validated → status updated → confirmation sent — with each step handled by a different agent. The daily summary runs on a cron schedule independently.
 
 ## PDF Export
 
