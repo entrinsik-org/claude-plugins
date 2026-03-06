@@ -1,10 +1,7 @@
 {
   "name": "entrinsik-plugins",
+  "description": "Claude Code plugins for Informer development",
   "owner": { "name": "Entrinsik" },
-  "metadata": {
-    "description": "Claude Code plugins for Informer development",
-    "pluginRoot": "./plugins"
-  },
   "plugins": [
     {
       "name": "magic-reports",
