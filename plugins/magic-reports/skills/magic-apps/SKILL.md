@@ -1014,6 +1014,7 @@ Each handler function receives a single context object with these properties:
 | `base64UrlDecode` | `async (encoded) => string` | Decode a base64url string to UTF-8 text (for URL-safe base64 like Gmail API payloads). |
 | `base64UrlEncode` | `async (string) => string` | Encode a UTF-8 string to base64url. |
 | `markdown` | `async (text) => string` | Convert markdown text to HTML using `marked`. Useful for generating formatted email bodies from markdown content. |
+| `log` | `function` | Write structured log entries to the app's log. See [Using `log()`](#using-log). |
 | `env` | `object` | App environment variables (from `app.defn.env`). Set via `PUT /api/apps/{id}` with `defn.env`. |
 | `request` | `object` | The incoming request (see below). |
 
@@ -1179,6 +1180,50 @@ export async function POST({ query, fetch, respond, request }) {
 
 - Normal CRUD handlers — just return the result directly
 - When the caller needs the actual result in the response body
+
+### Using `log()`
+
+The `log` callback writes structured log entries to the app's log table (`app_log`). Logs are visible in the **Logs tab** of the App Admin panel in Informer GO, and can be filtered by level, source, and agent.
+
+```javascript
+// server/orders/index.js
+
+export async function POST({ query, log, request }) {
+    const { customer, total } = request.body;
+
+    log.info('Creating order', { customer, total });
+
+    const [order] = await query(
+        'INSERT INTO orders (customer, total) VALUES ($1, $2) RETURNING *',
+        [customer, total]
+    );
+
+    log('Order created', { orderId: order.id });  // shorthand for log.info()
+    return { status: 201, body: order };
+}
+```
+
+**Log levels:**
+
+| Method | Level | Use case |
+|--------|-------|----------|
+| `log(message, data?)` | `info` | Shorthand — logs at info level |
+| `log.debug(message, data?)` | `debug` | Verbose diagnostic info |
+| `log.info(message, data?)` | `info` | Normal operational events |
+| `log.warn(message, data?)` | `warn` | Unexpected but recoverable situations |
+| `log.error(message, data?)` | `error` | Failures that need attention |
+
+**Parameters:**
+
+- `message` — string describing the event. Non-string values are automatically JSON-stringified.
+- `data` — optional object with structured metadata (stored as JSONB). Useful for filtering and debugging.
+
+**Key behavior:**
+
+- Logging is **fire-and-forget** — it never blocks or throws. If the log write fails, it's silently dropped.
+- The `source` field is set automatically based on where the handler runs: `'server'` for server routes, `'webhook'` for webhook handlers, `'tool'` for agent tool handlers.
+- Correlation fields (`invocationId`, `agentId`, `runId`, `toolId`) are set automatically based on the execution context — you don't need to pass them.
+- Available in **server routes**, **webhook handlers**, and **agent tool handlers**.
 
 ### Handler Config
 
@@ -1405,7 +1450,7 @@ Webhook handlers use the same export pattern as server routes. The handler conte
 
 export const config = { timeout: 15000 };
 
-export async function POST({ query, request, fetch, emit, crypto, env }) {
+export async function POST({ query, request, fetch, emit, log, crypto, env }) {
     // request.body — parsed JSON payload
     // request.rawBody — original body string (for HMAC verification)
     // request.headers — raw request headers
@@ -1452,6 +1497,7 @@ Webhook handlers have the same sandbox capabilities as server routes:
 | `base64UrlDecode(encoded)` | Decode base64url to UTF-8 string (async). Ideal for Gmail API payloads. |
 | `base64UrlEncode(string)` | Encode UTF-8 string to base64url (async). |
 | `markdown(text)` | Convert markdown text to HTML (async). Uses `marked`. |
+| `log(message, data?)` | Write structured log entries. Also has `.debug()`, `.info()`, `.warn()`, `.error()` level methods. |
 | `env` | App environment variables from `app.defn.env` |
 
 Webhook routes also provide `request.rawBody` — the original request body as a string, preserving the exact bytes sent by the caller. Use this for HMAC signature verification (not `request.body`, which is parsed JSON).
@@ -2386,7 +2432,7 @@ export const schema = {
     required: ['productId', 'quantity']
 };
 
-export async function handler(args, { query, fetch, emit, context }) {
+export async function handler(args, { query, fetch, emit, log, context }) {
     const [product] = await query(
         'SELECT * FROM inventory WHERE product_id = $1',
         [args.productId]
@@ -2412,6 +2458,7 @@ export async function handler(args, { query, fetch, emit, context }) {
 | `fetch` | `async (path, options?) => { status, body }` | Make authenticated API calls (subject to whitelist) |
 | `emit` | `async (event, payload) => void` | Emit an event to trigger other agents |
 | `markdown` | `async (text) => string` | Convert markdown text to HTML |
+| `log` | `function` | Write structured log entries. Has `.debug()`, `.info()`, `.warn()`, `.error()` level methods. |
 | `context` | `object` | `{ appId, agentId, runId, trigger }` |
 
 **Tool naming:** The tool name is derived from the file path relative to `tools/`. Nested directories use underscores: `tools/notifications/send_email.js` → `notifications_send_email`.
