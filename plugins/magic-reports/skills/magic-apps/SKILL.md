@@ -1610,15 +1610,37 @@ export default {
 
 ## Built-in App Copilot
 
-Every Informer App gets a **built-in AI copilot sidebar** — a chat panel that slides in from the right side of the app window. Users open it via a floating chat button and can ask questions about the data they're looking at, get insights, or drill into specifics.
+Every Informer App gets a **built-in AI copilot sidebar** — a chat panel that slides in from the right side of the app window.
 
 ### How the Copilot Works
 
+- **Hidden by default**: The copilot button is suppressed for apps. The app must explicitly activate it (see below).
 - **Overlay mode** (default): The sidebar slides over the app content with a backdrop blur. Clicking outside the sidebar or pressing the X closes it.
 - **Pinned mode**: Users can click the pin icon to dock the sidebar. The app content shrinks to make room, and the sidebar stays open while the user works.
 - **Persistent chat**: Each app gets a persistent embedded chat session. Conversations are preserved across opens/closes — the user picks up where they left off.
 
 The copilot has the Informer API skill **automatically enabled** — the AI gets `apiCall` and `searchRoutes` tools without any extra configuration.
+
+### Activating the Copilot
+
+The copilot button is hidden by default for apps. It activates automatically when tools are registered via `registerTool()`. You can also activate it explicitly or paint your own button:
+
+**Automatic** — registering any tool activates the copilot button:
+```javascript
+__INFORMER__.registerTool({ name: 'getContext', ... }); // button appears
+```
+
+**Explicit** — show the platform button without registering tools:
+```javascript
+window.__INFORMER__?.showCopilot();
+```
+
+**Custom** — paint your own button and call `openChat()` directly. This gives you full control over where and when the copilot entry point appears:
+```javascript
+document.querySelector('#my-ai-btn').addEventListener('click', () => {
+    __INFORMER__.openChat({ prompt: 'Analyze current dashboard data' });
+});
+```
 
 ### Opening the Copilot from App Code
 
@@ -1683,12 +1705,16 @@ document.querySelector('.insight').addEventListener('click', () => {
 });
 ```
 
-**Dev mode:** `__INFORMER__.openChat()` is not available in local Vite dev mode since there is no parent GO app. You can mock it for testing:
+**Dev mode:** `__INFORMER__.openChat()` and `showCopilot()` are not available in local Vite dev mode since there is no parent GO app. You can mock them for testing:
 
 ```javascript
 if (!window.__INFORMER__?.openChat) {
     window.__INFORMER__ = window.__INFORMER__ || {};
     window.__INFORMER__.openChat = (opts) => console.log('openChat:', opts);
+}
+if (!window.__INFORMER__?.showCopilot) {
+    window.__INFORMER__ = window.__INFORMER__ || {};
+    window.__INFORMER__.showCopilot = () => console.log('showCopilot: copilot button would appear');
 }
 ```
 
