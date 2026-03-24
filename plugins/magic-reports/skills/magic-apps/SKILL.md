@@ -71,6 +71,30 @@ Builds your project and uploads to Informer:
     - **Resource refs are validated**: all datasets, queries, datasources, integrations, and toolkits declared in `informer.yaml` must exist — deploy fails with a clear error if any are missing
 11. App is viewable at `/api/apps/{owner}:{slug}/view`
 
+### Deployment Constraints
+
+**No Code Splitting** — Informer's asset serving cannot resolve dynamically-loaded chunks. All JavaScript must bundle into a single file.
+
+- Never use `await import('...')` for npm packages — use static `import` instead
+- After `npm run build`, verify `dist/assets/` has only one `.js` and one `.css` file
+- Extra chunks (e.g., `vendor-XXXX.js`) will fail at runtime with "Failed to fetch dynamically imported module"
+
+**External Scripts Require Approved Resources** — Informer blocks external CDN scripts by default (CSP). To use an external script:
+
+1. Add the URL to **Informer Admin > Approved Resources > Scripts**
+2. Check **ESM** if it's an ES module (`.mjs`)
+3. Use `https://cdn.jsdelivr.net/npm/...` format (Informer's standard CDN)
+
+**Web Workers** — Packages that use Web Workers (e.g., `pdfjs-dist`) need special handling. Blob URLs fail if the worker has internal `import()` calls, and local worker files create separate assets Informer can't serve. Load workers from CDN instead:
+
+```typescript
+import * as pdfjsLib from 'pdfjs-dist';
+pdfjsLib.GlobalWorkerOptions.workerSrc =
+    `https://cdn.jsdelivr.net/npm/pdfjs-dist@${pdfjsLib.version}/build/pdf.worker.min.mjs`;
+```
+
+Then add the CDN URL to Approved Resources.
+
 ### Package.json Configuration
 
 The `informer` section in `package.json` controls deploy metadata:
@@ -1132,6 +1156,26 @@ export async function POST({ fetch, request }) {
 
 The `path` argument is relative to `/api/` — pass `'datasets/admin:sales-data/_search'`, not `'/api/datasets/...'`.
 
+**Important: Integration naturalIds in server routes**
+
+Integration identifiers use the `owner:slug` format (e.g., `thansen:grain`, `sales:rover-zum`). In server route `fetch()` calls, you **must URL-encode the colon**:
+
+| Format | Example | Result |
+|--------|---------|--------|
+| URL-encoded | `integrations/thansen%3Agrain/request` | Works |
+| Bare slug | `integrations/grain/request` | 404 — not found |
+| Raw colon | `integrations/thansen:grain/request` | 502 — V8 sandbox URL parser breaks |
+
+Single-segment slugs (like `salesforce`) work as-is — this only affects `owner:slug` format identifiers.
+
+Note: `informer.yaml` uses bare slugs in its access list (e.g., `grain`) — this is a different format from the fetch path.
+
+To discover the correct naturalId for an integration, call `GET /api/integrations` and check the `naturalId` field on each item.
+
+**Dev-mode caveat: plain-text responses**
+
+The Vite plugin's `apiFetch` tries `resp.json()` first, consuming the body stream. If the upstream endpoint returns plain text, the fallback `resp.text()` fails with "Body already read". Always ensure server route responses return JSON. If you must call an upstream that returns plain text, parse it in the server route and return a JSON wrapper.
+
 ### Using `respond()`
 
 The `respond` callback sends an early HTTP response to the caller while the handler keeps running in the background. This is useful when an external caller has a tight response deadline (e.g. Slack's 3-second limit for slash commands) but the handler needs more time to complete its work.
@@ -1221,6 +1265,61 @@ Server handlers run in a sandboxed V8 isolate. This means:
 - **128 MB memory limit** — the isolate is killed if it exceeds this
 - **Wall-clock timeout** — defaults to 30s, configurable via `config.timeout`
 - **Ephemeral** — a fresh isolate is created for each request; no state persists between calls
+
+### Server-Side Pitfalls
+
+These are the most common mistakes when writing server-side route handlers. Each one causes subtle bugs because the server V8 isolate behaves differently from the browser.
+
+**1. `fetch()` returns `{ status, body }`, NOT a browser Response**
+
+The server-side `fetch()` callback is NOT the Web Fetch API. It returns a plain object with `status` (number) and `body` (parsed JSON). Do NOT call `.ok`, `.text()`, `.json()`, or `.headers` on it — those methods don't exist.
+
+```javascript
+// WRONG — browser Response methods don't exist server-side
+export async function GET({ fetch }) {
+    const response = await fetch('datasets/admin:sales/_search', { method: 'POST', body: { query: { match_all: {} } } });
+    if (!response.ok) throw new Error('Failed');     // ❌ .ok is undefined
+    const data = await response.json();               // ❌ .json() is not a function
+}
+
+// CORRECT — use the { status, body } shape directly
+export async function GET({ fetch }) {
+    const result = await fetch('datasets/admin:sales/_search', { method: 'POST', body: { query: { match_all: {} } } });
+    if (result.status !== 200) return { status: result.status, body: { error: 'Search failed' } };
+    const hits = result.body.hits.hits.map(h => h._source);
+    return hits;
+}
+```
+
+**2. `fetch()` body is a plain object, NOT JSON-stringified**
+
+Server-side `fetch()` accepts a plain JavaScript object for `body`. Do NOT call `JSON.stringify()` — the runtime handles serialization. Also, do NOT set `Content-Type` headers — they're added automatically.
+
+```javascript
+// WRONG — double-serialization produces a string literal in the request body
+body: JSON.stringify({ query: { match_all: {} } })
+
+// CORRECT — pass the object directly
+body: { query: { match_all: {} } }
+```
+
+**3. Don't use `new URL(request.url)` for parsing**
+
+The V8 isolate doesn't provide a full `request.url` with protocol/host. Use the pre-parsed `request.params` (for route parameters) and `request.query` (for querystring parameters) instead.
+
+```javascript
+// WRONG — request.url may not be a full URL; new URL() may throw
+const url = new URL(request.url);
+const status = url.searchParams.get('status');
+
+// CORRECT — use the pre-parsed objects
+const status = request.query.status;
+const orderId = request.params.id;
+```
+
+**4. `fetch()` paths are relative to `/api/`**
+
+Pass `'datasets/admin:sales/_search'`, not `'/api/datasets/admin:sales/_search'`. The leading `/api/` is added automatically.
 
 ### Calling Server Routes from App Code
 
@@ -2289,6 +2388,94 @@ export default {
     plugins: [informer({ mock: { theme: 'dark' } })]
 };
 ```
+
+### Theme Pitfall: Hardcoded RGBA Values
+
+**Never hardcode `rgba()` background or border colors.** They won't adapt when the user switches between light and dark mode. This is the #1 cause of "looks great in dark mode, broken in light mode" bugs.
+
+```css
+/* WRONG — dark navy background hardcoded; unreadable in light mode */
+.actions-bar {
+    background: rgba(6, 11, 24, 0.95);
+    border: 1px solid rgba(125, 211, 252, 0.2);
+}
+
+/* CORRECT — CSS variables adapt to theme automatically */
+.actions-bar {
+    background: var(--glass-heavy);
+    border: 1px solid var(--border-accent);
+}
+```
+
+**Common pattern:** Define glass/frost variables in your design system that resolve to dark values in dark mode and light values in light mode:
+
+```css
+:root {
+    --glass-heavy: rgba(255, 255, 255, 0.92);
+    --glass-light: rgba(241, 245, 249, 0.7);
+    --frost: rgba(0, 0, 0, 0.02);
+}
+[data-theme="dark"] {
+    --glass-heavy: rgba(6, 11, 24, 0.92);
+    --glass-light: rgba(17, 25, 39, 0.7);
+    --frost: rgba(255, 255, 255, 0.03);
+}
+```
+
+Use `var(--glass-heavy)` for sticky footers, floating bars, and overlays. Use `var(--frost)` for subtle section backgrounds.
+
+### CSS Modules for React Apps
+
+For React-based Informer Apps, **CSS Modules** (`.module.css`) are recommended over plain CSS or BEM naming. They provide automatic class name scoping, preventing style collisions — especially important when your app coexists with the Informer host UI.
+
+```css
+/* MappingCard.module.css */
+.row {
+    display: grid;
+    grid-template-columns: 32px 72px 1fr 20px 1fr 52px auto;
+    height: 48px;
+    align-items: center;
+}
+
+.statusLabel {
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+}
+```
+
+```tsx
+// MappingCard.tsx
+import styles from './MappingCard.module.css';
+
+export function MappingCard({ mapping }) {
+    return (
+        <div className={styles.row}>
+            <span className={styles.statusLabel}>{mapping.status}</span>
+            {/* ... */}
+        </div>
+    );
+}
+```
+
+Benefits:
+- **No naming collisions** — class names are automatically hashed at build time
+- **Component-scoped** — styles only apply to the component that imports them
+- **TypeScript-friendly** — IDE autocomplete for `styles.xxx`
+- **Vite-native** — zero configuration needed; Vite handles `.module.css` out of the box
+
+### Vite HMR Cache Corruption
+
+When multiple developers (or AI agents) edit the same Informer App simultaneously, Vite's hot module replacement (HMR) cache can become corrupted, causing a blank white screen.
+
+**Symptoms:** App loads as a white page; browser console may show `TypeError` or stale module references.
+
+**Fix:**
+1. Kill the Vite dev server
+2. Delete the cache: `rm -rf node_modules/.vite` (or `Remove-Item -Recurse -Force node_modules\.vite` on Windows)
+3. Restart: `npm run dev`
+
+**Prevention:** When collaborating with another developer or agent on the same app, coordinate on which files are being edited. Vite's HMR handles single-editor changes well but can't reconcile conflicting concurrent edits to the same module graph.
 
 ## Agents (Event-Driven AI Automation)
 

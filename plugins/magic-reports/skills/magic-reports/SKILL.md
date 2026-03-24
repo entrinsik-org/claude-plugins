@@ -47,6 +47,30 @@ Builds your project and uploads to an Informer library:
 5. Uploads `data-access.yaml` from project root (if it exists)
 6. Report is viewable at `/reports/r/{owner}:{slug}`
 
+### Deployment Constraints
+
+**No Code Splitting** — Informer's asset serving cannot resolve dynamically-loaded chunks. All JavaScript must bundle into a single file.
+
+- Never use `await import('...')` for npm packages — use static `import` instead
+- After `npm run build`, verify `dist/assets/` has only one `.js` and one `.css` file
+- Extra chunks (e.g., `vendor-XXXX.js`) will fail at runtime with "Failed to fetch dynamically imported module"
+
+**External Scripts Require Approved Resources** — Informer blocks external CDN scripts by default (CSP). To use an external script:
+
+1. Add the URL to **Informer Admin > Approved Resources > Scripts**
+2. Check **ESM** if it's an ES module (`.mjs`)
+3. Use `https://cdn.jsdelivr.net/npm/...` format (Informer's standard CDN)
+
+**Web Workers** — Packages that use Web Workers (e.g., `pdfjs-dist`) need special handling. Blob URLs fail if the worker has internal `import()` calls, and local worker files create separate assets Informer can't serve. Load workers from CDN instead:
+
+```typescript
+import * as pdfjsLib from 'pdfjs-dist';
+pdfjsLib.GlobalWorkerOptions.workerSrc =
+    `https://cdn.jsdelivr.net/npm/pdfjs-dist@${pdfjsLib.version}/build/pdf.worker.min.mjs`;
+```
+
+Then add the CDN URL to Approved Resources.
+
 ### Package.json Configuration
 
 The `informer` section in `package.json` controls deploy metadata:

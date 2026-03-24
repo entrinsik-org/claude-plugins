@@ -124,6 +124,8 @@ const result = await fetch('/api/integrations').then(r => r.json());
 ### POST /api/integrations/{id}/request
 Make an authenticated request through an integration. The response is a true HTTP proxy — the upstream status code, headers, and body are returned directly on the response.
 
+**naturalId format:** Integration identifiers use `owner:slug` format (e.g., `thansen:grain`). In client-side code, use them as-is in the URL path. In server route `fetch()` calls, you must URL-encode the colon: `integrations/thansen%3Agrain/request`.
+
 ```javascript
 const response = await fetch(`/api/integrations/${slugOrId}/request`, {
     method: 'POST',
