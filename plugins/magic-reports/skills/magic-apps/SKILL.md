@@ -55,6 +55,21 @@ INFORMER_DEV_WORKSPACE=admin:my-app-dev
 ```
 This is set automatically by `npm run workspace:init`.
 
+**Multi-environment support:** Use `--mode` to target different servers:
+```bash
+npm run dev -- --mode test        # loads .env.test
+npm run deploy -- --mode production  # loads .env.production
+```
+
+Create mode-specific env files (e.g., `.env.test`, `.env.production`) with server-specific credentials. When a mode is active, workspace IDs are saved to the mode-specific file.
+
+**Monorepo support:** The plugin walks up the directory tree to find parent `.env` files as fallback defaults. Place shared credentials in a parent `.env` and app-specific overrides (like `INFORMER_DEV_WORKSPACE`) in each app's local `.env`.
+
+**Proxy options:** Pass `proxy` options to the plugin for SSL/cert issues:
+```javascript
+informer({ proxy: { secure: false } })
+```
+
 ### Deploying (`npm run deploy`)
 
 Builds your project and uploads to Informer:
@@ -1009,11 +1024,12 @@ Each handler function receives a single context object with these properties:
 | `respond` | `async (body) => void` | Send an early HTTP response while the handler continues running in the background. See [Using `respond()`](#using-respond). |
 | `emit` | `async (event, payload) => void` | Emit an app event to trigger agents. Creates an `AppEvent` record and notifies the event dispatcher. |
 | `crypto` | `object` | Cryptographic helpers. `crypto.hmac(algorithm, key, data, encoding?)` computes an HMAC digest (default encoding: `'hex'`). |
+| `markdown` | `async (text) => string` | Convert markdown text to HTML using `marked`. Useful for generating formatted email bodies from markdown content. |
+| `log` | `function` | Structured logging. `log(message, data?)` or `log.info()`/`log.warn()`/`log.error()`/`log.debug()`. In production, writes to `app_log`. In dev, prints to console. |
 | `base64Decode` | `async (encoded) => string` | Decode a base64 string to UTF-8 text (handles multi-byte characters correctly, unlike `atob`). |
 | `base64Encode` | `async (string) => string` | Encode a UTF-8 string to base64. |
 | `base64UrlDecode` | `async (encoded) => string` | Decode a base64url string to UTF-8 text (for URL-safe base64 like Gmail API payloads). |
 | `base64UrlEncode` | `async (string) => string` | Encode a UTF-8 string to base64url. |
-| `markdown` | `async (text) => string` | Convert markdown text to HTML using `marked`. Useful for generating formatted email bodies from markdown content. |
 | `env` | `object` | App environment variables (from `app.defn.env`). Set via `PUT /api/apps/{id}` with `defn.env`. |
 | `request` | `object` | The incoming request (see below). |
 
@@ -1218,6 +1234,7 @@ Server handlers run in a sandboxed V8 isolate. This means:
 - **`btoa()` and `atob()` are available** — base64 encode/decode strings (Latin-1 only, per spec)
 - **UTF-8 base64 helpers** — `base64Decode()`, `base64Encode()`, `base64UrlDecode()`, `base64UrlEncode()` are async functions that correctly handle multi-byte UTF-8 characters (e.g. smart quotes, emoji). **Prefer these over `atob()`/`btoa()` for any text that may contain non-ASCII characters.**
 - **`markdown(text)`** — async function that converts markdown text to HTML using `marked`. Useful for generating formatted email bodies.
+- **`log(message, data?)`** — structured logging with level methods (`log.info()`, `log.warn()`, `log.error()`, `log.debug()`). Writes to `app_log` in production; prints to console in dev mode.
 - **128 MB memory limit** — the isolate is killed if it exceeds this
 - **Wall-clock timeout** — defaults to 30s, configurable via `config.timeout`
 - **Ephemeral** — a fresh isolate is created for each request; no state persists between calls
@@ -1447,11 +1464,12 @@ Webhook handlers have the same sandbox capabilities as server routes:
 | `emit(event, payload?)` | Fire app events (trigger agents) |
 | `respond(body)` | Send early response while handler continues in background |
 | `crypto.hmac(algorithm, key, data, encoding?)` | Compute HMAC digest (delegates to Node.js `crypto` on the host). Default encoding: `'hex'`. |
+| `markdown(text)` | Convert markdown text to HTML (async). Uses `marked`. |
+| `log(message, data?)` | Structured logging. Also `log.info()`/`log.warn()`/`log.error()`/`log.debug()`. Writes to `app_log` in production, console in dev. |
 | `base64Decode(encoded)` | Decode base64 to UTF-8 string (async). Handles multi-byte characters correctly. |
 | `base64Encode(string)` | Encode UTF-8 string to base64 (async). |
 | `base64UrlDecode(encoded)` | Decode base64url to UTF-8 string (async). Ideal for Gmail API payloads. |
 | `base64UrlEncode(string)` | Encode UTF-8 string to base64url (async). |
-| `markdown(text)` | Convert markdown text to HTML (async). Uses `marked`. |
 | `env` | App environment variables from `app.defn.env` |
 
 Webhook routes also provide `request.rawBody` — the original request body as a string, preserving the exact bytes sent by the caller. Use this for HMAC signature verification (not `request.body`, which is parsed JSON).
@@ -2386,7 +2404,7 @@ export const schema = {
     required: ['productId', 'quantity']
 };
 
-export async function handler(args, { query, fetch, emit, context }) {
+export async function handler(args, { query, fetch, emit, crypto, markdown, log, context }) {
     const [product] = await query(
         'SELECT * FROM inventory WHERE product_id = $1',
         [args.productId]
@@ -2411,7 +2429,9 @@ export async function handler(args, { query, fetch, emit, context }) {
 | `query` | `async (sql, params?) => rows` | Execute SQL against the app's workspace |
 | `fetch` | `async (path, options?) => { status, body }` | Make authenticated API calls (subject to whitelist) |
 | `emit` | `async (event, payload) => void` | Emit an event to trigger other agents |
+| `crypto` | `object` | Cryptographic helpers. `crypto.hmac(algorithm, key, data, encoding?)` computes an HMAC digest. |
 | `markdown` | `async (text) => string` | Convert markdown text to HTML |
+| `log` | `function` | Structured logging. `log(message, data?)` or `log.info()`/`log.warn()`/`log.error()`/`log.debug()`. |
 | `context` | `object` | `{ appId, agentId, runId, trigger }` |
 
 **Tool naming:** The tool name is derived from the file path relative to `tools/`. Nested directories use underscores: `tools/notifications/send_email.js` → `notifications_send_email`.
