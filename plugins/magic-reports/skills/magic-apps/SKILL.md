@@ -1023,6 +1023,8 @@ Each handler function receives a single context object with these properties:
 | `fetch` | `async (path, options?) => { status, body }` | Make an authenticated API call through Informer (subject to the app's whitelist). |
 | `respond` | `async (body) => void` | Send an early HTTP response while the handler continues running in the background. See [Using `respond()`](#using-respond). |
 | `emit` | `async (event, payload) => void` | Emit an app event to trigger agents. Creates an `AppEvent` record and notifies the event dispatcher. |
+| `notify` | `async (username, message) => { id }` | Enqueue a push notification for delivery to a user's Informer GO devices. See [Using `notify()`](#using-notify). |
+| `email` | `async (to, message) => { id }` | Enqueue an email for delivery via the tenant's mail transport. See [Using `email()`](#using-email). |
 | `crypto` | `object` | Cryptographic helpers. `crypto.hmac(algorithm, key, data, encoding?)` computes an HMAC digest (default encoding: `'hex'`). |
 | `markdown` | `async (text) => string` | Convert markdown text to HTML using `marked`. Useful for generating formatted email bodies from markdown content. |
 | `log` | `function` | Structured logging. `log(message, data?)` or `log.info()`/`log.warn()`/`log.error()`/`log.debug()`. In production, writes to `app_log`. In dev, prints to console. |
@@ -1224,6 +1226,79 @@ export async function POST({ query, request }) {
 | `timeout` | `number` | `30000` | Wall-clock timeout in ms. Handler is killed if it exceeds this. |
 | `roles` | `string[]` | `[]` (open) | If set, only viewers with at least one matching role can call this route. Returns 403 otherwise. |
 
+### Using `notify()`
+
+Enqueue a push notification for delivery to a user's registered Informer GO devices. Messages are queued and delivered asynchronously via FCM. Returns immediately with the message ID. The app's ID is automatically attached — tapping the notification in GO opens this app.
+
+```javascript
+// Single notification
+export async function POST({ notify, request }) {
+    const { id } = await notify('jane', {
+        title: 'Order Shipped',
+        body: 'Your order #1234 has shipped!',
+        path: '/orders/1234'     // optional deep link within this app
+    });
+    return { notificationId: id };
+}
+```
+
+**Bulk notifications** — pass an array to send multiple in a single call:
+
+```javascript
+const { ids, queued } = await notify([
+    { username: 'jane', title: 'Report Ready', body: 'Your Q1 report is ready' },
+    { username: 'bob', title: 'Report Ready', body: 'Your Q1 report is ready' },
+]);
+```
+
+**Parameters (single):**
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `username` | string | Informer username to notify |
+| `message.title` | string | **Required.** Notification title |
+| `message.body` | string | Notification body text |
+| `message.path` | string | Deep link path within the app (e.g. `/orders/123`) |
+| `message.data` | object | Custom data (values coerced to strings for FCM) |
+
+**Bulk:** Array of `{ username, title, body, path?, data? }` objects.
+
+Messages are retried up to 3 times on failure, then moved to `dead` status. Message history is viewable via `GET /api/apps/{id}/messages`.
+
+### Using `email()`
+
+Enqueue an email for delivery via the tenant's configured mail transport (SMTP, Gmail API, Microsoft Graph). Returns immediately with the message ID.
+
+```javascript
+export async function POST({ email, request }) {
+    const { id } = await email('jane@acme.com', {
+        subject: 'Invoice #1234',
+        html: '<h2>Invoice</h2><p>Amount due: <strong>$1,500</strong></p>'
+    });
+    return { emailId: id };
+}
+```
+
+**Bulk emails:**
+
+```javascript
+const { ids, queued } = await email([
+    { to: 'jane@acme.com', subject: 'Monthly Report', html: '<p>See attached</p>' },
+    { to: 'bob@acme.com', subject: 'Monthly Report', html: '<p>See attached</p>', from: 'reports@acme.com' },
+]);
+```
+
+**Parameters (single):**
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `to` | string | **Required.** Recipient email address |
+| `message.subject` | string | **Required.** Email subject line |
+| `message.html` | string | HTML email body |
+| `message.from` | string | Sender address (defaults to tenant's configured default) |
+
+**Bulk:** Array of `{ to, subject, html, from? }` objects.
+
 ### Sandbox Constraints
 
 Server handlers run in a sandboxed V8 isolate. This means:
@@ -1394,7 +1469,7 @@ No extra configuration is needed beyond having `.env` set up with `INFORMER_URL`
 
 ## Webhooks (Public Endpoints)
 
-Apps can expose **public webhook endpoints** that receive requests from external services (Gmail push notifications, Slack commands, Stripe events, etc.) without requiring Informer authentication. Webhook handlers run as the app owner — they have full access to `query()`, `fetch()`, and `emit()`.
+Apps can expose **public webhook endpoints** that receive requests from external services (Gmail push notifications, Slack commands, Stripe events, etc.) without requiring Informer authentication. Webhook handlers run as the app owner — they have full access to `query()`, `fetch()`, `emit()`, `notify()`, and `email()`.
 
 ### How It Works
 
@@ -1462,6 +1537,8 @@ Webhook handlers have the same sandbox capabilities as server routes:
 | `query(sql, params?)` | Execute SQL against the app's workspace |
 | `fetch(path, options?)` | Make authenticated API calls (runs as app owner) |
 | `emit(event, payload?)` | Fire app events (trigger agents) |
+| `notify(username, message)` | Enqueue push notification (single or bulk) |
+| `email(to, message)` | Enqueue email (single or bulk) |
 | `respond(body)` | Send early response while handler continues in background |
 | `crypto.hmac(algorithm, key, data, encoding?)` | Compute HMAC digest (delegates to Node.js `crypto` on the host). Default encoding: `'hex'`. |
 | `markdown(text)` | Convert markdown text to HTML (async). Uses `marked`. |
@@ -1562,6 +1639,47 @@ const roles = window.__INFORMER__?.roles; // string[] of assigned role IDs
 ```
 
 In dev mode, the Vite plugin mocks this with placeholder values (theme defaults to `'light'`, roles defaults to `[]`).
+
+## HTML5 Client-Side Routing
+
+Apps can use client-side routers (React Router, etc.) with HTML5 history mode. The server supports this via a catch-all route — any path under `/apps/{id}/view/{path*}` that doesn't match the API proxy (`/view/api/...`) or static assets (`/view/-/...`) will serve the app's `index.html` with full context injection.
+
+This means if a user navigates to `/apps/{id}/view/dashboard/settings` and refreshes the browser, the server returns the entry point HTML and the client-side router takes over.
+
+### Setup with React Router
+
+```jsx
+import { createBrowserRouter, RouterProvider } from 'react-router-dom';
+
+// Derive the base path from the URL. In production the app is served at
+// /api/apps/{naturalId}/view — extract that prefix so the router can
+// strip it before matching routes. In dev mode, routes are at the root.
+const viewMatch = window.location.pathname.match(/^(\/.*\/apps\/[^/]+\/view)/);
+const basePath = viewMatch ? viewMatch[1] : '/';
+
+const router = createBrowserRouter(
+  [
+    { path: '/', element: <Home /> },
+    { path: '/settings', element: <Settings /> },
+    { path: '/dashboard/:id', element: <Dashboard /> },
+  ],
+  { basename: basePath }
+);
+
+function App() {
+  return <RouterProvider router={router} />;
+}
+```
+
+### Dev Mode
+
+In local development, Vite's dev server handles HTML5 fallback automatically — no extra configuration needed. The `basename` conditional above (`/` in dev mode vs the full view path in production) ensures routes resolve correctly in both environments.
+
+### Important Notes
+
+- **Static assets are unaffected.** Requests to `/view/-/...` still resolve to actual files and return 404 for missing assets — these are not caught by the fallback.
+- **API routes are unaffected.** Requests to `/view/api/...` still proxy to the Informer API.
+- **The `<base href>` tag** points to `/api/apps/{naturalId}/view/-/`, which is the asset root. Client-side routers use `basename` independently of `<base href>`, so there is no conflict.
 
 ## App Roles
 
@@ -2429,6 +2547,8 @@ export async function handler(args, { query, fetch, emit, crypto, markdown, log,
 | `query` | `async (sql, params?) => rows` | Execute SQL against the app's workspace |
 | `fetch` | `async (path, options?) => { status, body }` | Make authenticated API calls (subject to whitelist) |
 | `emit` | `async (event, payload) => void` | Emit an event to trigger other agents |
+| `notify` | `async (username, message) => { id }` | Enqueue a push notification (single or bulk) |
+| `email` | `async (to, message) => { id }` | Enqueue an email (single or bulk) |
 | `crypto` | `object` | Cryptographic helpers. `crypto.hmac(algorithm, key, data, encoding?)` computes an HMAC digest. |
 | `markdown` | `async (text) => string` | Convert markdown text to HTML |
 | `log` | `function` | Structured logging. `log(message, data?)` or `log.info()`/`log.warn()`/`log.error()`/`log.debug()`. |
