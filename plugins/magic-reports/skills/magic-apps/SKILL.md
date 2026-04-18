@@ -1640,6 +1640,47 @@ const roles = window.__INFORMER__?.roles; // string[] of assigned role IDs
 
 In dev mode, the Vite plugin mocks this with placeholder values (theme defaults to `'light'`, roles defaults to `[]`).
 
+## HTML5 Client-Side Routing
+
+Apps can use client-side routers (React Router, etc.) with HTML5 history mode. The server supports this via a catch-all route — any path under `/apps/{id}/view/{path*}` that doesn't match the API proxy (`/view/api/...`) or static assets (`/view/-/...`) will serve the app's `index.html` with full context injection.
+
+This means if a user navigates to `/apps/{id}/view/dashboard/settings` and refreshes the browser, the server returns the entry point HTML and the client-side router takes over.
+
+### Setup with React Router
+
+```jsx
+import { createBrowserRouter, RouterProvider } from 'react-router-dom';
+
+// Derive the base path from the URL. In production the app is served at
+// /api/apps/{naturalId}/view — extract that prefix so the router can
+// strip it before matching routes. In dev mode, routes are at the root.
+const viewMatch = window.location.pathname.match(/^(\/.*\/apps\/[^/]+\/view)/);
+const basePath = viewMatch ? viewMatch[1] : '/';
+
+const router = createBrowserRouter(
+  [
+    { path: '/', element: <Home /> },
+    { path: '/settings', element: <Settings /> },
+    { path: '/dashboard/:id', element: <Dashboard /> },
+  ],
+  { basename: basePath }
+);
+
+function App() {
+  return <RouterProvider router={router} />;
+}
+```
+
+### Dev Mode
+
+In local development, Vite's dev server handles HTML5 fallback automatically — no extra configuration needed. The `basename` conditional above (`/` in dev mode vs the full view path in production) ensures routes resolve correctly in both environments.
+
+### Important Notes
+
+- **Static assets are unaffected.** Requests to `/view/-/...` still resolve to actual files and return 404 for missing assets — these are not caught by the fallback.
+- **API routes are unaffected.** Requests to `/view/api/...` still proxy to the Informer API.
+- **The `<base href>` tag** points to `/api/apps/{naturalId}/view/-/`, which is the asset root. Client-side routers use `basename` independently of `<base href>`, so there is no conflict.
+
 ## App Roles
 
 Apps can define custom roles that publishers assign when sharing. This enables role-based UIs — showing or hiding features based on the viewer's role.
