@@ -29,6 +29,10 @@ Install the Informer Vite plugin as a dev dependency:
 npm install -D @entrinsik/vite-plugin-informer@2.3.0
 ```
 
+### Code Splitting
+
+Code splitting is supported. Use Vite's defaults — dynamic `import()` and route-level lazy loading work in published apps with no extra config. Don't override `build.rollupOptions.output`; the server injects an import map at serve time so chunk URLs carry the auth token, and custom chunk paths outside `dist/` will not be served.
+
 ### Development Mode (`npm run dev`)
 
 The Vite plugin proxies `/api/*` requests to your Informer server with Basic auth. This means:
