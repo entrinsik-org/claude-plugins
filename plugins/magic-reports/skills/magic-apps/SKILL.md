@@ -29,6 +29,10 @@ Install the Informer Vite plugin as a dev dependency:
 npm install -D @entrinsik/vite-plugin-informer@2.3.0
 ```
 
+### Code Splitting
+
+Code splitting is supported. Use Vite's defaults — dynamic `import()` and route-level lazy loading work in published apps with no extra config. Don't override `build.rollupOptions.output`; the server injects an import map at serve time so chunk URLs carry the auth token, and custom chunk paths outside `dist/` will not be served.
+
 ### Development Mode (`npm run dev`)
 
 The Vite plugin proxies `/api/*` requests to your Informer server with Basic auth. This means:
@@ -1027,7 +1031,7 @@ Each handler function receives a single context object with these properties:
 | `email` | `async (to, message) => { id }` | Enqueue an email for delivery via the tenant's mail transport. See [Using `email()`](#using-email). |
 | `crypto` | `object` | Cryptographic helpers. `crypto.hmac(algorithm, key, data, encoding?)` computes an HMAC digest (default encoding: `'hex'`). |
 | `markdown` | `async (text) => string` | Convert markdown text to HTML using `marked`. Useful for generating formatted email bodies from markdown content. |
-| `log` | `function` | Structured logging. `log(message, data?)` or `log.info()`/`log.warn()`/`log.error()`/`log.debug()`. In production, writes to `app_log`. In dev, prints to console. |
+| `log` | `function` | Structured logging. `log(message, data?)` or `log.info()`/`log.warn()`/`log.error()`/`log.debug()`. Writes to `app_log`. See [Using `log()`](#using-log). |
 | `base64Decode` | `async (encoded) => string` | Decode a base64 string to UTF-8 text (handles multi-byte characters correctly, unlike `atob`). |
 | `base64Encode` | `async (string) => string` | Encode a UTF-8 string to base64. |
 | `base64UrlDecode` | `async (encoded) => string` | Decode a base64url string to UTF-8 text (for URL-safe base64 like Gmail API payloads). |
@@ -1197,6 +1201,50 @@ export async function POST({ query, fetch, respond, request }) {
 
 - Normal CRUD handlers — just return the result directly
 - When the caller needs the actual result in the response body
+
+### Using `log()`
+
+The `log` callback writes structured log entries to the app's log table (`app_log`). Logs are visible in the **Logs tab** of the App Admin panel in Informer GO, and can be filtered by level, source, and agent.
+
+```javascript
+// server/orders/index.js
+
+export async function POST({ query, log, request }) {
+    const { customer, total } = request.body;
+
+    log.info('Creating order', { customer, total });
+
+    const [order] = await query(
+        'INSERT INTO orders (customer, total) VALUES ($1, $2) RETURNING *',
+        [customer, total]
+    );
+
+    log('Order created', { orderId: order.id });  // shorthand for log.info()
+    return { status: 201, body: order };
+}
+```
+
+**Log levels:**
+
+| Method | Level | Use case |
+|--------|-------|----------|
+| `log(message, data?)` | `info` | Shorthand — logs at info level |
+| `log.debug(message, data?)` | `debug` | Verbose diagnostic info |
+| `log.info(message, data?)` | `info` | Normal operational events |
+| `log.warn(message, data?)` | `warn` | Unexpected but recoverable situations |
+| `log.error(message, data?)` | `error` | Failures that need attention |
+
+**Parameters:**
+
+- `message` — string describing the event. Non-string values are automatically JSON-stringified.
+- `data` — optional object with structured metadata (stored as JSONB). Useful for filtering and debugging.
+
+**Key behavior:**
+
+- Logging is **fire-and-forget** — it never blocks or throws. If the log write fails, it's silently dropped.
+- The `source` field is set automatically based on where the handler runs: `'server'` for server routes, `'webhook'` for webhook handlers, `'tool'` for agent tool handlers.
+- Correlation fields are set automatically based on context: `invocationId` for server routes and webhooks; `agentId` and `runId` for agent tool handlers. You don't need to pass them.
+- Available in **server routes**, **webhook handlers**, and **agent tool handlers**.
 
 ### Handler Config
 
@@ -1497,7 +1545,7 @@ Webhook handlers use the same export pattern as server routes. The handler conte
 
 export const config = { timeout: 15000 };
 
-export async function POST({ query, request, fetch, emit, crypto, env }) {
+export async function POST({ query, request, fetch, emit, log, crypto, env }) {
     // request.body — parsed JSON payload
     // request.rawBody — original body string (for HMAC verification)
     // request.headers — raw request headers
@@ -1542,7 +1590,7 @@ Webhook handlers have the same sandbox capabilities as server routes:
 | `respond(body)` | Send early response while handler continues in background |
 | `crypto.hmac(algorithm, key, data, encoding?)` | Compute HMAC digest (delegates to Node.js `crypto` on the host). Default encoding: `'hex'`. |
 | `markdown(text)` | Convert markdown text to HTML (async). Uses `marked`. |
-| `log(message, data?)` | Structured logging. Also `log.info()`/`log.warn()`/`log.error()`/`log.debug()`. Writes to `app_log` in production, console in dev. |
+| `log(message, data?)` | Structured logging. Also `log.info()`/`log.warn()`/`log.error()`/`log.debug()`. Writes to `app_log`. See [Using `log()`](#using-log). |
 | `base64Decode(encoded)` | Decode base64 to UTF-8 string (async). Handles multi-byte characters correctly. |
 | `base64Encode(string)` | Encode UTF-8 string to base64 (async). |
 | `base64UrlDecode(encoded)` | Decode base64url to UTF-8 string (async). Ideal for Gmail API payloads. |
@@ -1746,15 +1794,37 @@ export default {
 
 ## Built-in App Copilot
 
-Every Informer App gets a **built-in AI copilot sidebar** — a chat panel that slides in from the right side of the app window. Users open it via a floating chat button and can ask questions about the data they're looking at, get insights, or drill into specifics.
+Every Informer App gets a **built-in AI copilot sidebar** — a chat panel that slides in from the right side of the app window.
 
 ### How the Copilot Works
 
+- **Hidden by default**: The copilot button is suppressed for apps. The app must explicitly activate it (see below).
 - **Overlay mode** (default): The sidebar slides over the app content with a backdrop blur. Clicking outside the sidebar or pressing the X closes it.
 - **Pinned mode**: Users can click the pin icon to dock the sidebar. The app content shrinks to make room, and the sidebar stays open while the user works.
 - **Persistent chat**: Each app gets a persistent embedded chat session. Conversations are preserved across opens/closes — the user picks up where they left off.
 
 The copilot has the Informer API skill **automatically enabled** — the AI gets `apiCall` and `searchRoutes` tools without any extra configuration.
+
+### Activating the Copilot
+
+The copilot button is hidden by default for apps. It activates automatically when tools are registered via `registerTool()`. You can also activate it explicitly or paint your own button:
+
+**Automatic** — registering any tool activates the copilot button:
+```javascript
+__INFORMER__.registerTool({ name: 'getContext', ... }); // button appears
+```
+
+**Explicit** — show the platform button without registering tools:
+```javascript
+window.__INFORMER__?.showCopilot();
+```
+
+**Custom** — paint your own button and call `openChat()` directly. This gives you full control over where and when the copilot entry point appears:
+```javascript
+document.querySelector('#my-ai-btn').addEventListener('click', () => {
+    __INFORMER__.openChat({ prompt: 'Analyze current dashboard data' });
+});
+```
 
 ### Opening the Copilot from App Code
 
@@ -1819,12 +1889,16 @@ document.querySelector('.insight').addEventListener('click', () => {
 });
 ```
 
-**Dev mode:** `__INFORMER__.openChat()` is not available in local Vite dev mode since there is no parent GO app. You can mock it for testing:
+**Dev mode:** `__INFORMER__.openChat()` and `showCopilot()` are not available in local Vite dev mode since there is no parent GO app. You can mock them for testing:
 
 ```javascript
 if (!window.__INFORMER__?.openChat) {
     window.__INFORMER__ = window.__INFORMER__ || {};
     window.__INFORMER__.openChat = (opts) => console.log('openChat:', opts);
+}
+if (!window.__INFORMER__?.showCopilot) {
+    window.__INFORMER__ = window.__INFORMER__ || {};
+    window.__INFORMER__.showCopilot = () => console.log('showCopilot: copilot button would appear');
 }
 ```
 
@@ -2551,7 +2625,7 @@ export async function handler(args, { query, fetch, emit, crypto, markdown, log,
 | `email` | `async (to, message) => { id }` | Enqueue an email (single or bulk) |
 | `crypto` | `object` | Cryptographic helpers. `crypto.hmac(algorithm, key, data, encoding?)` computes an HMAC digest. |
 | `markdown` | `async (text) => string` | Convert markdown text to HTML |
-| `log` | `function` | Structured logging. `log(message, data?)` or `log.info()`/`log.warn()`/`log.error()`/`log.debug()`. |
+| `log` | `function` | Structured logging. `log(message, data?)` or `log.info()`/`log.warn()`/`log.error()`/`log.debug()`. See [Using `log()`](#using-log). |
 | `context` | `object` | `{ appId, agentId, runId, trigger }` |
 
 **Tool naming:** The tool name is derived from the file path relative to `tools/`. Nested directories use underscores: `tools/notifications/send_email.js` → `notifications_send_email`.
