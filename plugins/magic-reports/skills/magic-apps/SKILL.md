@@ -539,9 +539,19 @@ roles:
     description: Can approve or reject requests
 ```
 
-The `dependencies:` block is the preferred way to declare data access — slots are named, typed, and rebindable from the install UI without rewriting the manifest. The `access:` block survives for raw API patterns (`apis:`) and as a quick whitelist mode for resources that don't need a slot model.
+### Rule of thumb (READ THIS BEFORE WRITING TO informer.yaml)
 
-**Important:** Without either `dependencies:` (with `defaultBinding` or installer-set bindings) or `access:` declarations, ALL API access is blocked when the app runs in Informer.
+**For typed resources (dataset / query / datasource / integration): always use `dependencies:` slots. Never `access: datasets:`, `access: queries:`, `access: integrations:`, or `access: datasources:`.**
+
+The legacy `access:` block for typed resources still works at runtime, but:
+
+- It bypasses the install/rebind UI — every change forces a manifest edit + redeploy.
+- It doesn't support the typed-proxy dispatch (`context.<slot>.search(...)`) — handlers would have to hand-build URLs.
+- `npx informer-init`'s older scaffolds wrote empty `access: { datasets: [] }` blocks; if you find one in an existing `informer.yaml`, **replace it with `dependencies:`** — don't preserve the legacy shape "for consistency with the existing file."
+
+`access:` keeps **one** legitimate use: the `apis:` sub-block for raw API paths that don't fit the typed-slot model (e.g. AI model endpoints, custom server routes). Everything else goes under `dependencies:`.
+
+**Important:** Without either a populated `dependencies:` section or an `access:` declaration, ALL API access is blocked when the app runs in Informer.
 
 ### `dependencies:` slot fields
 
@@ -2727,9 +2737,10 @@ Add an `agents:` section to your `informer.yaml`:
 
 ```yaml
 # informer.yaml
-access:
-  datasets:
-    - admin:sales-data
+dependencies:
+  sales:
+    target: dataset
+    defaultBinding: 7d5a9b1e-0c83-4bde-9e2a-3a4b5c6d7e8f
 
 agents:
   order-processor:
@@ -3108,7 +3119,7 @@ my-app/
     favicon.svg
   src/
     main.js
-  informer.yaml               ← Declares agents, tools, events, access
+  informer.yaml               ← Declares agents, tools, events, dependencies
   index.html
   package.json
 ```
@@ -3117,9 +3128,10 @@ my-app/
 
 ```yaml
 # informer.yaml
-access:
-  datasets:
-    - admin:products
+dependencies:
+  products:
+    target: dataset
+    defaultBinding: 3e4f5a6b-7c8d-9e0f-1234-567890abcdef
 
 agents:
   validate-order:
