@@ -19,11 +19,85 @@ An Informer App is a custom HTML/JS/CSS application that runs inside Informer. I
 
 Apps are stored in Informer libraries and served through the Informer UI. (You may see the term "Magic Report" in older documentation — Apps are the current name for the same concept.)
 
+## Bootstrapping a New Project
+
+When this skill is invoked in a directory that isn't already a Magic App project, drive the setup for the user — they shouldn't have to remember the command sequence. Detect the current state and run only the steps that are missing.
+
+### Detection
+
+Before running anything, inspect the working directory:
+
+| State | Signal |
+|---|---|
+| **Empty** | No `package.json`, no `vite.config.{js,ts}`, no `informer.yaml` |
+| **Vite project, no Informer** | `package.json` exists with `vite` in deps, no `informer.yaml` |
+| **Already a Magic App** | `informer.yaml` exists and `@entrinsik/vite-plugin-informer` is in devDependencies |
+| **Vite project, partial Informer** | `informer.yaml` missing but plugin is installed, OR vice versa |
+
+### Recipe
+
+For an **empty** directory, ask the user one question and then run the sequence:
+
+> "What should we call this app? (e.g. 'Sales Dashboard'). I'll set up Vite + the Informer plugin + scaffold informer.yaml — should take ~30 seconds."
+
+Then execute, in order (don't ask permission for each — run them all):
+
+```bash
+# 1. Scaffold a vanilla Vite project into the current directory.
+# --template vanilla skips Vite's interactive framework prompt.
+npm create vite@latest . -- --template vanilla
+
+# 2. Install dependencies including the Informer plugin.
+npm install
+npm install -D @entrinsik/vite-plugin-informer@2.3.0
+
+# 3. Run the Informer init — creates informer.yaml, .env, .env.example,
+#    updates vite.config.js to include informer(), updates .gitignore,
+#    adds deploy + workspace:* scripts to package.json.
+npx informer-init
+```
+
+If `npm create vite@latest .` refuses because the directory has stray files (a README from `git init`, a `.gitignore`, etc.), tell the user which files are in the way and either:
+- Move them aside, run vite create, then move them back; or
+- Scaffold to a subdirectory and `mv` files up.
+
+For a **Vite project without Informer**, skip step 1 — start from step 2.
+
+For an **already a Magic App** directory, skip the bootstrap entirely and go straight to whatever the user actually asked for (building a widget, adding a route handler, declaring a dependency slot, etc.).
+
+### What `informer-init` produces
+
+After `npx informer-init` you have:
+
+```
+my-app/
+├── .env                    # Connection settings (gitignored)
+├── .env.example            # Template for connection settings
+├── informer.yaml           # App configuration — dependencies, roles, agents, events, widgets
+├── package.json            # With informer section + deploy/workspace:* scripts
+├── vite.config.js          # Includes informer() plugin
+├── index.html              # Vite default — replace with your app shell
+├── main.js                 # Vite default — replace with your entry
+└── public/
+    └── favicon.svg         # (optional — recommended duotone, 512×512)
+```
+
+The `.env` template includes both API key and basic auth blocks — uncomment the one you want. If the user mentions a specific server, fill it in directly; otherwise leave the placeholder `http://localhost:3000` and tell them to update before running `npm run dev`.
+
+### After bootstrap
+
+Once the project is set up, the typical next moves are:
+
+1. Ask the user what data the app needs (datasets/queries/datasources/integrations) and add `dependencies:` slots to `informer.yaml` — look up `defaultBinding` UUIDs via `GET /api/datasets-list` etc. against the configured `INFORMER_URL`.
+2. Replace Vite's default `index.html` + `main.js` with the app shell (use `<script type="module" src="/main.js"></script>` — see [Code Style](#code-style)).
+3. If the app stores its own data, scaffold `migrations/` and add a first migration (see [Persistence](#persistence-app-workspace)).
+4. If the app exposes server-side routes, scaffold `server/` (see [Server-Side Route Handlers](#server-side-route-handlers)).
+
 ## Local Development Workflow
 
 ### Vite Plugin
 
-Install the Informer Vite plugin as a dev dependency:
+Install the Informer Vite plugin as a dev dependency (skip if `npx informer-init` was used — it's already there):
 
 ```bash
 npm install -D @entrinsik/vite-plugin-informer@2.3.0
