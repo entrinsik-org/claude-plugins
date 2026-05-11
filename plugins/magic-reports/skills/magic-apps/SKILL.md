@@ -43,9 +43,12 @@ For an **empty** directory, ask the user one question and then run the sequence:
 Then execute, in order (don't ask permission for each — run them all):
 
 ```bash
-# 1. Scaffold a vanilla Vite project into the current directory.
-# --template vanilla skips Vite's interactive framework prompt.
-npm create vite@latest . -- --template vanilla
+# 1. Scaffold a React Vite project into the current directory.
+# --template react skips Vite's interactive framework prompt.
+# Use --template react-ts if the user asked for TypeScript, or
+# --template vanilla / vue / svelte / etc. if they named a different
+# framework. Default to react when the user has no preference.
+npm create vite@latest . -- --template react
 
 # 2. Install dependencies including the Informer plugin.
 npm install
