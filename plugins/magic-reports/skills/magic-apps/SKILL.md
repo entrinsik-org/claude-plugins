@@ -429,19 +429,32 @@ const records = result.records;
 
 ## App Configuration (`informer.yaml`)
 
-Apps are configured with an `informer.yaml` file in the project root. This single file declares **data access** (which APIs the app can call), **roles** (for role-based UIs), and other app-level settings. It's uploaded automatically on deploy.
+Apps are configured with an `informer.yaml` file in the project root. This single file declares the app's **data dependencies** (typed slots that get bound at install time), any **raw API allowlist** the app needs, **widgets**, and **custom roles**. It's uploaded automatically on deploy.
 
 ```yaml
 # informer.yaml
 
+# Typed slots the installer binds at first deploy. Slot names are referenced
+# from server-side handler code as `dependencies.<slot>` and arrive pre-typed.
+dependencies:
+  sales:
+    target: dataset                                          # one of: dataset, query, datasource, integration
+    description: Sales fact table
+    defaultBinding: 7d5a9b1e-0c83-4bde-9e2a-3a4b5c6d7e8f     # UUID — pre-binds on first deploy. Look up via GET /api/datasets-list.
+  customers:
+    target: dataset
+    defaultBinding: 1f2e3d4c-5b6a-7980-1234-56789abcdef0
+  monthly_summary:
+    target: query
+    defaultBinding: 9a8b7c6d-5e4f-3a2b-1c0d-fedcba987654
+  salesforce:
+    target: integration
+
+# Raw API allowlist for endpoints that don't fit the typed-slot model.
+# Coexists with `dependencies:`; both are honored.
 access:
-  datasets:
-    - admin:sales-data
-    - admin:customers
-  queries:
-    - admin:monthly-summary
-  integrations:
-    - salesforce
+  apis:
+    - GET /api/apps-list
 
 roles:
   - id: viewer
@@ -452,56 +465,128 @@ roles:
     description: Can approve or reject requests
 ```
 
-The `access:` section controls which APIs the app can call when shared. The `roles:` section defines custom roles for role-based UI (see [App Roles](#app-roles)).
+The `dependencies:` block is the preferred way to declare data access — slots are named, typed, and rebindable from the install UI without rewriting the manifest. The `access:` block survives for raw API patterns (`apis:`) and as a quick whitelist mode for resources that don't need a slot model.
 
-**Important:** Without an `access:` section (or a standalone `data-access.yaml`), all API access is blocked when the app runs in Informer.
+**Important:** Without either `dependencies:` (with `defaultBinding` or installer-set bindings) or `access:` declarations, ALL API access is blocked when the app runs in Informer.
 
-> **Legacy note:** You can also use a standalone `data-access.yaml` file (without the `access:` wrapper key). If both files exist, `informer.yaml` takes precedence. New apps should use `informer.yaml` since it supports both access and roles in one file.
+### `dependencies:` slot fields
+
+| Field | Required | Description |
+|-------|----------|-------------|
+| `target` | yes | `dataset`, `query`, `datasource`, or `integration` |
+| `description` | no | Author-facing copy shown in the install/rebind UI |
+| `runAs` | no | `user` (default) or `owner`. `owner` bypasses the viewing user's permissions — use sparingly |
+| `options` | no | Per-target options (e.g. dataset filters), validated against the driver's schema |
+| `defaultBinding` | no | A **UUID** the slot binds to automatically on first deploy. UUIDs (not configIds) so the binding survives a bundle export/import and isn't broken by users renaming the underlying resource. Look up the UUID from the resource's list endpoint (e.g. `GET /api/datasets-list`). **Never overwrites a binding the installer has already chosen** — re-deploys won't silently rewire a hand-bound slot. |
+
+> **Legacy note:** You can also use a standalone `data-access.yaml` file (without the `access:` wrapper key). If both files exist, `informer.yaml` takes precedence. New apps should use `informer.yaml` with `dependencies:` since it supports typed slots, raw API allowlists, widgets, and roles in one file.
+
+### Migrating an old `access:` app to `dependencies:`
+
+Older apps declared their data via `access:` blocks. The runtime still extracts those, but they don't surface in the install/rebind UI — every change requires editing the YAML and redeploying. Convert them to `dependencies:` slots so the install panel can re-bind without manifest edits.
+
+**Safety net: a snapshot is taken automatically.** When the server-side modernize route runs, it snapshots the live app (manifest, library files, workspace data) *before* rewriting anything. If the result is wrong, restore from the returned `snapshotId`. You can also open a draft first if you'd rather review before applying — drafts still work — but they're no longer required.
+
+The recipe Claude follows when asked to modernize:
+
+1. Read the current `informer.yaml` (or legacy `data-access.yaml`).
+2. For each entry under `access.datasets` / `access.queries` / `access.datasources` / `access.integrations`, generate a `dependencies:` slot:
+   - **Slot name** — derive from the resource's `naturalId` last segment, snake-cased. `admin:northwind-orders` → `northwind_orders`. Resolve clashes by appending the resource type or a number.
+   - **`target`** — singular form of the parent section (`datasets` → `dataset`, etc.).
+   - **`defaultBinding`** — the resource's **UUID** (resolve via the matching `*-list` endpoint, e.g. `GET /api/datasets-list`). UUIDs survive bundle round-trips and aren't broken by configId renames; configIds in `defaultBinding` will be rejected at deploy.
+   - Carry `filter` / `headers` / `params` / `paths` (when present on a structured access entry) into `options:`.
+3. Remove the migrated entries from `access:`. **Keep `access.apis`** — raw paths don't have a slot model.
+4. Update any server-side handler code that referenced these resources by `naturalId` to use the slot name instead (`context.northwind_orders.search({...})` etc. — the slot name is a property of `context`, not nested under `context.dependencies`).
+5. Deploy the draft. Auto-bind runs through `defaultBinding`. Any unresolvable `defaultBinding` fails the deploy with a slot-named error so the YAML can be fixed.
+6. Review via the draft diff, then commit.
+
+```yaml
+# Before
+access:
+  datasets:
+    - admin:northwind-orders
+    - id: admin:orders
+      filter:
+        region: $user.custom.region
+  queries:
+    - admin:daily-summary
+  apis:
+    - POST /api/models/go_everyday/_object
+
+# After — defaultBinding values are UUIDs resolved from each
+# configId via the matching `*-list` endpoint at modernize time.
+dependencies:
+  northwind_orders:
+    target: dataset
+    defaultBinding: 7d5a9b1e-0c83-4bde-9e2a-3a4b5c6d7e8f
+  orders:
+    target: dataset
+    defaultBinding: 1f2e3d4c-5b6a-7980-1234-56789abcdef0
+    options:
+      filter:
+        region: $user.custom.region
+  daily_summary:
+    target: query
+    defaultBinding: 9a8b7c6d-5e4f-3a2b-1c0d-fedcba987654
+access:
+  apis:
+    - POST /api/models/go_everyday/_object   # raw API — stays in access
+```
 
 ### Basic Data Access Example
 
 ```yaml
 # informer.yaml
-access:
-  datasets:
-    - admin:sales-data
-    - admin:customers
-
-  queries:
-    - admin:monthly-summary
-
-  integrations:
-    - salesforce
+# defaultBinding values are UUIDs from each resource's *-list endpoint
+# (GET /api/datasets-list, /api/queries-list, /api/datasources-list,
+# /api/integrations-list). configIds like `admin:sales-data` are
+# rejected at deploy.
+dependencies:
+  sales:
+    target: dataset
+    defaultBinding: 7d5a9b1e-0c83-4bde-9e2a-3a4b5c6d7e8f
+  customers:
+    target: dataset
+    defaultBinding: 1f2e3d4c-5b6a-7980-1234-56789abcdef0
+  monthly_summary:
+    target: query
+    defaultBinding: 9a8b7c6d-5e4f-3a2b-1c0d-fedcba987654
+  salesforce:
+    target: integration                  # no defaultBinding — installer picks
 ```
 
 ### With Row-Level Security
 
-Restrict data based on the viewing user's profile:
+Restrict data based on the viewing user's profile. Filters live under each slot's `options`:
 
 ```yaml
 # informer.yaml
-access:
-  datasets:
-    # Users only see their region's data
-    - id: admin:orders
+dependencies:
+  orders:
+    target: dataset
+    defaultBinding: 1f2e3d4c-5b6a-7980-1234-56789abcdef0
+    options:
       filter:
-        region: $user.custom.region
-
-    # Users only see their own records
-    - id: admin:sales
+        region: $user.custom.region      # Users only see their region's data
+  sales:
+    target: dataset
+    defaultBinding: 7d5a9b1e-0c83-4bde-9e2a-3a4b5c6d7e8f
+    options:
       filter:
-        sales_rep: $user.username
+        sales_rep: $user.username        # Users only see their own records
 ```
 
 ### Integration with Credentials
 
-Pass user-specific credentials to external APIs:
+Pass user-specific credentials to external APIs via the slot's `options`:
 
 ```yaml
 # informer.yaml
-access:
-  integrations:
-    - id: partner-api
+dependencies:
+  partner_api:
+    target: integration
+    defaultBinding: 5a6b7c8d-9e0f-1234-5678-9abcdef01234
+    options:
       headers:
         Authorization: Bearer $user.custom.partnerToken
       params:
@@ -548,13 +633,14 @@ Widgets are static HTML files in your `public/widgets/` directory, declared in `
 
 ### Declaring Widgets in `informer.yaml`
 
-Add a `widgets:` section alongside your existing `access:` and `roles:` sections:
+Add a `widgets:` section alongside your `dependencies:` and `roles:` sections:
 
 ```yaml
 # informer.yaml
-access:
-  integrations:
-    - quickbooks-assistant-skill
+dependencies:
+  quickbooks:
+    target: integration
+    defaultBinding: quickbooks-assistant-skill
 
 widgets:
   cash-balance:
@@ -1025,6 +1111,7 @@ Each handler function receives a single context object with these properties:
 |----------|------|-------------|
 | `query` | `async (sql, params?) => rows` | Execute SQL against the app's workspace. Returns an array of row objects. |
 | `fetch` | `async (path, options?) => { status, body }` | Make an authenticated API call through Informer (subject to the app's whitelist). |
+| `context` | `object` | Typed dep proxies keyed by slot name. Call deps as `context.<slotName>.<method>(args)`. Methods per `target`: `dataset` → `search(esQuery)` / `fields()`; `query` → `execute(params)`; `datasource` → `query(payload)`; `integration` → `request(opts)`. Throws boom 422 with `errorCode: 'dependency_unbound'` if the installer hasn't bound the slot yet, or `'dependency_broken'` if the bound target was deleted. Prefer this over raw `fetch()` — slots survive bundle export/import and resource renames; raw paths don't. |
 | `respond` | `async (body) => void` | Send an early HTTP response while the handler continues running in the background. See [Using `respond()`](#using-respond). |
 | `emit` | `async (event, payload) => void` | Emit an app event to trigger agents. Creates an `AppEvent` record and notifies the event dispatcher. |
 | `notify` | `async (username, message) => { id }` | Enqueue a push notification for delivery to a user's Informer GO devices. See [Using `notify()`](#using-notify). |
@@ -1061,6 +1148,62 @@ Each handler function receives a single context object with these properties:
 | `request.user.displayName` | `string` | User's display name |
 | `request.user.email` | `string\|null` | Email address |
 | `request.user.timezone` | `string\|null` | Timezone (e.g. `America/New_York`) |
+
+### Calling Typed Dep Slots
+
+Each `dependencies:` slot in `informer.yaml` becomes a property on `context` named after the slot. Methods depend on the slot's `target`:
+
+```javascript
+// informer.yaml declared:
+//   dependencies:
+//     orders:    { target: dataset,     defaultBinding: <uuid> }
+//     summary:   { target: query,       defaultBinding: <uuid> }
+//     analytics: { target: datasource,  defaultBinding: <uuid> }
+//     salesforce:{ target: integration, defaultBinding: <uuid> }
+
+export async function GET({ context }) {
+    // dataset → search(esQuery) / fields()
+    const hits = await context.orders.search({
+        query: { range: { total: { gte: 100 } } },
+        size: 50
+    });
+
+    // query → execute(params)
+    const summary = await context.summary.execute({ month: '2026-05' });
+
+    // datasource → query(payload)
+    const rows = await context.analytics.query({ sql: 'SELECT * FROM events' });
+
+    // integration → request(opts) — for HTTP integrations
+    const sf = await context.salesforce.request({
+        method: 'GET',
+        path: '/services/data/v59.0/sobjects/Account/00112233'
+    });
+
+    return { hits, summary, rows, sf };
+}
+```
+
+**Error handling.** If the installer hasn't bound a slot yet (or the bound target was deleted), the proxy throws a boom 422 with a structured `errorCode`:
+
+```javascript
+export async function GET({ context }) {
+    try {
+        return await context.orders.search({ query: { match_all: {} } });
+    } catch (err) {
+        // err.output.statusCode === 422
+        // err.output.payload.errorCode is 'dependency_unbound' (slot
+        //   never bound) or 'dependency_broken' (target deleted).
+        // err.output.payload.data carries { name, resourceType }.
+        if (err.output?.payload?.errorCode === 'dependency_unbound') {
+            return { status: 503, body: { error: 'This app needs setup — bind the orders dataset.' } };
+        }
+        throw err;
+    }
+}
+```
+
+Prefer `context.<slot>` over raw `fetch('/api/datasets/<uuid>/_search', ...)` — slots survive bundle export/import and resource renames; raw paths don't.
 
 ### Return Values
 

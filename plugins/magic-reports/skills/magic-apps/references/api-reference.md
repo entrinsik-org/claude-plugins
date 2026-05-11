@@ -212,40 +212,54 @@ See the [Server-Side Routes section](../SKILL.md#server-side-routes) in the main
 
 ## Data Access Configuration
 
-Create `data-access.yaml` in your project root to declare which APIs your app needs. Without this file, all API access is blocked when published.
+Declare data dependencies in `informer.yaml` under the `dependencies:` block (preferred) or `access:` (legacy / raw API allowlist). Without one of these, all API access is blocked when published.
+
+See the [Migrating an old `access:` app to `dependencies:`](../SKILL.md#migrating-an-old-access-app-to-dependencies) section in the main skill doc for the full conversion recipe — including the rule that migrations always go through a draft.
 
 ```yaml
-# data-access.yaml
+# informer.yaml
+# defaultBinding is a UUID resolved from the resource's *-list endpoint
+# (GET /api/datasets-list etc.). configIds like `admin:sales-data` are
+# rejected at deploy with a clear error.
 
-datasets:
-  - admin:sales-data
-
-queries:
-  - admin:summary
-
-integrations:
-  - salesforce
+dependencies:
+  sales:
+    target: dataset
+    defaultBinding: 7d5a9b1e-0c83-4bde-9e2a-3a4b5c6d7e8f
+  summary:
+    target: query
+    defaultBinding: 9a8b7c6d-5e4f-3a2b-1c0d-fedcba987654
+  salesforce:
+    target: integration                  # installer picks at bind time
 ```
 
 ### Row-Level Security
 
+Filters live under each slot's `options`:
+
 ```yaml
-datasets:
-  - id: admin:orders
-    filter:
-      region: $user.custom.region
-      owner: $user.username
+dependencies:
+  orders:
+    target: dataset
+    defaultBinding: 1f2e3d4c-5b6a-7980-1234-56789abcdef0
+    options:
+      filter:
+        region: $user.custom.region
+        owner: $user.username
 ```
 
 ### Integration Credentials
 
 ```yaml
-integrations:
-  - id: partner-api
-    headers:
-      Authorization: Bearer $user.custom.apiToken
-    params:
-      tenant: $tenant.id
+dependencies:
+  partner_api:
+    target: integration
+    defaultBinding: 5a6b7c8d-9e0f-1234-5678-9abcdef01234
+    options:
+      headers:
+        Authorization: Bearer $user.custom.apiToken
+      params:
+        tenant: $tenant.id
 ```
 
 ### Variables
