@@ -339,60 +339,267 @@ my-app/
   package.json
 ```
 
-## Discovering Resources
+## Accessing Your Dependencies
 
-Once `.env` is configured, Claude can query the Informer API directly to help you find available resources. Ask Claude to look up:
+This is the most important section of this skill. Read it before writing any code that touches a dataset, query, datasource, or integration. The single biggest source of broken Magic Apps is code that hardcodes resource IDs in the frontend.
 
-- **Integrations**: `curl -u $USER:$PASS "$INFORMER_URL/api/integrations"` - Find integration slugs for QuickBooks, Salesforce, etc.
-- **Datasets**: `curl -u $USER:$PASS "$INFORMER_URL/api/datasets-list"` - Find dataset IDs and field names
-- **Queries**: `curl -u $USER:$PASS "$INFORMER_URL/api/queries-list"` - Find saved query IDs
-- **Datasources**: `curl -u $USER:$PASS "$INFORMER_URL/api/datasources"` - Find SQL datasource IDs
+### The runtime model
 
-This helps you find the correct IDs/slugs to use in your code and `data-access.yaml`. Just ask Claude to "show me available integrations" or "find the QuickBooks integration slug".
+An Informer App has **two** JavaScript runtimes, and they access dependencies differently:
 
-## Key APIs
+| Runtime | Where it runs | How it talks to deps |
+|---|---|---|
+| **Server handler** | V8 isolate inside the Informer server (files in `server/`, `tools/`, `webhooks/`, or `agents:`) | `context.<slot>.<method>(args)` — typed proxy, no UUIDs in code |
+| **Frontend** | Browser (your `main.js` / React components / etc.) | Has to make HTTP calls. **Does NOT have `context`.** |
 
-All endpoints are relative to `/api`. In dev mode, the Vite proxy handles auth.
+`context` is a property the V8 isolate runtime injects into the handler argument. It does not exist in the browser. Trying to use `context.<slot>` in a React component will throw `ReferenceError: context is not defined`.
 
-### List Datasets
+### The three patterns, ranked
 
-```javascript
-const response = await fetch('/api/datasets-list');
-const datasets = await response.json();
-// Returns: [{ id, name, description, records, size, ... }, ...]
+Every dep access uses one of three patterns. Pick the highest-numbered one you can:
+
+1. **Pattern A — Frontend → your server handler → `context.<slot>`** (preferred for any app touching deps)
+2. **Pattern B — Frontend with runtime binding discovery** (acceptable for SPAs without server handlers)
+3. **Pattern C — Hardcoded UUIDs in frontend code** (forbidden — breaks the slot's value)
+
+The ranking matters: **default to Pattern A.** Pattern B is acceptable when the app has no server-side surface at all. Pattern C looks like it works during dev and silently breaks when the installer rebinds a slot, the underlying resource is renamed, or the bundle is imported into another tenant.
+
+### Pattern A — Server handler with `context.<slot>`
+
+The handler receives a `context` object where each `dependencies:` slot is a property named after the slot. Methods depend on the slot's `target`:
+
+| target | Methods | What they hit |
+|---|---|---|
+| `dataset` | `search(esQuery)` / `fields()` | `POST /api/datasets/<uuid>/_search` / `GET /api/datasets/<uuid>/fields` |
+| `query` | `execute(params)` | `POST /api/queries/<uuid>/_execute` |
+| `datasource` | `query(payload)` | `POST /api/datasources/<uuid>/_query` |
+| `integration` | `request({ method, path, ... })` | `POST /api/integrations/<uuid>/request` |
+
+A worked example covering all four target types:
+
+```yaml
+# informer.yaml
+dependencies:
+  orders:
+    target: dataset
+    defaultBinding: 7d5a9b1e-0c83-4bde-9e2a-3a4b5c6d7e8f
+  monthly_summary:
+    target: query
+    defaultBinding: 9a8b7c6d-5e4f-3a2b-1c0d-fedcba987654
+  analytics:
+    target: datasource
+    defaultBinding: 3e4f5a6b-7c8d-9e0f-1234-567890abcdef
+  salesforce:
+    target: integration
+    defaultBinding: 5a6b7c8d-9e0f-1234-5678-9abcdef01234
 ```
 
-Use this to discover available datasets. Each dataset has:
-- `id` - UUID or natural ID like `admin:sales-data`
-- `name` - Display name
-- `records` - Approximate record count
+```javascript
+// server/dashboard.js
+export async function GET({ context, request }) {
+    // dataset → search returns Elasticsearch hits envelope
+    const hits = await context.orders.search({
+        query: { range: { total: { gte: 100 } } },
+        size: 50,
+        aggs: { revenue: { sum: { field: 'total' } } }
+    });
 
-### Search Dataset (Elasticsearch)
+    // dataset → fields returns the index field metadata
+    const fields = await context.orders.fields();
+
+    // query → execute runs the saved query with optional parameters
+    const summary = await context.monthly_summary.execute({ month: '2026-05' });
+
+    // datasource → query runs SQL against the underlying connection
+    const events = await context.analytics.query({
+        sql: 'SELECT type, COUNT(*) AS n FROM events WHERE day = $1 GROUP BY type',
+        params: ['2026-05-12']
+    });
+
+    // integration → request proxies to the external service
+    const accounts = await context.salesforce.request({
+        method: 'GET',
+        path: '/services/data/v59.0/query',
+        params: { q: "SELECT Id, Name FROM Account WHERE Industry = 'Banking'" }
+    });
+
+    return { hits, fields, summary, events, accounts };
+}
+```
+
+**Error handling.** If the installer hasn't bound a slot yet, or the bound target was deleted, the proxy throws a structured boom 422:
 
 ```javascript
-const response = await fetch(`/api/datasets/${datasetId}/_search`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-        query: { match_all: {} },
-        size: 100,
-        from: 0,
-        _source: ['field1', 'field2'],  // Optional: limit fields returned
-        sort: [{ field1: 'desc' }],      // Optional: sort order
-        aggs: {                          // Optional: aggregations
-            total: { sum: { field: 'amount' } }
+export async function GET({ context }) {
+    try {
+        return await context.orders.search({ query: { match_all: {} } });
+    } catch (err) {
+        // err.output.statusCode === 422
+        // err.output.payload.errorCode is one of:
+        //   'dependency_unbound' — installer hasn't picked a target
+        //   'dependency_broken'  — bound target was deleted
+        // err.output.payload.data carries { name, resourceType }
+        if (err.output?.payload?.errorCode === 'dependency_unbound') {
+            return { status: 503, body: { error: 'This app needs setup — open the install panel and bind the orders dataset.' } };
         }
-    })
-});
-const result = await response.json();
-
-// Response structure:
-// result.hits.total - total matching records
-// result.hits.hits - array of { _source: { field1, field2, ... } }
-// result.aggregations - aggregation results (if requested)
+        if (err.output?.payload?.errorCode === 'dependency_broken') {
+            return { status: 503, body: { error: 'The orders dataset was deleted. Rebind via the install panel.' } };
+        }
+        throw err;
+    }
+}
 ```
 
-**Common query patterns:**
+**Frontend calls the handler:**
+
+```jsx
+// src/App.jsx
+function Dashboard() {
+    const [data, setData] = useState(null);
+    useEffect(() => {
+        fetch('/api/_server/dashboard')
+            .then(r => r.json())
+            .then(setData);
+    }, []);
+    return data ? <Charts {...data} /> : <Spinner />;
+}
+```
+
+The frontend never sees a single UUID. Installer rebinds, resource renames, bundle export/import — none of it touches your frontend code. The slot does its job.
+
+See [Server-Side Routes](#server-side-routes) for the full file-convention and handler shape.
+
+### Pattern B — Frontend with runtime binding discovery
+
+If you really want a pure SPA (no `server/` directory), the frontend can discover bindings at runtime by hitting the app's own `/dependencies` endpoint, then use the resolved UUIDs for subsequent calls.
+
+**This requires whitelisting the discovery endpoint** in `informer.yaml`:
+
+```yaml
+# informer.yaml
+dependencies:
+  orders:
+    target: dataset
+    defaultBinding: 7d5a9b1e-0c83-4bde-9e2a-3a4b5c6d7e8f
+
+access:
+  apis:
+    # Required for Pattern B — frontend reads bindings at startup
+    - GET /api/apps/*/dependencies
+```
+
+Frontend code:
+
+```jsx
+// src/App.jsx — pure SPA, no server handlers
+import { useEffect, useState } from 'react';
+
+function useDependencyBindings() {
+    const [bindings, setBindings] = useState(null);
+    const [error, setError] = useState(null);
+
+    useEffect(() => {
+        const appId = window.__INFORMER__?.report?.id;
+        if (!appId) return;
+        fetch(`/api/apps/${appId}/dependencies`)
+            .then(r => r.json())
+            .then(({ items }) => {
+                // items: [{ name, target, targetId, targetName, bound, ... }]
+                // Reshape to { slotName: targetUuid } for easy lookup.
+                const map = Object.fromEntries(items.map(i => [i.name, i.targetId]));
+                setBindings(map);
+            })
+            .catch(setError);
+    }, []);
+
+    return { bindings, error };
+}
+
+function Dashboard() {
+    const { bindings } = useDependencyBindings();
+    const [hits, setHits] = useState(null);
+
+    useEffect(() => {
+        if (!bindings?.orders) return;
+        fetch(`/api/datasets/${bindings.orders}/_search`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ query: { match_all: {} }, size: 50 })
+        })
+            .then(r => r.json())
+            .then(setHits);
+    }, [bindings?.orders]);
+
+    if (bindings && !bindings.orders) {
+        return <p>This app needs setup — bind the orders dataset.</p>;
+    }
+    return hits ? <Table hits={hits} /> : <Spinner />;
+}
+```
+
+The whitelist check passes because the slot's bound UUID was materialized into the app's allowed paths at deploy time.
+
+**Trade-offs vs Pattern A:**
+
+- ✓ No server-side directory needed
+- ✗ Extra round trip on every cold load
+- ✗ Frontend must handle the "binding not yet loaded" state in every dep-using component
+- ✗ Local-dev mocks are harder — the dev plugin doesn't have real bindings to return
+- ✗ The discovery endpoint has to be in `access.apis` — one more thing to remember
+
+If you're at this point, consider whether adding a single `server/<route>.js` handler that wraps the dep call wouldn't be cleaner. Usually it is.
+
+### Pattern C (forbidden) — Hardcoded UUIDs in frontend code
+
+```jsx
+// DON'T do this — even if the UUID matches the manifest's defaultBinding
+const hits = await fetch('/api/datasets/7d5a9b1e-0c83-4bde-9e2a-3a4b5c6d7e8f/_search', {...});
+
+// And don't do this — configIds in URL paths get rejected once the
+// installer rebinds, and even before that the configId can be renamed.
+const hits = await fetch('/api/datasets/admin:northwind-orders/_search', {...});
+```
+
+The whole point of declaring a slot was to make the binding an **installation choice**, not a hardcoded value. Hardcoded UUIDs/configIds:
+
+- Break silently when the installer rebinds the slot to a different resource — new UUID is in the whitelist, your hardcoded one isn't, request gets 403'd
+- Break on bundle export/import to a different tenant — UUIDs survive, but if the manifest is re-deployed against a different resource (likely if the publisher updates the app) you're still pointing at the old one
+- Break when the underlying resource is renamed (configIds) or deleted
+
+**If Claude finds itself writing `/api/datasets/<some-id>/_search` in frontend code, stop and pick Pattern A or B.**
+
+### Decision tree
+
+```
+Does the app have (or could it have) a server/ directory?
+├── Yes  → Pattern A (server handler with context.<slot>)
+└── No
+    └── Is the dep access happening from a widget HTML file,
+        or a frontend component, or both?
+        ├── Either   → Pattern B (runtime binding discovery)
+        │             Add the dependencies endpoint to access.apis.
+        └── Neither  → You don't have a dep access; this section
+                       doesn't apply.
+```
+
+For most apps, Pattern A is the right answer. If the user asks for "a quick SPA dashboard" with no server-side code, gently push toward adding a single server route — the future-you who has to debug a 403 after an installer rebind will thank present-you.
+
+### Author lookup endpoints (for filling in `defaultBinding`)
+
+These are the endpoints **app authors** hit (via curl or Claude with `.env` configured) to find UUIDs to drop into `defaultBinding`. They are NOT the right way to access deps at runtime — that's what the patterns above are for.
+
+| Endpoint | Returns | Use when filling in |
+|---|---|---|
+| `GET /api/datasets-list` | `[{ id (UUID), name, configId, ... }]` | `target: dataset` slots |
+| `GET /api/queries-list` | `[{ id (UUID), name, configId, ... }]` | `target: query` slots |
+| `GET /api/datasources-list` | `[{ id (UUID), name, configId, ... }]` | `target: datasource` slots |
+| `GET /api/integrations-list` | `[{ id (UUID), name, slug, ... }]` | `target: integration` slots |
+
+Example: ask Claude to "find the UUID for the northwind-orders dataset" — Claude curls `$INFORMER_URL/api/datasets-list` against the configured `.env` credentials, finds the matching `configId`, and copies the `id` into `defaultBinding`.
+
+### Common ES query patterns (for `context.<dataset>.search()`)
+
+These shapes go into the `esQuery` argument of `context.<slot>.search()`:
 
 ```javascript
 // Filter by exact value
@@ -402,19 +609,15 @@ const result = await response.json();
 { query: { bool: { filter: [{ range: { amount: { gte: 1000 } } }] } } }
 
 // Date range
-{ query: { bool: { filter: [{ range: { date: { gte: '2024-01-01', lte: '2024-12-31' } } }] } } }
+{ query: { bool: { filter: [{ range: { date: { gte: '2026-01-01', lte: '2026-12-31' } } }] } } }
 
 // Multiple filters (AND)
 { query: { bool: { filter: [
     { term: { region: 'North' } },
     { range: { amount: { gte: 1000 } } }
 ] } } }
-```
 
-**Common aggregations:**
-
-```javascript
-// Sum, avg, min, max
+// Sum / avg / min / max
 { aggs: { total: { sum: { field: 'amount' } } } }
 
 // Group by field
@@ -437,72 +640,10 @@ const result = await response.json();
 } }
 ```
 
-### List Queries
-
-```javascript
-const response = await fetch('/api/queries-list');
-const queries = await response.json();
-// Returns: [{ id, name, description, ... }, ...]
-```
-
-### Execute Query
-
-```javascript
-const response = await fetch(`/api/queries/${queryId}/_execute`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-        parameters: { param1: 'value1' }  // Optional query parameters
-    })
-});
-const result = await response.json();
-```
-
-### List Integrations
-
-```javascript
-const response = await fetch('/api/integrations');
-const result = await response.json();
-// result.items = [{ id, name, slug, type, ... }, ...]
-```
-
-Integrations are authenticated connections to external APIs (Salesforce, REST APIs, etc.).
-
-### Make Integration Request
-
-The response is a true HTTP proxy — the upstream status code, headers, and body are returned directly.
-
-```javascript
-const response = await fetch(`/api/integrations/${slugOrId}/request`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-        url: '/data/v59.0/query',           // Path relative to integration's base URL
-        method: 'GET',                       // HTTP method
-        params: { q: 'SELECT Id FROM Account' },  // Query params
-        data: { /* body for POST/PUT */ },   // Request body
-        headers: { /* extra headers */ }     // Additional headers
-    })
-});
-const result = await response.json();  // body is the upstream response directly
-```
-
-**Salesforce example:**
-```javascript
-const response = await fetch('/api/integrations/salesforce/request', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-        url: '/data/v59.0/query',
-        method: 'GET',
-        params: {
-            q: "SELECT Id, Name, Amount FROM Opportunity WHERE StageName = 'Closed Won'"
-        }
-    })
-});
-const result = await response.json();
-const records = result.records;
-```
+Returned shape:
+- `result.hits.total` — total matching records
+- `result.hits.hits` — array of `{ _source: { field1, field2, ... } }`
+- `result.aggregations` — aggregation results (if requested)
 
 ## App Configuration (`informer.yaml`)
 
@@ -512,7 +653,9 @@ Apps are configured with an `informer.yaml` file in the project root. This singl
 # informer.yaml
 
 # Typed slots the installer binds at first deploy. Slot names are referenced
-# from server-side handler code as `dependencies.<slot>` and arrive pre-typed.
+# from server-side handler code as `context.<slot>.<method>(args)` and from
+# frontend code via runtime binding discovery — see Accessing Your
+# Dependencies for the patterns.
 dependencies:
   sales:
     target: dataset                                          # one of: dataset, query, datasource, integration
@@ -829,12 +972,12 @@ html, body {
     // 2. Show loading
     document.body.innerHTML = '<div class="loading"><div class="dot"></div><div class="dot"></div><div class="dot"></div></div>';
 
-    // 3. Fetch data and render
-    fetch('/api/integrations/my-integration/request', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ url: '/some/endpoint', method: 'GET', params: {} })
-    })
+    // 3. Fetch data via a server route — the route uses
+    //    context.<slot>.request(...) to talk to the bound integration.
+    //    Widget code never sees the integration UUID or slug, so
+    //    installer rebinds don't break this widget. See Accessing
+    //    Your Dependencies for the three patterns.
+    fetch('/api/_server/widget/balance')
     .then(r => { if (!r.ok) throw new Error(r.status); return r.json(); })
     .then(data => {
         document.body.innerHTML = '<div class="ready"><!-- your content --></div>';
@@ -944,26 +1087,31 @@ render(null); // initial render
 
 ### Data Access
 
-Widgets use the same API endpoints as the main app. The `access:` section in `informer.yaml` applies to widgets too. Common patterns:
+Widgets are frontend code — same runtime as the main app's browser-side code. They access deps via [the same three patterns](#accessing-your-dependencies):
 
 ```javascript
-// Integration proxy (QuickBooks, Salesforce, etc.)
-fetch('/api/integrations/quickbooks/request', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ url: '/reports/BalanceSheet', method: 'GET', params: {} })
-})
+// Pattern A (preferred) — call a server route that uses context.<slot>
+fetch('/api/_server/widget/cash-balance')
+    .then(r => r.json())
+    .then(({ balance }) => { /* render */ });
 
-// Server routes (if the app has a server/ directory)
-fetch('/api/_server/stats')
-
-// Dataset search
-fetch('/api/datasets/admin:sales-data/_search', {
+// Pattern B (acceptable for SPA widgets) — runtime binding discovery
+// Requires `access.apis: [GET /api/apps/*/dependencies]` in informer.yaml
+const appId = window.__INFORMER__.report.id;
+const { items } = await fetch(`/api/apps/${appId}/dependencies`).then(r => r.json());
+const orderDatasetId = items.find(i => i.name === 'orders').targetId;
+const hits = await fetch(`/api/datasets/${orderDatasetId}/_search`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ query: { match_all: {} }, size: 100 })
-})
+}).then(r => r.json());
+
+// Pattern C (DO NOT) — hardcoded UUID or configId in the URL
+// fetch('/api/datasets/admin:sales-data/_search', ...)   ← breaks on rebind
+// fetch('/api/datasets/7d5a9b1e-.../_search', ...)        ← same problem
 ```
+
+Widgets generally benefit from Pattern A even more than the main app does: each widget is small, rendered in an iframe, and gets re-loaded on every refresh — the extra round-trip for Pattern B's runtime discovery shows up visibly. A server route that pre-aggregates and returns just the metric the widget displays is usually the right shape.
 
 ### Project Structure with Widgets
 
@@ -1238,59 +1386,9 @@ Each handler function receives a single context object with these properties:
 
 ### Calling Typed Dep Slots
 
-Each `dependencies:` slot in `informer.yaml` becomes a property on `context` named after the slot. Methods depend on the slot's `target`:
+The handler's `context` object carries one property per `dependencies:` slot, with methods that proxy to the bound target. See [Accessing Your Dependencies](#accessing-your-dependencies) — that's the canonical reference, with worked examples for all four target types (`dataset` / `query` / `datasource` / `integration`), the `dependency_unbound` / `dependency_broken` error pattern, and the rules for the frontend equivalents.
 
-```javascript
-// informer.yaml declared:
-//   dependencies:
-//     orders:    { target: dataset,     defaultBinding: <uuid> }
-//     summary:   { target: query,       defaultBinding: <uuid> }
-//     analytics: { target: datasource,  defaultBinding: <uuid> }
-//     salesforce:{ target: integration, defaultBinding: <uuid> }
-
-export async function GET({ context }) {
-    // dataset → search(esQuery) / fields()
-    const hits = await context.orders.search({
-        query: { range: { total: { gte: 100 } } },
-        size: 50
-    });
-
-    // query → execute(params)
-    const summary = await context.summary.execute({ month: '2026-05' });
-
-    // datasource → query(payload)
-    const rows = await context.analytics.query({ sql: 'SELECT * FROM events' });
-
-    // integration → request(opts) — for HTTP integrations
-    const sf = await context.salesforce.request({
-        method: 'GET',
-        path: '/services/data/v59.0/sobjects/Account/00112233'
-    });
-
-    return { hits, summary, rows, sf };
-}
-```
-
-**Error handling.** If the installer hasn't bound a slot yet (or the bound target was deleted), the proxy throws a boom 422 with a structured `errorCode`:
-
-```javascript
-export async function GET({ context }) {
-    try {
-        return await context.orders.search({ query: { match_all: {} } });
-    } catch (err) {
-        // err.output.statusCode === 422
-        // err.output.payload.errorCode is 'dependency_unbound' (slot
-        //   never bound) or 'dependency_broken' (target deleted).
-        // err.output.payload.data carries { name, resourceType }.
-        if (err.output?.payload?.errorCode === 'dependency_unbound') {
-            return { status: 503, body: { error: 'This app needs setup — bind the orders dataset.' } };
-        }
-        throw err;
-    }
-}
-```
-
-Prefer `context.<slot>` over raw `fetch('/api/datasets/<uuid>/_search', ...)` — slots survive bundle export/import and resource renames; raw paths don't.
+The short version: in a handler, write `context.<slotName>.<method>(args)` — never raw `fetch('/api/datasets/<uuid>/...')`. Slots survive bundle export/import and resource renames; raw paths don't.
 
 ### Return Values
 
@@ -2419,24 +2517,25 @@ async function streamChat(messages, options = {}) {
 **Complete example — SQL assistant with tool calling:**
 
 ```javascript
-// Tool implementations (your app provides these)
+// Tool implementations — the frontend tool handlers proxy through
+// app server routes (server/tools/search-schema.js,
+// server/tools/run-query.js) that use context.<slot>.query(...) on
+// the bound datasource. The frontend never sees the datasource UUID.
+// See Accessing Your Dependencies for why this matters.
 const toolHandlers = {
     searchSchema: async ({ query }) => {
-        const resp = await fetch(`/api/datasources/${dsId}/request`, {
+        const resp = await fetch('/api/_server/tools/search-schema', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                url: `/metadata/search?q=${encodeURIComponent(query)}`,
-                method: 'GET'
-            })
+            body: JSON.stringify({ query })
         });
         return resp.json();
     },
     runQuery: async ({ sql }) => {
-        const resp = await fetch(`/api/datasources/${dsId}/_query`, {
+        const resp = await fetch('/api/_server/tools/run-query', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ query: sql, limit: 100 })
+            body: JSON.stringify({ sql })
         });
         return resp.json();
     }

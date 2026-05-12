@@ -2,6 +2,18 @@
 
 All endpoints are relative to `/api`. The Vite plugin handles authentication in dev mode.
 
+> ## Read this first
+>
+> The endpoints below are **the raw API surface** that the typed-slot proxies in `context.<slot>.<method>()` call into. App code should usually NOT hit them directly with hardcoded resource IDs — that's the anti-pattern.
+>
+> **For app code, use the patterns in SKILL.md → Accessing Your Dependencies:**
+> - **Server handler**: `await context.orders.search(esQuery)` — no UUIDs in code, slot survives rebinds
+> - **Frontend Pattern A (preferred)**: frontend calls `/api/_server/<route>` which uses `context.<slot>` server-side
+> - **Frontend Pattern B (acceptable for SPAs)**: discover bindings via `GET /api/apps/{appId}/dependencies` at startup, then use resolved UUIDs in subsequent calls
+> - **Forbidden**: hardcoding UUIDs or configIds in URLs anywhere in app code
+>
+> The endpoints documented here are listed for reference (Pattern B uses them, server-side context proxies wrap them) and for the `*-list` discovery endpoints app authors use to resolve `defaultBinding` UUIDs.
+
 ## Datasets
 
 ### GET /api/datasets-list
