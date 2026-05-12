@@ -32,14 +32,24 @@ Future skills will be added under the same plugin (e.g. `/informer:datasets`, `/
 
 ## Migrating from `magic-reports` (v3.x)
 
-Prior versions shipped as a plugin called `magic-reports` containing two skills: `magic-apps` and a legacy `magic-reports` skill. The platform no longer distinguishes Magic Reports from Apps, so the legacy skill has been removed and the plugin has been renamed:
+Prior versions shipped as a plugin called `magic-reports` containing two skills: `magic-apps` and a legacy `magic-reports` skill. The platform no longer distinguishes Magic Reports from Apps, so the legacy skill has been removed and the plugin has been renamed.
+
+**Step 1 — Remove the old `magic-reports` plugin.** The marketplace no longer lists `magic-reports`, so the CLI uninstall hits a marketplace-lookup error:
+
+> Plugin "magic-reports" not found in marketplace "entrinsik-plugins"
+
+Use the plugin manager UI instead — it operates on locally-installed state, not the marketplace catalog:
 
 ```
-# Old (v3.x — remove this)
-/plugin uninstall magic-reports@entrinsik-plugins
+/plugin
+```
 
-# New (v4.0.0+)
+Open the **Installed** tab, find `magic-reports`, and uninstall it from there.
+
+**Step 2 — Install the renamed `informer` plugin:**
+
+```
 /plugin install informer@entrinsik-plugins
 ```
 
-The `magic-apps` skill keeps its name and content — only the plugin wrapper changed.
+The `magic-apps` skill keeps its name and content — only the plugin wrapper changed. After installing `informer`, the skill is addressed as `/informer:magic-apps`.
