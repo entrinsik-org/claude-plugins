@@ -1,5 +1,5 @@
 {
-  "name": "magic-reports",
-  "description": "Skills for building Informer Apps (magic-apps) and Magic Reports (magic-reports)",
-  "version": "3.5.0"
+  "name": "informer",
+  "description": "Skills for Informer development. Includes the magic-apps skill for building Informer Apps with local Vite development; future skills (datasets, agents, troubleshooting, etc.) will be added under the same plugin.",
+  "version": "4.0.0"
 }

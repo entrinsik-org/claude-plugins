@@ -4,10 +4,10 @@
   "owner": { "name": "Entrinsik" },
   "plugins": [
     {
-      "name": "magic-reports",
-      "source": "./plugins/magic-reports",
-      "description": "Skills for building Informer Apps (/magic-apps) and Magic Reports (/magic-reports)",
-      "version": "3.2.0",
+      "name": "informer",
+      "source": "./plugins/informer",
+      "description": "Skills for Informer development. Currently includes magic-apps (Informer App development with Vite). Invoked as /informer:magic-apps.",
+      "version": "4.0.0",
       "author": { "name": "Entrinsik" }
     }
   ]
