@@ -220,13 +220,13 @@ await fetch('/api/_server/orders/abc123/approve', { method: 'POST' });
 
 Server routes use the same authentication as the rest of the app's API proxy. They have direct access to the app's Postgres workspace via `query()` and can make authenticated API calls via `fetch()`.
 
-See the [Server-Side Routes section](../SKILL.md#server-side-routes) in the main skill doc for handler structure and examples.
+See `server-routes.md` for full handler structure, the sandbox-helper reference, and worked examples.
 
 ## Data Access Configuration
 
 Declare data dependencies in `informer.yaml` under the `dependencies:` block (preferred) or `access:` (legacy / raw API allowlist). Without one of these, all API access is blocked when published.
 
-See the [Migrating an old `access:` app to `dependencies:`](../SKILL.md#migrating-an-old-access-app-to-dependencies) section in the main skill doc for the full conversion recipe — including the rule that migrations always go through a draft.
+See `informer-yaml.md` ("Migrating an old `access:` app to `dependencies:`") for the full conversion recipe — including the rule that migrations always go through a draft.
 
 ```yaml
 # informer.yaml

@@ -1,6 +1,6 @@
 ---
 name: magic-apps
-description: Building Informer Apps with local Vite development. Covers the dev/publish workflow, key Informer APIs, widgets, app persistence (SQL workspace + migrations), server-side route handlers, event-driven AI agents with toolkit integration, and the built-in AI copilot sidebar.
+description: Building Informer Apps with local Vite development. Covers the dev/publish workflow, the centerpiece "Accessing Your Dependencies" model (typed slots + three patterns), and the orientation map for deeper topics (server routes, webhooks, persistence, widgets, copilot sidebar, event-driven AI agents, PDF export, informer.yaml schema) — each routes to a reference file under `references/` so the front door stays loadable on every trigger.
 ---
 
 # Informer App Development
@@ -18,6 +18,25 @@ An Informer App is a custom HTML/JS/CSS application that runs inside Informer. I
 - Define **AI agents** that react to events, execute tools, and chain together for automated workflows
 
 Apps are stored in Informer libraries and served through the Informer UI. (You may see the term "Magic Report" in older documentation — Apps are the current name for the same concept.)
+
+## Reference Index — when to load which file
+
+This file is the orientation layer. Most topics have a dedicated reference under `references/` — load the reference into context the moment the user's request lands in that topic.
+
+| User intent / signal | Load this file |
+|---|---|
+| Writing handlers under `server/`, working with `query` / `fetch` / `respond` / `notify` / `email` / `log` / `crypto` / base64 / markdown / `env` / `request` / sandbox constraints | `references/server-routes.md` |
+| Receiving external callbacks (Stripe, GitHub, Slack, Gmail push) under `webhooks/`, HMAC verification, signed `?token=` URLs | `references/webhooks.md` |
+| Storing app data — `migrations/`, dev-workspace lifecycle, `workspace:init` / `:migrate` / `:reset`, CRUD example | `references/persistence.md` |
+| Declaring `widgets:` in `informer.yaml`, building self-contained HTML cards under `public/widgets/`, iframe quirks | `references/widgets.md` |
+| Activating the in-app copilot, `openChat()` / `registerTool()`, AI completion endpoints (`_chat` / `_completion` / `_object`), `useChat` hook patterns | `references/copilot.md` |
+| Declaring `agents:` in `informer.yaml`, writing `tools/*.js`, `emit()` chaining, cron, toolkits/assistants integration, agent REST API | `references/agents.md` |
+| Deep `informer.yaml` work — `dependencies:` slot field reference, RLS via `$user.*`, modernizing a legacy `access:` block, `defaultBinding` lookup | `references/informer-yaml.md` |
+| In-gallery app docs (`docs.html`), in-app `?` help button, `README.md` fallback | `references/docs-html.md` |
+| Looking up the raw API surface behind the typed-slot proxy (still useful when something fails) | `references/api-reference.md` |
+| HTML/CSS/JS starter snippets (charts, layouts) | `references/app-templates.md` |
+
+The sections that **stay in this file** are the ones nearly every project touches: bootstrapping, local-dev essentials, the dep-access centerpiece, the small surfaces (App Context, HTML5 routing, App Roles, PDF Export). Everything else is one click away in `references/`.
 
 ## Bootstrapping a New Project
 
@@ -52,7 +71,7 @@ npm create vite@latest . -- --template react
 
 # 2. Install dependencies including the Informer plugin.
 npm install
-npm install -D @entrinsik/vite-plugin-informer@2.3.0
+npm install -D @entrinsik/vite-plugin-informer@2.4.0
 
 # 3. Run the Informer init — creates informer.yaml, .env, .env.example,
 #    updates vite.config.js to include informer(), updates .gitignore,
@@ -77,24 +96,29 @@ my-app/
 ├── .env                    # Connection settings (gitignored)
 ├── .env.example            # Template for connection settings
 ├── informer.yaml           # App configuration — dependencies, roles, agents, events, widgets
-├── package.json            # With informer section + deploy/workspace:* scripts
+├── package.json            # informer section (name, description, id UUID) + deploy/workspace:* scripts
 ├── vite.config.js          # Includes informer() plugin
 ├── index.html              # Vite default — replace with your app shell
-├── main.js                 # Vite default — replace with your entry
-└── public/
-    └── favicon.svg         # (optional — recommended duotone, 512×512)
+└── main.js                 # Vite default — replace with your entry
 ```
 
+Init also:
+- Prompts for an app name (used as the `informer.name` display name)
+- **Generates a UUID for `informer.id`** and writes it to `package.json` immediately — used by `npm run deploy` to create or address the app on the server. Don't set it manually.
+- Updates `.gitignore` to exclude `.env`
+
 The `.env` template includes both API key and basic auth blocks — uncomment the one you want. If the user mentions a specific server, fill it in directly; otherwise leave the placeholder `http://localhost:3000` and tell them to update before running `npm run dev`.
+
+> **`public/favicon.svg` is not created by init.** It's a recommended addition — 512×512, duotone — and gets deployed to the app's library root as the gallery/tab icon. Add it yourself or ask Claude to generate one.
 
 ### After bootstrap
 
 Once the project is set up, the typical next moves are:
 
 1. Ask the user what data the app needs (datasets/queries/datasources/integrations) and add `dependencies:` slots to `informer.yaml` — look up `defaultBinding` UUIDs via `GET /api/datasets-list` etc. against the configured `INFORMER_URL`.
-2. Replace Vite's default `index.html` + `main.js` with the app shell (use `<script type="module" src="/main.js"></script>` — see [Code Style](#code-style)).
-3. If the app stores its own data, scaffold `migrations/` and add a first migration (see [Persistence](#persistence-app-workspace)).
-4. If the app exposes server-side routes, scaffold `server/` (see [Server-Side Route Handlers](#server-side-route-handlers)).
+2. Replace Vite's default `index.html` + `main.js` with the app shell.
+3. If the app stores its own data, scaffold `migrations/` and add a first migration — load `references/persistence.md`.
+4. If the app exposes server-side routes, scaffold `server/` — load `references/server-routes.md`.
 
 ## Local Development Workflow
 
@@ -103,7 +127,7 @@ Once the project is set up, the typical next moves are:
 Install the Informer Vite plugin as a dev dependency (skip if `npx informer-init` was used — it's already there):
 
 ```bash
-npm install -D @entrinsik/vite-plugin-informer@2.3.0
+npm install -D @entrinsik/vite-plugin-informer@2.4.0
 ```
 
 ### Code Splitting
@@ -130,11 +154,11 @@ INFORMER_USER=admin
 INFORMER_PASS=yourpassword
 ```
 
-If your app uses persistence (see [Persistence](#persistence-app-workspace)), you'll also have:
+If your app uses persistence (see `references/persistence.md`), you'll also have:
 ```
-INFORMER_DEV_WORKSPACE=admin:my-app-dev
+INFORMER_DEV_WORKSPACE=<workspace-naturalId>     # e.g. admin:my-app-dev
 ```
-This is set automatically by `npm run workspace:init`.
+This is set automatically by `npm run workspace:init`. When `--mode` is active, it lands in `.env.<mode>` instead of `.env`.
 
 **Multi-environment support:** Use `--mode` to target different servers:
 ```bash
@@ -160,8 +184,8 @@ Builds your project and uploads to Informer:
 4. Uploads all built assets from `dist/`
 5. Uploads `informer.yaml` and `data-access.yaml` from project root (if they exist)
 6. Uploads `migrations/` directory (if it exists)
-7. Uploads `server/` directory (if it exists)
-8. Uploads `tools/` directory (if it exists)
+7. Uploads `tools/` directory (if it exists)
+8. Uploads `server/` directory (if it exists)
 9. Uploads `webhooks/` directory (if it exists)
 10. Runs deploy: pending SQL migrations + server-route scanning + webhook scanning + handler bundling + tool bundling + resource reference validation + agent upsert from `informer.yaml`
     - **Resource refs are validated**: all datasets, queries, datasources, integrations, and toolkits declared in `informer.yaml` must exist — deploy fails with a clear error if any are missing
@@ -184,7 +208,7 @@ The `informer` section in `package.json` controls deploy metadata:
 |-------|-------------|
 | `name` | Display name in Informer (falls back to package `name`) |
 | `description` | App description |
-| `id` | App UUID — **do not set manually**. The first `npm run deploy` creates the app and writes the `id` back to `package.json` automatically. |
+| `id` | App UUID — **do not set manually**. `npx informer-init` generates the UUID and writes it to `package.json` at scaffold time. `npm run deploy` then uses that UUID to create the app on the server on first run. |
 
 ### App Icon (favicon.svg)
 
@@ -214,130 +238,7 @@ Guidelines:
 
 ## App Documentation (`docs.html`)
 
-Apps can include documentation that's accessible directly from the app gallery. Place a `docs.html` file in your `public/` directory — it's deployed to the library root alongside `favicon.svg` and `informer.yaml`.
-
-**Priority:** `docs.html` > `README.md`. If both exist, `docs.html` is used. `README.md` is the fallback for quick-and-simple docs (rendered as markdown in a dialog).
-
-### Gallery Integration
-
-When an app has documentation, a small book icon badge appears on the app card in the gallery. Clicking the badge opens the docs in a dialog without launching the app — great for usage guides, data dictionaries, onboarding flows, or release notes.
-
-### In-App Help Button
-
-Since apps run in a chromeless window (no browser toolbar), consider adding a `?` help button in the top-right corner of your app that opens the documentation inline. This gives users quick access to help without leaving the app.
-
-```javascript
-// Simple help button that opens docs.html in a modal
-const helpBtn = document.createElement('button');
-helpBtn.textContent = '?';
-Object.assign(helpBtn.style, {
-    position: 'fixed', top: '12px', right: '12px', zIndex: '9999',
-    width: '32px', height: '32px', borderRadius: '50%',
-    border: 'none', cursor: 'pointer',
-    background: 'rgba(128,128,128,0.15)', color: 'inherit',
-    fontSize: '16px', fontWeight: '600',
-    backdropFilter: 'blur(8px)',
-    transition: 'background 0.15s ease',
-});
-helpBtn.addEventListener('mouseenter', () => helpBtn.style.background = 'rgba(128,128,128,0.25)');
-helpBtn.addEventListener('mouseleave', () => helpBtn.style.background = 'rgba(128,128,128,0.15)');
-helpBtn.addEventListener('click', () => {
-    // Open docs.html in a centered modal iframe
-    const overlay = document.createElement('div');
-    Object.assign(overlay.style, {
-        position: 'fixed', inset: '0', zIndex: '10000',
-        background: 'rgba(0,0,0,0.5)', display: 'flex',
-        alignItems: 'center', justifyContent: 'center',
-    });
-    overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
-
-    const frame = document.createElement('iframe');
-    frame.src = 'docs.html';
-    Object.assign(frame.style, {
-        width: '90vw', maxWidth: '900px', height: '80vh',
-        border: 'none', borderRadius: '12px',
-        boxShadow: '0 24px 80px rgba(0,0,0,0.3)',
-    });
-    overlay.appendChild(frame);
-    document.body.appendChild(overlay);
-});
-document.body.appendChild(helpBtn);
-```
-
-### Writing Great `docs.html`
-
-Since `docs.html` is a full HTML page, you have complete creative control. Make it engaging and visually match the app's design. A good docs page should feel like part of the app, not an afterthought.
-
-**Structure:**
-
-```html
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>App Name — Documentation</title>
-    <style>
-        /* Match your app's design system */
-    </style>
-</head>
-<body>
-    <header>
-        <h1>App Name</h1>
-        <p class="subtitle">What it does in one line</p>
-    </header>
-
-    <nav>
-        <!-- Quick jump links for longer docs -->
-    </nav>
-
-    <main>
-        <section id="getting-started">...</section>
-        <section id="features">...</section>
-        <section id="data-dictionary">...</section>
-    </main>
-</body>
-</html>
-```
-
-**Best practices:**
-
-- **Self-contained** — inline all styles. No external CSS/JS dependencies (the file is served from the library root)
-- **Responsive** — the docs dialog can be narrow on mobile. Use fluid widths
-- **Theme-aware** — respect `prefers-color-scheme` so docs look good in both light and dark mode:
-  ```css
-  :root { --bg: #fff; --text: #1a1a1a; --muted: #666; --border: #e5e5e5; --accent: #2563eb; }
-  @media (prefers-color-scheme: dark) {
-      :root { --bg: #1a1a2e; --text: #e0e0e0; --muted: #999; --border: #333; --accent: #60a5fa; }
-  }
-  body { background: var(--bg); color: var(--text); }
-  ```
-- **Include visuals** — screenshots, diagrams, or annotated UI mockups help users understand at a glance. Use inline SVG or base64 images to stay self-contained
-- **Data dictionary** — if your app works with specific fields/columns, include a table explaining what each one means
-- **Keyboard shortcuts** — if your app has any, list them in a clean table
-- **Version/changelog** — a brief "What's New" section helps returning users
-
-### `README.md` Fallback
-
-For simpler docs, place a `README.md` in `public/`. It's rendered as markdown in the gallery dialog. Good for quick descriptions, but `docs.html` is preferred for anything with structure or style.
-
-### Project Structure with Docs
-
-```
-my-app/
-  public/
-    favicon.svg           ← App icon
-    docs.html             ← App documentation (preferred)
-  migrations/
-    001-create-tables.sql
-  server/
-    orders/index.js
-  src/
-    main.js
-  informer.yaml
-  index.html
-  package.json
-```
+Apps can include a `docs.html` page in `public/` that opens from the app gallery's book-icon badge — and a `?` help button inside the app can iframe-open the same file. Full guidance — gallery integration, structure template, in-app help button code, the `README.md` fallback — lives in `references/docs-html.md`. Load that reference when adding or restyling docs.
 
 ## Accessing Your Dependencies
 
@@ -435,14 +336,16 @@ export async function GET({ context }) {
         return await context.orders.search({ query: { match_all: {} } });
     } catch (err) {
         // err.output.statusCode === 422
-        // err.output.payload.errorCode is one of:
+        // err.output.payload.data carries:
+        //   { errorCode, dependencyName, resourceType }
+        // errorCode is one of:
         //   'dependency_unbound' — installer hasn't picked a target
         //   'dependency_broken'  — bound target was deleted
-        // err.output.payload.data carries { name, resourceType }
-        if (err.output?.payload?.errorCode === 'dependency_unbound') {
+        const code = err.output?.payload?.data?.errorCode;
+        if (code === 'dependency_unbound') {
             return { status: 503, body: { error: 'This app needs setup — open the install panel and bind the orders dataset.' } };
         }
-        if (err.output?.payload?.errorCode === 'dependency_broken') {
+        if (code === 'dependency_broken') {
             return { status: 503, body: { error: 'The orders dataset was deleted. Rebind via the install panel.' } };
         }
         throw err;
@@ -467,7 +370,7 @@ function Dashboard() {
 
 The frontend never sees a single UUID. Installer rebinds, resource renames, bundle export/import — none of it touches your frontend code. The slot does its job.
 
-See [Server-Side Routes](#server-side-routes) for the full file-convention and handler shape.
+See `references/server-routes.md` for the full file-convention and handler shape.
 
 ### Pattern B — Frontend with runtime binding discovery
 
@@ -645,33 +548,30 @@ Returned shape:
 - `result.hits.hits` — array of `{ _source: { field1, field2, ... } }`
 - `result.aggregations` — aggregation results (if requested)
 
-## App Configuration (`informer.yaml`)
+## App Configuration (`informer.yaml`) — rule of thumb
 
-Apps are configured with an `informer.yaml` file in the project root. This single file declares the app's **data dependencies** (typed slots that get bound at install time), any **raw API allowlist** the app needs, **widgets**, and **custom roles**. It's uploaded automatically on deploy.
+Apps are configured with an `informer.yaml` file in the project root. It declares the app's **data dependencies** (typed slots bound at install time), any **raw API allowlist**, **widgets**, **agents**, and **custom roles**. It's uploaded automatically on deploy.
+
+**Rule of thumb — read this before writing to informer.yaml:**
+
+> **For typed resources (dataset / query / datasource / integration): always use `dependencies:` slots. Never `access: datasets:`, `access: queries:`, `access: integrations:`, or `access: datasources:`.**
+
+The legacy `access:` block for typed resources still works at runtime, but it bypasses the install/rebind UI, doesn't support the typed-proxy dispatch (`context.<slot>.search(...)`), and silently breaks the install flow. `access:` keeps one legitimate use: the `apis:` sub-block for raw API paths that don't fit the typed-slot model (e.g. AI model endpoints).
+
+**Without either a populated `dependencies:` section or an `access:` declaration, ALL API access is blocked when the app runs in Informer.**
+
+Minimal shape:
 
 ```yaml
 # informer.yaml
-
-# Typed slots the installer binds at first deploy. Slot names are referenced
-# from server-side handler code as `context.<slot>.<method>(args)` and from
-# frontend code via runtime binding discovery — see Accessing Your
-# Dependencies for the patterns.
 dependencies:
   sales:
-    target: dataset                                          # one of: dataset, query, datasource, integration
-    description: Sales fact table
-    defaultBinding: 7d5a9b1e-0c83-4bde-9e2a-3a4b5c6d7e8f     # UUID — pre-binds on first deploy. Look up via GET /api/datasets-list.
-  customers:
     target: dataset
-    defaultBinding: 1f2e3d4c-5b6a-7980-1234-56789abcdef0
+    defaultBinding: 7d5a9b1e-0c83-4bde-9e2a-3a4b5c6d7e8f
   monthly_summary:
     target: query
     defaultBinding: 9a8b7c6d-5e4f-3a2b-1c0d-fedcba987654
-  salesforce:
-    target: integration
 
-# Raw API allowlist for endpoints that don't fit the typed-slot model.
-# Coexists with `dependencies:`; both are honored.
 access:
   apis:
     - GET /api/apps-list
@@ -679,1329 +579,89 @@ access:
 roles:
   - id: viewer
     name: Viewer
-    description: Can view reports but not take actions
-  - id: approver
-    name: Approver
-    description: Can approve or reject requests
 ```
 
-### Rule of thumb (READ THIS BEFORE WRITING TO informer.yaml)
+For the full schema — slot field reference (`target` / `runAs` / `options` / `defaultBinding`), row-level security with `$user.*` variables, the modernization recipe for converting a legacy `access:` block to `dependencies:`, integration credential injection, and the `libraries:` legacy carve-out — load `references/informer-yaml.md`.
 
-**For typed resources (dataset / query / datasource / integration): always use `dependencies:` slots. Never `access: datasets:`, `access: queries:`, `access: integrations:`, or `access: datasources:`.**
+## Widgets — overview
 
-The legacy `access:` block for typed resources still works at runtime, but:
-
-- It bypasses the install/rebind UI — every change forces a manifest edit + redeploy.
-- It doesn't support the typed-proxy dispatch (`context.<slot>.search(...)`) — handlers would have to hand-build URLs.
-- `npx informer-init`'s older scaffolds wrote empty `access: { datasets: [] }` blocks; if you find one in an existing `informer.yaml`, **replace it with `dependencies:`** — don't preserve the legacy shape "for consistency with the existing file."
-
-`access:` keeps **one** legitimate use: the `apis:` sub-block for raw API paths that don't fit the typed-slot model (e.g. AI model endpoints, custom server routes). Everything else goes under `dependencies:`.
-
-**Important:** Without either a populated `dependencies:` section or an `access:` declaration, ALL API access is blocked when the app runs in Informer.
-
-### `dependencies:` slot fields
-
-| Field | Required | Description |
-|-------|----------|-------------|
-| `target` | yes | `dataset`, `query`, `datasource`, or `integration` |
-| `description` | no | Author-facing copy shown in the install/rebind UI |
-| `runAs` | no | `user` (default) or `owner`. `owner` bypasses the viewing user's permissions — use sparingly |
-| `options` | no | Per-target options (e.g. dataset filters), validated against the driver's schema |
-| `defaultBinding` | no | A **UUID** the slot binds to automatically on first deploy. UUIDs (not configIds) so the binding survives a bundle export/import and isn't broken by users renaming the underlying resource. Look up the UUID from the resource's list endpoint (e.g. `GET /api/datasets-list`). **Never overwrites a binding the installer has already chosen** — re-deploys won't silently rewire a hand-bound slot. |
-
-> **Legacy note:** You can also use a standalone `data-access.yaml` file (without the `access:` wrapper key). If both files exist, `informer.yaml` takes precedence. New apps should use `informer.yaml` with `dependencies:` since it supports typed slots, raw API allowlists, widgets, and roles in one file.
-
-### Migrating an old `access:` app to `dependencies:`
-
-Older apps declared their data via `access:` blocks. The runtime still extracts those, but they don't surface in the install/rebind UI — every change requires editing the YAML and redeploying. Convert them to `dependencies:` slots so the install panel can re-bind without manifest edits.
-
-**Safety net: a snapshot is taken automatically.** When the server-side modernize route runs, it snapshots the live app (manifest, library files, workspace data) *before* rewriting anything. If the result is wrong, restore from the returned `snapshotId`. You can also open a draft first if you'd rather review before applying — drafts still work — but they're no longer required.
-
-The recipe Claude follows when asked to modernize:
-
-1. Read the current `informer.yaml` (or legacy `data-access.yaml`).
-2. For each entry under `access.datasets` / `access.queries` / `access.datasources` / `access.integrations`, generate a `dependencies:` slot:
-   - **Slot name** — derive from the resource's `naturalId` last segment, snake-cased. `admin:northwind-orders` → `northwind_orders`. Resolve clashes by appending the resource type or a number.
-   - **`target`** — singular form of the parent section (`datasets` → `dataset`, etc.).
-   - **`defaultBinding`** — the resource's **UUID** (resolve via the matching `*-list` endpoint, e.g. `GET /api/datasets-list`). UUIDs survive bundle round-trips and aren't broken by configId renames; configIds in `defaultBinding` will be rejected at deploy.
-   - Carry `filter` / `headers` / `params` / `paths` (when present on a structured access entry) into `options:`.
-3. Remove the migrated entries from `access:`. **Keep `access.apis`** — raw paths don't have a slot model.
-4. Update any server-side handler code that referenced these resources by `naturalId` to use the slot name instead (`context.northwind_orders.search({...})` etc. — the slot name is a property of `context`, not nested under `context.dependencies`).
-5. Deploy the draft. Auto-bind runs through `defaultBinding`. Any unresolvable `defaultBinding` fails the deploy with a slot-named error so the YAML can be fixed.
-6. Review via the draft diff, then commit.
+Apps can expose **widgets**: small, self-contained HTML cards (declared in `informer.yaml`, served from `public/widgets/`) that render inside Informer's widget gallery as iframes at fixed grid sizes. Good for at-a-glance KPIs, sparklines, status indicators.
 
 ```yaml
-# Before
-access:
-  datasets:
-    - admin:northwind-orders
-    - id: admin:orders
-      filter:
-        region: $user.custom.region
-  queries:
-    - admin:daily-summary
-  apis:
-    - POST /api/models/go_everyday/_object
-
-# After — defaultBinding values are UUIDs resolved from each
-# configId via the matching `*-list` endpoint at modernize time.
-dependencies:
-  northwind_orders:
-    target: dataset
-    defaultBinding: 7d5a9b1e-0c83-4bde-9e2a-3a4b5c6d7e8f
-  orders:
-    target: dataset
-    defaultBinding: 1f2e3d4c-5b6a-7980-1234-56789abcdef0
-    options:
-      filter:
-        region: $user.custom.region
-  daily_summary:
-    target: query
-    defaultBinding: 9a8b7c6d-5e4f-3a2b-1c0d-fedcba987654
-access:
-  apis:
-    - POST /api/models/go_everyday/_object   # raw API — stays in access
-```
-
-### Basic Data Access Example
-
-```yaml
-# informer.yaml
-# defaultBinding values are UUIDs from each resource's *-list endpoint
-# (GET /api/datasets-list, /api/queries-list, /api/datasources-list,
-# /api/integrations-list). configIds like `admin:sales-data` are
-# rejected at deploy.
-dependencies:
-  sales:
-    target: dataset
-    defaultBinding: 7d5a9b1e-0c83-4bde-9e2a-3a4b5c6d7e8f
-  customers:
-    target: dataset
-    defaultBinding: 1f2e3d4c-5b6a-7980-1234-56789abcdef0
-  monthly_summary:
-    target: query
-    defaultBinding: 9a8b7c6d-5e4f-3a2b-1c0d-fedcba987654
-  salesforce:
-    target: integration                  # no defaultBinding — installer picks
-```
-
-### With Row-Level Security
-
-Restrict data based on the viewing user's profile. Filters live under each slot's `options`:
-
-```yaml
-# informer.yaml
-dependencies:
-  orders:
-    target: dataset
-    defaultBinding: 1f2e3d4c-5b6a-7980-1234-56789abcdef0
-    options:
-      filter:
-        region: $user.custom.region      # Users only see their region's data
-  sales:
-    target: dataset
-    defaultBinding: 7d5a9b1e-0c83-4bde-9e2a-3a4b5c6d7e8f
-    options:
-      filter:
-        sales_rep: $user.username        # Users only see their own records
-```
-
-### Integration with Credentials
-
-Pass user-specific credentials to external APIs via the slot's `options`:
-
-```yaml
-# informer.yaml
-dependencies:
-  partner_api:
-    target: integration
-    defaultBinding: 5a6b7c8d-9e0f-1234-5678-9abcdef01234
-    options:
-      headers:
-        Authorization: Bearer $user.custom.partnerToken
-      params:
-        client_id: $tenant.id
-```
-
-### Available Variables
-
-| Variable | Description |
-|----------|-------------|
-| `$user.username` | Login name |
-| `$user.email` | Email address |
-| `$user.displayName` | Full name |
-| `$user.custom.xxx` | Custom user field |
-| `$tenant.id` | Tenant ID |
-| `$report.id` | App UUID |
-
-### Resource Types
-
-| Type | API Access Granted |
-|------|-------------------|
-| `datasets` | `_search`, `fields` |
-| `queries` | `_execute` |
-| `datasources` | `_query` |
-| `integrations` | `request` |
-| `libraries` | `contents/*` |
-
-For edge cases, you can also whitelist raw API paths:
-
-```yaml
-# informer.yaml
-access:
-  apis:
-    - POST /api/custom/endpoint
-```
-
-## Widgets
-
-Apps can expose **widgets** — small, self-contained HTML cards that render inside Informer's widget gallery. Widgets are ideal for at-a-glance KPIs, sparkline charts, status indicators, and compact data visualizations that users can pin to their home screen.
-
-### How Widgets Work
-
-Widgets are static HTML files in your `public/widgets/` directory, declared in `informer.yaml`. They render inside **iframes** at fixed grid sizes, fetch data using the same APIs as the main app, and auto-refresh on a configurable interval.
-
-### Declaring Widgets in `informer.yaml`
-
-Add a `widgets:` section alongside your `dependencies:` and `roles:` sections:
-
-```yaml
-# informer.yaml
-dependencies:
-  quickbooks:
-    target: integration
-    defaultBinding: quickbooks-assistant-skill
-
+# informer.yaml — widget declaration
 widgets:
   cash-balance:
     entry: widgets/cash-balance.html
     label: Cash Balance
     size: { w: 2, h: 1 }
     refresh: 300
-  sales-trend:
-    entry: widgets/sales-trend.html
-    label: Sales Trend
-    size: { w: 2, h: 2 }
-    refresh: 300
 ```
 
-| Field | Description |
-|-------|-------------|
-| `entry` | Path to the HTML file relative to `public/` |
-| `label` | Display name shown in the widget gallery |
-| `size` | Grid dimensions — `w` (width) and `h` (height) in grid units. Common sizes: `{ w: 2, h: 1 }` (standard card), `{ w: 2, h: 2 }` (tall card) |
-| `refresh` | Auto-refresh interval in seconds (e.g. `300` = 5 minutes) |
+Widgets are **frontend code** — they access deps via the same three patterns as the main app, and Pattern A (server handler with `context.<slot>`) is strongly preferred because widgets reload on every refresh and the extra Pattern B round-trip shows up visibly.
 
-### Widget HTML Structure
+Load `references/widgets.md` for: full widget HTML template (with theme, loading/error/ready states), SVG charts without libraries (Catmull-Rom spline), iframe constraints (no tooltip overflow, no external stylesheets), hover/filter patterns, project structure example.
 
-Each widget is a **fully self-contained HTML file** — all CSS and JS inline, no npm imports, no build step. They're served as static files from `public/`.
+## Persistence (App Workspace) — overview
 
-```html
-<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Widget Name</title>
-<style>
-* { box-sizing: border-box; margin: 0; padding: 0; }
-
-:root {
-    --bg: #ffffff;
-    --text: #1a1a1a;
-    --muted: #71717A;
-}
-[data-theme="dark"] {
-    --bg: #131316;
-    --text: #FAFAFA;
-    --muted: #71717A;
-}
-
-html, body {
-    height: 100%;
-    overflow: hidden;
-    font-family: -apple-system, BlinkMacSystemFont, sans-serif;
-    -webkit-font-smoothing: antialiased;
-    background: var(--bg);
-    color: var(--text);
-}
-
-/* Loading state */
-.loading {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    height: 100%;
-}
-.dot {
-    width: 4px; height: 4px;
-    border-radius: 50%;
-    background: var(--muted);
-    animation: pulse 1.2s ease-in-out infinite;
-    margin: 0 3px;
-}
-.dot:nth-child(2) { animation-delay: 0.15s; }
-.dot:nth-child(3) { animation-delay: 0.3s; }
-@keyframes pulse {
-    0%, 100% { opacity: 0.3; }
-    50% { opacity: 1; }
-}
-
-/* Error state */
-.error {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    height: 100%;
-    font-size: 11px;
-    color: var(--muted);
-}
-
-/* Ready state */
-.ready { animation: fadeIn 0.4s ease-out; }
-@keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
-</style>
-</head>
-<body>
-<script>
-(function () {
-    // 1. Apply theme
-    const theme = window.__INFORMER__?.theme || 'light';
-    document.documentElement.setAttribute('data-theme', theme);
-
-    // 2. Show loading
-    document.body.innerHTML = '<div class="loading"><div class="dot"></div><div class="dot"></div><div class="dot"></div></div>';
-
-    // 3. Fetch data via a server route — the route uses
-    //    context.<slot>.request(...) to talk to the bound integration.
-    //    Widget code never sees the integration UUID or slug, so
-    //    installer rebinds don't break this widget. See Accessing
-    //    Your Dependencies for the three patterns.
-    fetch('/api/_server/widget/balance')
-    .then(r => { if (!r.ok) throw new Error(r.status); return r.json(); })
-    .then(data => {
-        document.body.innerHTML = '<div class="ready"><!-- your content --></div>';
-    })
-    .catch(() => {
-        document.body.innerHTML = '<div class="error">Unable to load</div>';
-    });
-})();
-</script>
-</body>
-</html>
-```
-
-### Key Patterns
-
-**Theme support:** Always read `window.__INFORMER__?.theme` and set `data-theme` on `<html>`. Define CSS custom properties for both light and dark modes.
-
-**Three states:** Every widget should handle loading (animated dots), error ("Unable to load"), and ready (fade-in content).
-
-**Layout approach:** Use `position: absolute` for background elements (charts, bars) and a `position: relative; z-index: 1` content overlay for text. This layers text over decorative visuals cleanly.
-
-```css
-/* Background chart behind content */
-.chart {
-    position: absolute;
-    bottom: 0; left: 0; right: 0;
-    height: 60%;
-    overflow: hidden;
-}
-
-/* Text content overlaid on top */
-.content {
-    position: relative;
-    z-index: 1;
-    display: flex;
-    flex-direction: column;
-    height: 100%;
-    padding: 14px 16px 10px;
-    pointer-events: none; /* let clicks pass through to chart if needed */
-}
-```
-
-**SVG charts without libraries:** Widgets should not import charting libraries. Use inline SVG with Catmull-Rom spline interpolation for smooth area/line charts:
-
-```javascript
-function catmullRom(pts) {
-    if (pts.length < 2) return '';
-    if (pts.length === 2) return `M${pts[0].x},${pts[0].y}L${pts[1].x},${pts[1].y}`;
-    let d = `M${pts[0].x},${pts[0].y}`;
-    for (let i = 0; i < pts.length - 1; i++) {
-        const p0 = pts[Math.max(i - 1, 0)], p1 = pts[i];
-        const p2 = pts[i + 1], p3 = pts[Math.min(i + 2, pts.length - 1)];
-        const t = 6; // tension
-        d += `C${(p1.x + (p2.x - p0.x) / t).toFixed(1)},${(p1.y + (p2.y - p0.y) / t).toFixed(1)} ` +
-             `${(p2.x - (p3.x - p1.x) / t).toFixed(1)},${(p2.y - (p3.y - p1.y) / t).toFixed(1)} ` +
-             `${p2.x.toFixed(1)},${p2.y.toFixed(1)}`;
-    }
-    return d;
-}
-
-// Area chart: close the path along the bottom
-const linePath = catmullRom(points);
-const areaPath = linePath + `L${W},${H}L0,${H}Z`;
-```
-
-**Iframe constraints:** Widgets render in iframes, which means:
-- **No overflow tooltips** — CSS tooltips positioned outside the widget bounds are clipped. Use `title` attributes for native browser tooltips, or swap content inline on hover (e.g. replace a legend row with detail on `mouseenter`).
-- **No external stylesheets** — everything must be inline.
-- **No shared state** — each widget is isolated. Fetch its own data.
-
-**Hover interactions:** Use dim-siblings patterns for bar charts and distribution charts:
-
-```css
-.bars:hover .bar { opacity: 0.35; }
-.bars:hover .bar:hover { opacity: 1; }
-```
-
-For hover detail that replaces a legend:
-
-```javascript
-bar.addEventListener('mouseenter', () => {
-    legend.style.display = 'none';
-    detail.style.display = 'flex';
-    detailLabel.textContent = bar.dataset.label;
-    detailAmount.textContent = bar.dataset.amount;
-});
-barsContainer.addEventListener('mouseleave', () => {
-    legend.style.display = 'flex';
-    detail.style.display = 'none';
-});
-```
-
-**Interactive controls:** Widgets can include `<select>` dropdowns or simple controls for filtering. Use a reactive render pattern — fetch data once, store in memory, re-render on filter change:
-
-```javascript
-function render(filter) {
-    // Recompute from cached data
-    // Update DOM elements by ID
-}
-
-document.getElementById('picker').addEventListener('change', function() {
-    render(this.value || null);
-});
-
-render(null); // initial render
-```
-
-### Data Access
-
-Widgets are frontend code — same runtime as the main app's browser-side code. They access deps via [the same three patterns](#accessing-your-dependencies):
-
-```javascript
-// Pattern A (preferred) — call a server route that uses context.<slot>
-fetch('/api/_server/widget/cash-balance')
-    .then(r => r.json())
-    .then(({ balance }) => { /* render */ });
-
-// Pattern B (acceptable for SPA widgets) — runtime binding discovery
-// Requires `access.apis: [GET /api/apps/*/dependencies]` in informer.yaml
-const appId = window.__INFORMER__.report.id;
-const { items } = await fetch(`/api/apps/${appId}/dependencies`).then(r => r.json());
-const orderDatasetId = items.find(i => i.name === 'orders').targetId;
-const hits = await fetch(`/api/datasets/${orderDatasetId}/_search`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ query: { match_all: {} }, size: 100 })
-}).then(r => r.json());
-
-// Pattern C (DO NOT) — hardcoded UUID or configId in the URL
-// fetch('/api/datasets/admin:sales-data/_search', ...)   ← breaks on rebind
-// fetch('/api/datasets/7d5a9b1e-.../_search', ...)        ← same problem
-```
-
-Widgets generally benefit from Pattern A even more than the main app does: each widget is small, rendered in an iframe, and gets re-loaded on every refresh — the extra round-trip for Pattern B's runtime discovery shows up visibly. A server route that pre-aggregates and returns just the metric the widget displays is usually the right shape.
-
-### Project Structure with Widgets
-
-```
-my-app/
-  public/
-    favicon.svg
-    widgets/
-      cash-balance.html       ← Widget: 2×1 KPI card
-      sales-trend.html        ← Widget: 2×2 chart card
-      aged-receivables.html   ← Widget: 2×1 bar chart
-  src/
-    main.js                   ← Main app entry point
-  server/
-    stats/index.js            ← Server route (shared by app + widgets)
-  migrations/
-    001-create-tables.sql
-  informer.yaml               ← Declares access, widgets, roles
-  index.html
-  package.json
-```
-
-## Persistence (App Workspace)
-
-Apps can opt into a **dedicated Postgres schema** for storing and querying custom data. This is ideal for apps that need CRUD operations, form submissions, workflow state, or any data that belongs to the app itself rather than coming from external datasources or datasets.
-
-### How It Works
-
-When your project has a `migrations/` directory containing `.sql` files, Informer provisions a dedicated Postgres schema for the app. The schema is:
-- **Tenant-isolated** — owned by the tenant role, inaccessible to other tenants
-- **Lazily provisioned** — created on first query or explicit migration
-- **Automatically cleaned up** — dropped when the app is deleted
-
-### Migration Files
-
-Create a `migrations/` directory in your project root. Add numbered `.sql` files that run in alphabetical order:
+Apps can opt into a **dedicated Postgres schema** by adding a `migrations/` directory with numbered `.sql` files. Informer provisions the schema lazily, isolates it per tenant, and drops it when the app is deleted. All app data access goes through server-side route handlers (`query()` callback) — published apps don't query the workspace from the browser.
 
 ```
 my-app/
   migrations/
     001-create-orders.sql
-    002-add-status-column.sql
-    003-add-indexes.sql
-  src/
-    main.js
-  index.html
-  package.json
+    002-add-line-items.sql
 ```
 
-Each migration file contains standard SQL:
+In dev mode, the Vite plugin auto-provisions a `{slug}-dev` workspace and runs migrations on first start. Manual lifecycle via `npm run workspace:migrate` / `:reset`.
 
-```sql
--- migrations/001-create-orders.sql
-CREATE TABLE orders (
-    id SERIAL PRIMARY KEY,
-    customer TEXT NOT NULL,
-    total NUMERIC(10,2) DEFAULT 0,
-    status TEXT DEFAULT 'pending',
-    created_at TIMESTAMPTZ DEFAULT NOW()
-);
-```
+Load `references/persistence.md` for: migration file rules (append-only, alphabetic order, exact-once via `_migrations` table), dev workspace flow, `INFORMER_DEV_WORKSPACE` mechanics, full CRUD example.
 
-```sql
--- migrations/002-add-line-items.sql
-CREATE TABLE line_items (
-    id SERIAL PRIMARY KEY,
-    order_id INTEGER REFERENCES orders(id) ON DELETE CASCADE,
-    product TEXT NOT NULL,
-    quantity INTEGER DEFAULT 1,
-    price NUMERIC(10,2) NOT NULL
-);
+## Server-Side Routes — overview
 
-CREATE INDEX line_items_order_idx ON line_items (order_id);
-```
-
-**Rules:**
-- Files must end in `.sql` and are sorted alphabetically (use numeric prefixes)
-- Each migration runs exactly once — Informer tracks completed migrations in a `_migrations` table
-- Migrations are **append-only** — never modify a migration that has already been deployed. Add a new file instead.
-- Each migration runs in its own transaction
-
-### Querying the Workspace
-
-All database access goes through [server-side route handlers](#server-side-routes). The `query()` callback in server handlers executes SQL against the app's workspace — see [Using `query()`](#using-query) for details.
-
-There is no client-side query endpoint. Client code calls server routes via `fetch('/api/_server/...')`, and server handlers use `query()` for database access.
-
-### Local Development with Workspaces
-
-In dev mode, the Vite plugin automatically provisions a **dev workspace** — a separate Postgres schema on the Informer server. This keeps development completely isolated from the deployed app's production data.
-
-**Auto-provisioning:** When your project has a `migrations/` directory and `.env` is configured with `INFORMER_URL`, the Vite plugin:
-1. Creates a workspace datasource `{slug}-dev` on the server (first run)
-2. Runs all pending `migrations/*.sql` files
-3. Saves `INFORMER_DEV_WORKSPACE=admin:{slug}-dev` to `.env`
-
-Server route `query()` calls use this dev workspace automatically during local development.
-
-**Manual workspace management:**
-
-```bash
-# Re-run pending migrations
-npm run workspace:migrate
-
-# Start fresh (drop all tables, re-run all migrations)
-npm run workspace:reset
-```
-
-**Add these scripts to `package.json`:**
-
-```json
-{
-    "scripts": {
-        "workspace:init": "informer-workspace init",
-        "workspace:migrate": "informer-workspace migrate",
-        "workspace:reset": "informer-workspace reset"
-    }
-}
-```
-
-These scripts are added automatically if you run `informer-init`.
-
-### Full Example: CRUD App
-
-```
-my-order-tracker/
-  migrations/
-    001-create-orders.sql
-    002-create-line-items.sql
-  server/
-    orders/
-      index.js           → GET,POST /orders
-      [id].js            → GET,PUT,DELETE /orders/:id
-  public/
-    favicon.svg
-  src/
-    main.js
-  informer.yaml
-  index.html
-  package.json
-  .env
-```
-
-```javascript
-// src/main.js
-
-// Load orders
-async function loadOrders() {
-    const response = await fetch('/api/_server/orders');
-    const orders = await response.json();
-    renderOrderTable(orders);
-}
-
-// Create order
-async function createOrder(customer, total) {
-    const response = await fetch('/api/_server/orders', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ customer, total })
-    });
-    if (!response.ok) {
-        const err = await response.json();
-        alert(err.error);
-        return;
-    }
-    loadOrders(); // refresh
-}
-
-// Delete order
-async function deleteOrder(id) {
-    await fetch(`/api/_server/orders/${id}`, { method: 'DELETE' });
-    loadOrders(); // refresh
-}
-
-loadOrders();
-```
-
-## Server-Side Routes
-
-Apps can include **server-side JavaScript handlers** that run on the Informer server in sandboxed V8 isolates. These handlers have direct access to the app's Postgres workspace and can make authenticated API calls — ideal for business logic, data transformations, webhooks, or anything that shouldn't run in the browser.
-
-### How It Works
-
-1. Create a `server/` directory in your project root
-2. Add `.js` handler files using file-convention routing (like Next.js)
-3. Run `npm run deploy` — Informer scans, bundles, and registers routes automatically
-4. Your app calls server routes via `fetch('/api/_server/...')`
-
-Handler code runs in an **isolated-vm V8 isolate** — a separate V8 heap with no access to Node.js APIs, the filesystem, or the network. All I/O goes through injected callbacks (`query` and `fetch`).
-
-### File-Convention Routing
-
-File paths under `server/` map to URL routes:
-
-| File | Route | Example URL |
-|------|-------|-------------|
-| `server/index.js` | `/` | `/api/_server/` |
-| `server/orders/index.js` | `/orders` | `/api/_server/orders` |
-| `server/orders/[id].js` | `/orders/:id` | `/api/_server/orders/abc123` |
-| `server/orders/[id]/approve.js` | `/orders/:id/approve` | `/api/_server/orders/abc123/approve` |
-
-- `[param]` segments become dynamic route parameters (available as `request.params.param`)
-- `index.js` files map to the parent directory path
-
-### Handler Structure
-
-Each handler file exports **named functions** for each HTTP method it supports:
+Apps can include **server-side handler files** under `server/` that run in sandboxed V8 isolates on the Informer server. File-convention routing (Next.js-style) maps `server/orders/[id].js` to `/api/_server/orders/:id`.
 
 ```javascript
 // server/orders/index.js
-
-export async function GET({ query, request }) {
-    const rows = await query('SELECT * FROM orders ORDER BY created_at DESC LIMIT 50');
-    return rows;
+export async function GET({ query, context, request }) {
+    const orders = await query('SELECT * FROM orders ORDER BY created_at DESC LIMIT 50');
+    return orders;
 }
 
 export async function POST({ query, request }) {
     const { customer, total } = request.body;
-    const rows = await query(
-        'INSERT INTO orders (customer, total) VALUES ($1, $2) RETURNING *',
-        [customer, total]
-    );
-    return { status: 201, body: rows[0] };
-}
-```
-
-**Supported methods:** `GET`, `POST`, `PUT`, `PATCH`, `DELETE`
-
-Each handler function receives a single context object with these properties:
-
-| Property | Type | Description |
-|----------|------|-------------|
-| `query` | `async (sql, params?) => rows` | Execute SQL against the app's workspace. Returns an array of row objects. |
-| `fetch` | `async (path, options?) => { status, body }` | Make an authenticated API call through Informer (subject to the app's whitelist). |
-| `context` | `object` | Typed dep proxies keyed by slot name. Call deps as `context.<slotName>.<method>(args)`. Methods per `target`: `dataset` → `search(esQuery)` / `fields()`; `query` → `execute(params)`; `datasource` → `query(payload)`; `integration` → `request(opts)`. Throws boom 422 with `errorCode: 'dependency_unbound'` if the installer hasn't bound the slot yet, or `'dependency_broken'` if the bound target was deleted. Prefer this over raw `fetch()` — slots survive bundle export/import and resource renames; raw paths don't. |
-| `respond` | `async (body) => void` | Send an early HTTP response while the handler continues running in the background. See [Using `respond()`](#using-respond). |
-| `emit` | `async (event, payload) => void` | Emit an app event to trigger agents. Creates an `AppEvent` record and notifies the event dispatcher. |
-| `notify` | `async (username, message) => { id }` | Enqueue a push notification for delivery to a user's Informer GO devices. See [Using `notify()`](#using-notify). |
-| `email` | `async (to, message) => { id }` | Enqueue an email for delivery via the tenant's mail transport. See [Using `email()`](#using-email). |
-| `crypto` | `object` | Cryptographic helpers. `crypto.hmac(algorithm, key, data, encoding?)` computes an HMAC digest (default encoding: `'hex'`). |
-| `markdown` | `async (text) => string` | Convert markdown text to HTML using `marked`. Useful for generating formatted email bodies from markdown content. |
-| `log` | `function` | Structured logging. `log(message, data?)` or `log.info()`/`log.warn()`/`log.error()`/`log.debug()`. Writes to `app_log`. See [Using `log()`](#using-log). |
-| `base64Decode` | `async (encoded) => string` | Decode a base64 string to UTF-8 text (handles multi-byte characters correctly, unlike `atob`). |
-| `base64Encode` | `async (string) => string` | Encode a UTF-8 string to base64. |
-| `base64UrlDecode` | `async (encoded) => string` | Decode a base64url string to UTF-8 text (for URL-safe base64 like Gmail API payloads). |
-| `base64UrlEncode` | `async (string) => string` | Encode a UTF-8 string to base64url. |
-| `env` | `object` | App environment variables (from `app.defn.env`). Set via `PUT /api/apps/{id}` with `defn.env`. |
-| `request` | `object` | The incoming request (see below). |
-
-**`request` object:**
-
-| Property | Type | Description |
-|----------|------|-------------|
-| `request.method` | `string` | HTTP method (`GET`, `POST`, etc.) |
-| `request.path` | `string` | Matched route path (e.g. `/orders/:id`) |
-| `request.params` | `object` | Route parameters (e.g. `{ id: 'abc123' }`) |
-| `request.query` | `object` | Query string parameters |
-| `request.body` | `any` | Request body (parsed JSON for POST/PUT/PATCH) |
-| `request.rawBody` | `string\|null` | Raw request body string (for HMAC signature verification). Only available on webhook routes. |
-| `request.headers` | `object` | Request headers |
-| `request.roles` | `string[]` | The viewer's assigned role IDs (see [App Roles](#app-roles)) |
-| `request.user` | `object` | Current user identity (see below) |
-
-**`request.user` object:**
-
-| Property | Type | Description |
-|----------|------|-------------|
-| `request.user.username` | `string` | Login username |
-| `request.user.displayName` | `string` | User's display name |
-| `request.user.email` | `string\|null` | Email address |
-| `request.user.timezone` | `string\|null` | Timezone (e.g. `America/New_York`) |
-
-### Calling Typed Dep Slots
-
-The handler's `context` object carries one property per `dependencies:` slot, with methods that proxy to the bound target. See [Accessing Your Dependencies](#accessing-your-dependencies) — that's the canonical reference, with worked examples for all four target types (`dataset` / `query` / `datasource` / `integration`), the `dependency_unbound` / `dependency_broken` error pattern, and the rules for the frontend equivalents.
-
-The short version: in a handler, write `context.<slotName>.<method>(args)` — never raw `fetch('/api/datasets/<uuid>/...')`. Slots survive bundle export/import and resource renames; raw paths don't.
-
-### Return Values
-
-Handlers can return values in two formats:
-
-**Simple value** — automatically wrapped as a 200 JSON response:
-```javascript
-export async function GET({ query }) {
-    const rows = await query('SELECT * FROM orders');
-    return rows; // → 200, Content-Type: application/json
-}
-```
-
-**Response object** — full control over status, headers, and body:
-```javascript
-export async function POST({ query, request }) {
-    const { customer } = request.body;
-    if (!customer) {
-        return { status: 400, body: { error: 'Customer is required' } };
-    }
-
-    const rows = await query(
-        'INSERT INTO orders (customer) VALUES ($1) RETURNING *',
-        [customer]
-    );
-    return { status: 201, body: rows[0] };
-}
-```
-
-**No return value** — returns 204 No Content:
-```javascript
-export async function DELETE({ query, request }) {
-    await query('DELETE FROM orders WHERE id = $1', [request.params.id]);
-    // implicit 204
-}
-```
-
-### Using `query()`
-
-The `query` callback executes SQL against the app's Postgres workspace — the same schema managed by `migrations/`. It takes a SQL string and an optional params array, and returns the result rows directly.
-
-```javascript
-export async function GET({ query, request }) {
-    // Parameterized query (always use $1, $2, etc.)
-    const orders = await query(
-        'SELECT * FROM orders WHERE status = $1 ORDER BY created_at DESC',
-        [request.query.status || 'pending']
-    );
-
-    // Aggregation
-    const [stats] = await query(`
-        SELECT COUNT(*) as count, SUM(total) as revenue
-        FROM orders WHERE status = 'completed'
-    `);
-
-    return { orders, stats };
-}
-```
-
-All `query()` calls within a single request share the same database connection, which is automatically closed when the handler completes.
-
-### Using `fetch()`
-
-The `fetch` callback makes authenticated API calls through Informer, using the viewer's credentials. It goes through the same whitelist as client-side API calls, so the endpoint must be allowed in `informer.yaml`.
-
-```javascript
-export async function GET({ fetch }) {
-    // Fetch data from a dataset
-    const result = await fetch('datasets/admin:sales-data/_search', {
-        method: 'POST',
-        body: { query: { match_all: {} }, size: 100 }
-    });
-
-    return result.body.hits.hits.map(h => h._source);
-}
-
-export async function POST({ fetch, request }) {
-    // Call an integration
-    const result = await fetch('integrations/salesforce/request', {
-        method: 'POST',
-        body: {
-            url: '/data/v59.0/sobjects/Contact',
-            method: 'POST',
-            data: request.body
-        }
-    });
-
-    return { status: result.status, body: result.body };
-}
-```
-
-The `path` argument is relative to `/api/` — pass `'datasets/admin:sales-data/_search'`, not `'/api/datasets/...'`.
-
-### Using `respond()`
-
-The `respond` callback sends an early HTTP response to the caller while the handler keeps running in the background. This is useful when an external caller has a tight response deadline (e.g. Slack's 3-second limit for slash commands) but the handler needs more time to complete its work.
-
-```javascript
-// server/slack/commands.js
-
-export const config = { timeout: 25000 };
-
-export async function POST({ query, fetch, respond, request }) {
-    const { text, response_url } = request.body;
-
-    // Ack immediately — the HTTP response is sent now
-    await respond({ response_type: 'ephemeral', text: 'Processing your request...' });
-
-    // Everything below runs in the background (isolate stays alive)
-    const result = await fetch('datasets/admin:sales-data/_search', {
-        method: 'POST',
-        body: { query: { match_all: {} }, size: 50 }
-    });
-
-    // Post the real answer back via response_url
-    await fetch('integrations/slack/request', {
-        method: 'POST',
-        body: { url: response_url, method: 'POST', data: { text: `Found ${result.body.hits.total} records` } }
-    });
-}
-```
-
-**Key behavior:**
-
-- Only the **first** `respond()` call takes effect — subsequent calls are ignored
-- The response body is always sent as **200 JSON** (`Content-Type: application/json`)
-- The isolate, database connection, and timeout all remain active until the handler fully returns (or times out)
-- If background work throws an error after `respond()`, the error is logged server-side but does **not** affect the already-sent response
-- If `respond()` is never called, the handler returns normally — `respond` is entirely opt-in
-
-**When to use `respond()`:**
-
-- Webhook receivers with tight deadlines (Slack, Stripe, GitHub)
-- Fire-and-forget patterns where the caller only needs an acknowledgment
-- Long-running operations where you want to ack first, then process asynchronously
-
-**When NOT to use `respond()`:**
-
-- Normal CRUD handlers — just return the result directly
-- When the caller needs the actual result in the response body
-
-### Using `log()`
-
-The `log` callback writes structured log entries to the app's log table (`app_log`). Logs are visible in the **Logs tab** of the App Admin panel in Informer GO, and can be filtered by level, source, and agent.
-
-```javascript
-// server/orders/index.js
-
-export async function POST({ query, log, request }) {
-    const { customer, total } = request.body;
-
-    log.info('Creating order', { customer, total });
-
     const [order] = await query(
         'INSERT INTO orders (customer, total) VALUES ($1, $2) RETURNING *',
         [customer, total]
-    );
-
-    log('Order created', { orderId: order.id });  // shorthand for log.info()
-    return { status: 201, body: order };
-}
-```
-
-**Log levels:**
-
-| Method | Level | Use case |
-|--------|-------|----------|
-| `log(message, data?)` | `info` | Shorthand — logs at info level |
-| `log.debug(message, data?)` | `debug` | Verbose diagnostic info |
-| `log.info(message, data?)` | `info` | Normal operational events |
-| `log.warn(message, data?)` | `warn` | Unexpected but recoverable situations |
-| `log.error(message, data?)` | `error` | Failures that need attention |
-
-**Parameters:**
-
-- `message` — string describing the event. Non-string values are automatically JSON-stringified.
-- `data` — optional object with structured metadata (stored as JSONB). Useful for filtering and debugging.
-
-**Key behavior:**
-
-- Logging is **fire-and-forget** — it never blocks or throws. If the log write fails, it's silently dropped.
-- The `source` field is set automatically based on where the handler runs: `'server'` for server routes, `'webhook'` for webhook handlers, `'tool'` for agent tool handlers.
-- Correlation fields are set automatically based on context: `invocationId` for server routes and webhooks; `agentId` and `runId` for agent tool handlers. You don't need to pass them.
-- Available in **server routes**, **webhook handlers**, and **agent tool handlers**.
-
-### Handler Config
-
-Handlers can export a `config` object to customize behavior:
-
-```javascript
-// server/webhooks/stripe.js
-
-export const config = {
-    timeout: 60000,            // Wall-clock timeout in ms (default: 30000)
-    roles: ['admin', 'manager'] // Restrict to specific roles (see App Roles)
-};
-
-export async function POST({ query, request }) {
-    // Only users with 'admin' or 'manager' role can reach this handler
-    const event = request.body;
-    await query('INSERT INTO webhook_events (type, payload) VALUES ($1, $2)', [
-        event.type,
-        JSON.stringify(event)
-    ]);
-    return { status: 200, body: { received: true } };
-}
-```
-
-| Config | Type | Default | Description |
-|--------|------|---------|-------------|
-| `timeout` | `number` | `30000` | Wall-clock timeout in ms. Handler is killed if it exceeds this. |
-| `roles` | `string[]` | `[]` (open) | If set, only viewers with at least one matching role can call this route. Returns 403 otherwise. |
-
-### Using `notify()`
-
-Enqueue a push notification for delivery to a user's registered Informer GO devices. Messages are queued and delivered asynchronously via FCM. Returns immediately with the message ID. The app's ID is automatically attached — tapping the notification in GO opens this app.
-
-```javascript
-// Single notification
-export async function POST({ notify, request }) {
-    const { id } = await notify('jane', {
-        title: 'Order Shipped',
-        body: 'Your order #1234 has shipped!',
-        path: '/orders/1234'     // optional deep link within this app
-    });
-    return { notificationId: id };
-}
-```
-
-**Bulk notifications** — pass an array to send multiple in a single call:
-
-```javascript
-const { ids, queued } = await notify([
-    { username: 'jane', title: 'Report Ready', body: 'Your Q1 report is ready' },
-    { username: 'bob', title: 'Report Ready', body: 'Your Q1 report is ready' },
-]);
-```
-
-**Parameters (single):**
-
-| Parameter | Type | Description |
-|-----------|------|-------------|
-| `username` | string | Informer username to notify |
-| `message.title` | string | **Required.** Notification title |
-| `message.body` | string | Notification body text |
-| `message.path` | string | Deep link path within the app (e.g. `/orders/123`) |
-| `message.data` | object | Custom data (values coerced to strings for FCM) |
-
-**Bulk:** Array of `{ username, title, body, path?, data? }` objects.
-
-Messages are retried up to 3 times on failure, then moved to `dead` status. Message history is viewable via `GET /api/apps/{id}/messages`.
-
-### Using `email()`
-
-Enqueue an email for delivery via the tenant's configured mail transport (SMTP, Gmail API, Microsoft Graph). Returns immediately with the message ID.
-
-```javascript
-export async function POST({ email, request }) {
-    const { id } = await email('jane@acme.com', {
-        subject: 'Invoice #1234',
-        html: '<h2>Invoice</h2><p>Amount due: <strong>$1,500</strong></p>'
-    });
-    return { emailId: id };
-}
-```
-
-**Bulk emails:**
-
-```javascript
-const { ids, queued } = await email([
-    { to: 'jane@acme.com', subject: 'Monthly Report', html: '<p>See attached</p>' },
-    { to: 'bob@acme.com', subject: 'Monthly Report', html: '<p>See attached</p>', from: 'reports@acme.com' },
-]);
-```
-
-**Parameters (single):**
-
-| Parameter | Type | Description |
-|-----------|------|-------------|
-| `to` | string | **Required.** Recipient email address |
-| `message.subject` | string | **Required.** Email subject line |
-| `message.html` | string | HTML email body |
-| `message.from` | string | Sender address (defaults to tenant's configured default) |
-
-**Bulk:** Array of `{ to, subject, html, from? }` objects.
-
-### Sandbox Constraints
-
-Server handlers run in a sandboxed V8 isolate. This means:
-
-- **No Node.js APIs** — no `require()`, `fs`, `http`, `process`, `Buffer`, etc.
-- **No network access** — all external calls must go through `fetch()` (which enforces the whitelist)
-- **No filesystem** — use `query()` for persistence
-- **`btoa()` and `atob()` are available** — base64 encode/decode strings (Latin-1 only, per spec)
-- **UTF-8 base64 helpers** — `base64Decode()`, `base64Encode()`, `base64UrlDecode()`, `base64UrlEncode()` are async functions that correctly handle multi-byte UTF-8 characters (e.g. smart quotes, emoji). **Prefer these over `atob()`/`btoa()` for any text that may contain non-ASCII characters.**
-- **`markdown(text)`** — async function that converts markdown text to HTML using `marked`. Useful for generating formatted email bodies.
-- **`log(message, data?)`** — structured logging with level methods (`log.info()`, `log.warn()`, `log.error()`, `log.debug()`). Writes to `app_log` in production; prints to console in dev mode.
-- **128 MB memory limit** — the isolate is killed if it exceeds this
-- **Wall-clock timeout** — defaults to 30s, configurable via `config.timeout`
-- **Ephemeral** — a fresh isolate is created for each request; no state persists between calls
-
-### Calling Server Routes from App Code
-
-Server routes are accessed through the app's view API proxy at `/api/_server/`:
-
-```javascript
-// GET /api/_server/orders
-const response = await fetch('/api/_server/orders');
-const orders = await response.json();
-
-// POST /api/_server/orders
-const response = await fetch('/api/_server/orders', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ customer: 'Acme Corp', total: 1500 })
-});
-const newOrder = await response.json();
-
-// GET /api/_server/orders/abc123
-const response = await fetch('/api/_server/orders/abc123');
-const order = await response.json();
-
-// POST /api/_server/orders/abc123/approve
-const response = await fetch('/api/_server/orders/abc123/approve', {
-    method: 'POST'
-});
-```
-
-Server routes use the same authentication as the rest of the app's API proxy — the view token cookie is automatically included.
-
-### Project Structure with Server Routes
-
-```
-my-app/
-  migrations/
-    001-create-orders.sql
-    002-create-line-items.sql
-  server/
-    index.js              → GET /
-    orders/
-      index.js            → GET,POST /orders
-      [id].js             → GET,PUT,DELETE /orders/:id
-      [id]/
-        approve.js        → POST /orders/:id/approve
-        line-items.js     → GET,POST /orders/:id/line-items
-  public/
-    favicon.svg
-  src/
-    main.js
-  informer.yaml
-  index.html
-  package.json
-  .env
-```
-
-### Full Example: Orders API
-
-**Migration:**
-```sql
--- migrations/001-create-orders.sql
-CREATE TABLE orders (
-    id SERIAL PRIMARY KEY,
-    customer TEXT NOT NULL,
-    total NUMERIC(10,2) DEFAULT 0,
-    status TEXT DEFAULT 'pending',
-    created_at TIMESTAMPTZ DEFAULT NOW()
-);
-```
-
-**Server handlers:**
-```javascript
-// server/orders/index.js
-
-export async function GET({ query, request }) {
-    const status = request.query.status;
-    if (status) {
-        return await query('SELECT * FROM orders WHERE status = $1 ORDER BY created_at DESC', [status]);
-    }
-    return await query('SELECT * FROM orders ORDER BY created_at DESC LIMIT 100');
-}
-
-export async function POST({ query, request }) {
-    const { customer, total } = request.body;
-    if (!customer) {
-        return { status: 400, body: { error: 'Customer is required' } };
-    }
-    const [order] = await query(
-        'INSERT INTO orders (customer, total) VALUES ($1, $2) RETURNING *',
-        [customer, total || 0]
     );
     return { status: 201, body: order };
 }
 ```
 
-```javascript
-// server/orders/[id].js
+Handlers receive a single argument with the sandbox helpers (`query`, `fetch`, `context`, `respond`, `emit`, `notify`, `email`, `log`, `crypto`, `env`, `request`). Globals available without destructuring: `markdown`, `base64Encode` / `base64Decode` / `base64UrlEncode` / `base64UrlDecode`, `atob` / `btoa`.
 
-export async function GET({ query, request }) {
-    const [order] = await query('SELECT * FROM orders WHERE id = $1', [request.params.id]);
-    if (!order) return { status: 404, body: { error: 'Order not found' } };
-    return order;
-}
+Sandbox constraints: no Node APIs, no filesystem, no direct network — all I/O is through the injected callbacks. 128 MB memory, 30s default wall-clock timeout (configurable via `config.timeout`).
 
-export async function PUT({ query, request }) {
-    const { customer, total, status } = request.body;
-    const [order] = await query(
-        'UPDATE orders SET customer = COALESCE($1, customer), total = COALESCE($2, total), status = COALESCE($3, status) WHERE id = $4 RETURNING *',
-        [customer, total, status, request.params.id]
-    );
-    if (!order) return { status: 404, body: { error: 'Order not found' } };
-    return order;
-}
+Load `references/server-routes.md` for: full file-convention routing rules, every sandbox helper's calling shape and edge cases, return-value semantics, `respond()` early-ack pattern, `log()` levels and behavior, `notify()` / `email()` (single + bulk), `config.timeout` / `config.roles`, the full orders-API worked example.
 
-export async function DELETE({ query, request }) {
-    const [order] = await query('DELETE FROM orders WHERE id = $1 RETURNING id', [request.params.id]);
-    if (!order) return { status: 404, body: { error: 'Order not found' } };
-}
-```
+## Webhooks — overview
 
-**Client code:**
-```javascript
-// src/main.js
-
-async function loadOrders() {
-    const response = await fetch('/api/_server/orders');
-    const orders = await response.json();
-    renderTable(orders);
-}
-
-async function createOrder(customer, total) {
-    const response = await fetch('/api/_server/orders', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ customer, total })
-    });
-    if (!response.ok) {
-        const err = await response.json();
-        alert(err.error);
-        return;
-    }
-    loadOrders();
-}
-```
-
-### Local Development
-
-Server routes run locally during `npm run dev` via Vite's `ssrLoadModule()`. The Vite plugin:
-1. Detects a `server/` directory in your project
-2. Mounts middleware at `/api/_server` that loads and executes your handler files
-3. Passes the dev workspace connection to `query()` and proxies `fetch()` to the Informer server
-4. Supports HMR — editing a server handler file takes effect immediately without restarting
-
-No extra configuration is needed beyond having `.env` set up with `INFORMER_URL` and credentials. If your handlers use `query()`, ensure `migrations/` exists so the workspace is auto-provisioned (see [Local Development with Workspaces](#local-development-with-workspaces)).
-
-## Webhooks (Public Endpoints)
-
-Apps can expose **public webhook endpoints** that receive requests from external services (Gmail push notifications, Slack commands, Stripe events, etc.) without requiring Informer authentication. Webhook handlers run as the app owner — they have full access to `query()`, `fetch()`, `emit()`, `notify()`, and `email()`.
-
-### How It Works
-
-1. Create a `webhooks/` directory in your project root
-2. Add `.js` handler files using the same file-convention routing as `server/`
-3. Run `npm run deploy` — Informer scans, bundles, and registers webhook routes as public
-4. External services POST to `/api/apps/{naturalId}/_hook/{path}`
-
-### File-Convention Routing
-
-File paths under `webhooks/` map to URL routes, same pattern as `server/`:
-
-| File | Route | Public URL |
-|------|-------|------------|
-| `webhooks/gmail/push.js` | `/gmail/push` | `/api/apps/{id}/_hook/gmail/push` |
-| `webhooks/stripe/payment.js` | `/stripe/payment` | `/api/apps/{id}/_hook/stripe/payment` |
-| `webhooks/slack/commands.js` | `/slack/commands` | `/api/apps/{id}/_hook/slack/commands` |
-
-### Handler Structure
-
-Webhook handlers use the same export pattern as server routes. The handler context includes `crypto` for HMAC verification and `request.rawBody` for the original request bytes:
-
-```javascript
-// webhooks/gmail/push.js
-
-export const config = { timeout: 15000 };
-
-export async function POST({ query, request, fetch, emit, log, crypto, env }) {
-    // request.body — parsed JSON payload
-    // request.rawBody — original body string (for HMAC verification)
-    // request.headers — raw request headers
-    // crypto.hmac() — compute HMAC digests
-    // env — app environment variables (secrets, config)
-
-    const payload = request.body;
-
-    // Process the webhook
-    await query('INSERT INTO webhook_log (source, payload) VALUES ($1, $2)',
-        ['gmail', JSON.stringify(payload)]);
-
-    // Trigger an agent via event
-    await emit('gmail_notification', { historyId: payload.historyId });
-
-    return { status: 200, body: { ok: true } };
-}
-```
-
-### Key Differences from Server Routes
-
-| | Server Routes (`server/`) | Webhook Routes (`webhooks/`) |
-|---|---|---|
-| **URL prefix** | `/api/apps/{id}/view/api/_server/` | `/api/apps/{id}/_hook/` |
-| **Authentication** | Requires session/token (viewer's identity) | None — public endpoint |
-| **`request.user`** | Current viewer's identity | `null` |
-| **`request.roles`** | Viewer's assigned roles | `[]` |
-| **`fetch()` runs as** | The viewer | The app owner (team admin) |
-| **Use case** | App-internal CRUD, user-specific logic | External service callbacks |
-
-### Sandbox Capabilities
-
-Webhook handlers have the same sandbox capabilities as server routes:
-
-| Callback | Description |
-|----------|-------------|
-| `query(sql, params?)` | Execute SQL against the app's workspace |
-| `fetch(path, options?)` | Make authenticated API calls (runs as app owner) |
-| `emit(event, payload?)` | Fire app events (trigger agents) |
-| `notify(username, message)` | Enqueue push notification (single or bulk) |
-| `email(to, message)` | Enqueue email (single or bulk) |
-| `respond(body)` | Send early response while handler continues in background |
-| `crypto.hmac(algorithm, key, data, encoding?)` | Compute HMAC digest (delegates to Node.js `crypto` on the host). Default encoding: `'hex'`. |
-| `markdown(text)` | Convert markdown text to HTML (async). Uses `marked`. |
-| `log(message, data?)` | Structured logging. Also `log.info()`/`log.warn()`/`log.error()`/`log.debug()`. Writes to `app_log`. See [Using `log()`](#using-log). |
-| `base64Decode(encoded)` | Decode base64 to UTF-8 string (async). Handles multi-byte characters correctly. |
-| `base64Encode(string)` | Encode UTF-8 string to base64 (async). |
-| `base64UrlDecode(encoded)` | Decode base64url to UTF-8 string (async). Ideal for Gmail API payloads. |
-| `base64UrlEncode(string)` | Encode UTF-8 string to base64url (async). |
-| `env` | App environment variables from `app.defn.env` |
-
-Webhook routes also provide `request.rawBody` — the original request body as a string, preserving the exact bytes sent by the caller. Use this for HMAC signature verification (not `request.body`, which is parsed JSON).
-
-### Webhook Verification
-
-Since webhook endpoints are public, **the handler is responsible for verifying authenticity**. The sandbox provides `crypto.hmac()` for HMAC signature verification and `env` for storing secrets.
-
-**HMAC signature verification** (GitHub, Stripe, Shopify):
+Apps can expose **token-gated external endpoints** under `webhooks/` for receiving callbacks from external services (Stripe, GitHub, Slack, Gmail push). Each URL embeds a signed `?token=` query parameter — unguessable, not anonymous. Handlers run as the app owner.
 
 ```javascript
 // webhooks/github.js
-export async function POST({ crypto, request, env }) {
+export async function POST({ crypto, request, env, query }) {
     const signature = request.headers['x-hub-signature-256'];
-    if (!signature) return { status: 401, body: { error: 'Missing signature' } };
-
-    // Compute HMAC over the raw body bytes (not parsed JSON)
     const expected = await crypto.hmac('sha256', env.GITHUB_WEBHOOK_SECRET, request.rawBody);
     if (signature !== `sha256=${expected}`) {
         return { status: 401, body: { error: 'Invalid signature' } };
     }
-
-    // Signature valid — process the event
-    const event = request.body;
-    await query('INSERT INTO webhook_log (source, event, payload) VALUES ($1, $2, $3)',
-        ['github', request.headers['x-github-event'], JSON.stringify(event)]);
-
-    return { ok: true };
+    // ...process the event
 }
 ```
 
-**Shared secret** (custom integrations):
+Webhook handlers have a **subset** of server-route capabilities: `query`, `fetch`, `emit`, `respond`, `crypto`, `markdown`, `log`, the base64 globals, `env`, and `request.rawBody` (for HMAC verification). **`notify()` and `email()` are NOT available** — they throw `TypeError`.
 
-```javascript
-// webhooks/my-callback.js
-export async function POST({ request, env }) {
-    if (request.headers['x-webhook-secret'] !== env.CALLBACK_SECRET) {
-        return { status: 401, body: { error: 'Unauthorized' } };
-    }
-
-    // Secret matches — process the payload
-    return { received: true };
-}
-```
-
-**Setting environment variables:** Store secrets in `app.defn.env` via the app update endpoint:
-
-```javascript
-await fetch(`/api/apps/${appId}`, {
-    method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-        defn: { env: { GITHUB_WEBHOOK_SECRET: 'your-secret-here' } }
-    })
-});
-```
-
-### Project Structure with Webhooks
-
-```
-my-app/
-  webhooks/
-    gmail/
-      push.js               → POST /gmail/push
-    stripe/
-      payment.js            → POST /stripe/payment
-    slack/
-      commands.js            → POST /slack/commands
-  server/
-    orders/
-      index.js              → GET,POST /orders (authenticated)
-  tools/
-    send_email.js
-  migrations/
-    001-create-tables.sql
-  informer.yaml
-  index.html
-  package.json
-```
+Load `references/webhooks.md` for: file-convention routing, the `?token=` issuance/verification flow, full HMAC verification examples (GitHub, Stripe, shared-secret), `app.defn.env` for storing secrets.
 
 ## App Context
 
@@ -2014,7 +674,40 @@ const theme = window.__INFORMER__?.theme; // 'light' or 'dark'
 const roles = window.__INFORMER__?.roles; // string[] of assigned role IDs
 ```
 
-In dev mode, the Vite plugin mocks this with placeholder values (theme defaults to `'light'`, roles defaults to `[]`).
+When the page is rendering a **widget entry** (not the main app), the context object also carries widget metadata:
+
+```javascript
+const widget = window.__INFORMER__?.widget; // { id, label } when rendering a widget; undefined otherwise
+```
+
+Use this to branch behavior between the main app surface and a widget render (different fetch URLs, different DOM layout, etc.).
+
+In dev mode, the Vite plugin mocks this with placeholder values (theme defaults to `'light'`, roles defaults to `[]`, no widget context).
+
+### Responding to theme
+
+Use the theme value to adapt your app's appearance:
+
+```javascript
+const theme = window.__INFORMER__?.theme || 'light';
+document.documentElement.setAttribute('data-theme', theme);
+```
+
+```css
+:root { --bg: #ffffff; --text: #1a1a1a; }
+[data-theme="dark"] { --bg: #1e1e1e; --text: #e0e0e0; }
+body { background: var(--bg); color: var(--text); }
+```
+
+To override the theme in dev mode, pass `mock.theme` in `vite.config.js`:
+
+```javascript
+import informer from '@entrinsik/vite-plugin-informer';
+
+export default {
+    plugins: [informer({ mock: { theme: 'dark' } })]
+};
+```
 
 ## HTML5 Client-Side Routing
 
@@ -2063,7 +756,7 @@ Apps can define custom roles that publishers assign when sharing. This enables r
 
 ### Defining Roles
 
-Add a `roles:` section to your `informer.yaml` (see [App Configuration](#app-configuration-informeryaml)):
+Add a `roles:` section to your `informer.yaml`:
 
 ```yaml
 # informer.yaml
@@ -2120,1155 +813,51 @@ export default {
 };
 ```
 
-## Built-in App Copilot
+## Built-in App Copilot — overview
 
-Every Informer App gets a **built-in AI copilot sidebar** — a chat panel that slides in from the right side of the app window.
-
-### How the Copilot Works
-
-- **Hidden by default**: The copilot button is suppressed for apps. The app must explicitly activate it (see below).
-- **Overlay mode** (default): The sidebar slides over the app content with a backdrop blur. Clicking outside the sidebar or pressing the X closes it.
-- **Pinned mode**: Users can click the pin icon to dock the sidebar. The app content shrinks to make room, and the sidebar stays open while the user works.
-- **Persistent chat**: Each app gets a persistent embedded chat session. Conversations are preserved across opens/closes — the user picks up where they left off.
-
-The copilot has the Informer API skill **automatically enabled** — the AI gets `apiCall` and `searchRoutes` tools without any extra configuration.
-
-### Activating the Copilot
-
-The copilot button is hidden by default for apps. It activates automatically when tools are registered via `registerTool()`. You can also activate it explicitly or paint your own button:
-
-**Automatic** — registering any tool activates the copilot button:
-```javascript
-__INFORMER__.registerTool({ name: 'getContext', ... }); // button appears
-```
-
-**Explicit** — show the platform button without registering tools:
-```javascript
-window.__INFORMER__?.showCopilot();
-```
-
-**Custom** — paint your own button and call `openChat()` directly. This gives you full control over where and when the copilot entry point appears:
-```javascript
-document.querySelector('#my-ai-btn').addEventListener('click', () => {
-    __INFORMER__.openChat({ prompt: 'Analyze current dashboard data' });
-});
-```
-
-### Opening the Copilot from App Code
-
-Apps can programmatically open the copilot with context. This lets users click a data point, insight, or button and land in a chat pre-loaded with relevant data and instructions.
-
-**Important:** Your `instructions` should spell out which APIs to call. The app knows what data it's working with — tell the AI the specific datasets, integrations, or query endpoints to use.
+Every Informer App gets a **built-in AI copilot sidebar** — a chat panel that slides in from the right side of the app window. Hidden by default; activates automatically when the app calls `registerTool()`, or explicitly via `showCopilot()`, or via a paint-your-own button that calls `openChat({ prompt, context, instructions })`.
 
 ```javascript
 __INFORMER__.openChat({
     prompt: 'Why did revenue spike in Q4?',
     context: { revenue: 1250000, quarter: 'Q4' },
-    instructions: 'Use the Informer API to query the sales-data dataset (admin:sales-data) ' +
-        'for year-over-year Q4 trends. Use the Salesforce integration to pull Opportunity ' +
-        'records for pipeline context.'
+    instructions: 'Use the Informer API to query the sales-data dataset for year-over-year Q4 trends.'
 });
 ```
 
-| Option | Type | Description |
-|--------|------|-------------|
-| `prompt` | `string` | Initial user message sent to the AI. If omitted, chat opens empty with context loaded. |
-| `context` | `object` | Data points injected into the AI's context — current state, filters, selected rows, etc. |
-| `instructions` | `string` | **Tell the AI which APIs to call.** Name specific datasets, integrations, queries, and what to focus on. |
-| `skills` | `string[]` | Additional resources to attach: `"dataset:owner:slug"`, `"library:id"` (optional). |
+Apps can also call Informer's AI directly via three endpoints (use the `go_everyday` model slug): `_chat` (SSE stream, supports tools), `_completion` (SSE stream, simple text), `_object` (JSON, structured output). All three accept `outputSize` (`small` / `medium` / `large`) on current servers.
 
-The AI automatically receives:
-- **`apiCall`** — Make authenticated requests to any Informer API endpoint
-- **`searchRoutes`** — Discover available API endpoints and their parameters
+Load `references/copilot.md` for: full `openChat()` / `showCopilot()` / `registerTool()` reference, the report-bridge bidirectional pattern, AI SDK UIMessage format (parts arrays, not OpenAI), the inline tools object-keyed-by-name format, SSE event types and stream parsing, the `useChat` React hook pattern with `addToolOutputRef`, defensive parsing for `_object` Haiku drift, dev-mode mocks.
 
-The app's identity (`id`, `name`, `url`) is automatically included as the chat's source — you don't need to pass it.
+## Agents — overview
 
-**Example — chart click handler:**
-```javascript
-chart.on('click', (point) => {
-    __INFORMER__.openChat({
-        prompt: `Tell me about ${point.label}`,
-        context: {
-            field: point.field,
-            value: point.value,
-            filters: currentFilters
-        },
-        instructions: `Use the Informer API to search the sales-data dataset. ` +
-            `The user clicked on ${point.field}=${point.value}. ` +
-            `Analyze trends and related records.`
-    });
-});
-```
-
-**Example — insight card:**
-```javascript
-document.querySelector('.insight').addEventListener('click', () => {
-    __INFORMER__.openChat({
-        prompt: 'What should we do about this?',
-        context: {
-            insight: 'AWS spend trending 18% over budget',
-            currentSpend: 68400,
-            budget: 58000
-        },
-        instructions: 'The user is viewing a cost optimization insight. ' +
-            'Use the Informer API to query the cloud-costs dataset for detailed breakdown. ' +
-            'Suggest concrete actions to reduce spend.'
-    });
-});
-```
-
-**Dev mode:** `__INFORMER__.openChat()` and `showCopilot()` are not available in local Vite dev mode since there is no parent GO app. You can mock them for testing:
-
-```javascript
-if (!window.__INFORMER__?.openChat) {
-    window.__INFORMER__ = window.__INFORMER__ || {};
-    window.__INFORMER__.openChat = (opts) => console.log('openChat:', opts);
-}
-if (!window.__INFORMER__?.showCopilot) {
-    window.__INFORMER__ = window.__INFORMER__ || {};
-    window.__INFORMER__.showCopilot = () => console.log('showCopilot: copilot button would appear');
-}
-```
-
-### Registering Tools (Report Bridge)
-
-Apps can register tools that the copilot can call at runtime to get fresh data. This enables **bidirectional** communication — instead of sending a static snapshot via `openChat()`, the AI can ask the app for its current state on-demand.
-
-The most common tool is `getContext`, which returns the app's current filters, selections, and visible data.
-
-```javascript
-__INFORMER__.registerTool({
-    name: 'getContext',
-    description: 'Returns the current app state including active filters, selected data, and summary metrics.',
-    schema: {
-        type: 'object',
-        properties: {},
-        additionalProperties: false
-    },
-    handler: () => {
-        return {
-            filters: getCurrentFilters(),
-            selectedRows: getSelectedRows(),
-            metrics: getSummaryMetrics(),
-            view: getCurrentView()
-        };
-    }
-});
-```
-
-| Option | Type | Description |
-|--------|------|-------------|
-| `name` | `string` | **Required.** Tool name — exposed to the AI as `report_<name>` (e.g., `report_getContext`). |
-| `description` | `string` | What the tool does. The AI reads this to decide when to call it. |
-| `schema` | `object` | JSON Schema for the tool's input parameters. Use `{}` properties for no-arg tools. |
-| `handler` | `function` | **Required.** Called when the AI invokes the tool. Can return a value or a Promise. The return value is serialized to JSON and sent back to the AI. |
-
-**How it works:**
-1. App calls `registerTool()` during initialization (before user opens copilot)
-2. The handler stays local in the app; only metadata (name, description, schema) is sent to GO
-3. When the user opens the copilot, the AI sees `report_getContext` as an available tool
-4. If the AI calls it, GO sends a message back to the app, the handler runs, and the result is returned to the AI
-
-**Timing:** Tools must be registered before `openChat()` is called. Register them on page load or after your app initializes.
-
-**Cleanup:** Tools are automatically unregistered when the app page unloads (via `beforeunload`).
-
-**Example — dashboard with live filters:**
-```javascript
-// Register on page load
-__INFORMER__.registerTool({
-    name: 'getContext',
-    description: 'Get the current dashboard state: active filters, date range, and visible KPIs.',
-    schema: { type: 'object', properties: {} },
-    handler: () => ({
-        dateRange: { start: startDate, end: endDate },
-        region: selectedRegion,
-        department: selectedDepartment,
-        kpis: {
-            totalRevenue: revenueEl.textContent,
-            openDeals: dealsEl.textContent,
-            conversionRate: rateEl.textContent
-        }
-    })
-});
-
-// Later, user clicks "Ask AI"
-askButton.addEventListener('click', () => {
-    __INFORMER__.openChat({
-        prompt: 'Why is the conversion rate dropping?',
-        instructions: 'Use report_getContext to see the current dashboard state. ' +
-            'Then query the sales-data dataset (admin:sales-data) for trends.'
-    });
-});
-```
-
-**Example — tool with parameters:**
-```javascript
-__INFORMER__.registerTool({
-    name: 'getRowDetails',
-    description: 'Get detailed data for a specific row by its ID.',
-    schema: {
-        type: 'object',
-        properties: {
-            rowId: { type: 'string', description: 'The row ID to look up' }
-        },
-        required: ['rowId']
-    },
-    handler: (args) => {
-        const row = dataStore.getRow(args.rowId);
-        return row || { error: 'Row not found' };
-    }
-});
-```
-
-**Dev mode:** `registerTool()` is not available in local Vite dev mode. Mock it for testing:
-
-```javascript
-if (!window.__INFORMER__?.registerTool) {
-    window.__INFORMER__ = window.__INFORMER__ || {};
-    window.__INFORMER__.registerTool = (def) => console.log('registerTool:', def.name);
-}
-```
-
-### AI Completions from Apps
-
-Apps can call Informer's AI directly for inline insights, structured data extraction, or interactive chat. Use the `go_everyday` model slug for all requests. Three endpoints are available:
-
-| Endpoint | Response | Tools | Use Case |
-|----------|----------|-------|----------|
-| `_chat` | SSE stream | Yes | Interactive AI with tool calling |
-| `_completion` | SSE stream | No | Simple text generation |
-| `_object` | JSON | No | Structured data extraction |
-
-**Data access:** Add the endpoints to your `data-access.yaml`:
-```yaml
-apis:
-  - POST /api/models/go_everyday/_chat
-  - POST /api/models/go_everyday/_completion
-  - POST /api/models/go_everyday/_object
-```
-
-#### Streaming Chat (`_chat`)
-
-The only endpoint that supports tools. Use this when the AI needs to call functions or when you want multi-turn conversations.
-
-```javascript
-const response = await fetch('/api/models/go_everyday/_chat', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-        messages: [
-            {
-                role: 'user',
-                parts: [{ type: 'text', text: 'Summarize the sales trend' }]
-            }
-        ],
-        system: 'You are a data analyst. Be concise.',
-        tools: {
-            getData: {
-                description: 'Fetch current sales data from the dashboard',
-                inputSchema: {
-                    type: 'object',
-                    properties: {
-                        metric: { type: 'string', description: 'Which metric to fetch' }
-                    },
-                    required: ['metric']
-                }
-            }
-        }
-    })
-});
-```
-
-**Message format — AI SDK UIMessage (not OpenAI format):**
-
-Messages must use the [AI SDK UIMessage format](https://ai-sdk.dev/docs/reference/ai-sdk-ui/use-chat#ui-messages) with a `parts` array. Do not use the OpenAI `{ role, content }` string format.
-
-```javascript
-// CORRECT — AI SDK UIMessage format (parts array)
-messages: [
-    {
-        role: 'user',
-        parts: [{ type: 'text', text: 'Your message here' }]
-    }
-]
-
-// WRONG — OpenAI format (content string)
-messages: [
-    { role: 'user', content: 'Your message here' }
-]
-
-// WRONG — system message in array (use the top-level `system` field instead)
-messages: [
-    { role: 'system', content: '...' },
-    { role: 'user', content: '...' }
-]
-```
-
-Part types: `{ type: 'text', text: '...' }` for text content. Assistant messages from previous turns may also contain `tool-invocation` and `tool-result` parts — pass these through as-is for multi-turn tool calling.
-
-**Inline tools format — this is NOT the OpenAI format:**
-
-The `tools` property is a **plain object keyed by tool name**, not an array. Each value has `description` and `inputSchema` (or `parameters`). Do not use the OpenAI `tools: [{ type: "function", function: { ... } }]` array format — the server will reject it with a 400.
-
-```javascript
-// CORRECT — Informer format (object keyed by name)
-tools: {
-    searchSchema: {
-        description: 'Search tables and fields by keyword',
-        inputSchema: {
-            type: 'object',
-            properties: {
-                query: { type: 'string', description: 'Keyword to search for' }
-            },
-            required: ['query']
-        }
-    },
-    runQuery: {
-        description: 'Execute a SQL query against the datasource',
-        inputSchema: {
-            type: 'object',
-            properties: {
-                sql: { type: 'string', description: 'The SQL query to run' }
-            },
-            required: ['sql']
-        }
-    }
-}
-
-// WRONG — OpenAI format (array with type/function wrappers)
-tools: [
-    { type: 'function', function: { name: 'searchSchema', parameters: { ... } } }
-]
-```
-
-The server automatically adds an `aiProgressMessage` string parameter to every tool — the AI fills this in to show progress to the user while the tool runs.
-
-**SSE response format (AI SDK UIMessage stream):**
-
-The `_chat` and `_completion` endpoints return an SSE stream (`text/event-stream`). Each event is a `data:` line containing a JSON object with a `type` field. The stream ends with `data: [DONE]`.
-
-Key event types:
-
-| Type | Description | Key Fields |
-|------|-------------|------------|
-| `text-delta` | Text content chunk | `delta` (string to append) |
-| `tool-input-start` | Tool call begins | `toolCallId`, `toolName` |
-| `tool-input-delta` | Tool input JSON chunk | `toolCallId`, `inputTextDelta` |
-| `tool-input-available` | Tool input complete | `toolCallId`, `toolName`, `input` (parsed args) |
-| `tool-output-available` | Tool result | `toolCallId`, `output` |
-| `tool-output-error` | Tool failed | `toolCallId`, `errorText` |
-| `finish-step` | Step complete | `usage`, `finishReason` |
-| `finish` | Stream complete | — |
-| `error` | Error occurred | `errorText` |
-
-For server-registered functions (via `functions`), the server executes tool calls automatically through `maxSteps` rounds. For inline tools (via `tools`), the server also executes them if their handler is registered server-side — otherwise the tool call appears in the stream.
-
-**Reading the SSE stream:**
-
-```javascript
-async function streamChat(messages, options = {}) {
-    const response = await fetch('/api/models/go_everyday/_chat', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ messages, ...options })
-    });
-
-    const reader = response.body.getReader();
-    const decoder = new TextDecoder();
-    let fullText = '';
-    let buffer = '';
-
-    while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split('\n');
-        buffer = lines.pop(); // keep incomplete line in buffer
-
-        for (const line of lines) {
-            if (!line.startsWith('data: ')) continue;
-            const payload = line.slice(6);
-            if (payload === '[DONE]') break;
-
-            try {
-                const event = JSON.parse(payload);
-                switch (event.type) {
-                    case 'text-delta':
-                        fullText += event.delta;
-                        onTextUpdate?.(fullText);
-                        break;
-                    case 'tool-input-available':
-                        onToolCall?.(event.toolName, event.input, event.toolCallId);
-                        break;
-                    case 'error':
-                        onError?.(event.errorText);
-                        break;
-                }
-            } catch {}
-        }
-    }
-
-    return fullText;
-}
-```
-
-**Complete example — SQL assistant with tool calling:**
-
-```javascript
-// Tool implementations — the frontend tool handlers proxy through
-// app server routes (server/tools/search-schema.js,
-// server/tools/run-query.js) that use context.<slot>.query(...) on
-// the bound datasource. The frontend never sees the datasource UUID.
-// See Accessing Your Dependencies for why this matters.
-const toolHandlers = {
-    searchSchema: async ({ query }) => {
-        const resp = await fetch('/api/_server/tools/search-schema', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ query })
-        });
-        return resp.json();
-    },
-    runQuery: async ({ sql }) => {
-        const resp = await fetch('/api/_server/tools/run-query', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ sql })
-        });
-        return resp.json();
-    }
-};
-
-// Send chat request with inline tools
-const response = await fetch('/api/models/go_everyday/_chat', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-        messages: [
-            {
-                role: 'user',
-                parts: [{ type: 'text', text: 'Show me orders with customer and product info' }]
-            }
-        ],
-        system: 'You are a SQL assistant. Use searchSchema to discover tables before writing queries.',
-        tools: {
-            searchSchema: {
-                description: 'Search tables, fields, and relationships by keyword',
-                inputSchema: {
-                    type: 'object',
-                    properties: {
-                        query: { type: 'string', description: 'Keyword to search for' }
-                    },
-                    required: ['query']
-                }
-            },
-            runQuery: {
-                description: 'Execute a SQL query and return results',
-                inputSchema: {
-                    type: 'object',
-                    properties: {
-                        sql: { type: 'string', description: 'SQL query to execute' }
-                    },
-                    required: ['sql']
-                }
-            }
-        }
-    })
-});
-```
-
-**Using the AI SDK `useChat` hook (React — recommended):**
-
-The `_chat` endpoint streams the [AI SDK UI Message Stream Protocol](https://ai-sdk.dev/docs/ai-sdk-ui/stream-protocol). For React apps, the `useChat` hook from `@ai-sdk/react` handles SSE parsing, tool-call dispatch, and automatic resubmission — no manual stream reading needed.
-
-```bash
-npm install ai @ai-sdk/react
-```
-
-```tsx
-import { useRef } from 'react';
-import { useChat } from '@ai-sdk/react';
-import { DefaultChatTransport, lastAssistantMessageIsCompleteWithToolCalls } from 'ai';
-
-function NlQueryBar({ datasourceId }) {
-    // Ref to break the circular dependency: onToolCall needs addToolOutput,
-    // but addToolOutput comes from the useChat return value
-    const addToolOutputRef = useRef(null);
-
-    const { messages, sendMessage, addToolOutput, status } = useChat({
-        // Point the transport at the Informer _chat endpoint
-        transport: new DefaultChatTransport({
-            api: '/api/models/go_everyday/_chat',
-            // Pass tools and system prompt as extra body fields
-            body: {
-                system: 'You are a SQL assistant. Use searchSchema to find tables before writing queries.',
-                tools: {
-                    searchSchema: {
-                        description: 'Search tables, fields, and relationships by keyword',
-                        inputSchema: {
-                            type: 'object',
-                            properties: {
-                                query: { type: 'string', description: 'Keyword to search for' }
-                            },
-                            required: ['query']
-                        }
-                    }
-                }
-            },
-        }),
-
-        // Auto-resubmit when all tool results are filled in — this creates the tool-call loop
-        sendAutomaticallyWhen: lastAssistantMessageIsCompleteWithToolCalls,
-
-        // Execute tool calls client-side and feed results back
-        async onToolCall({ toolCall }) {
-            const emit = addToolOutputRef.current;
-            if (toolCall.toolName === 'searchSchema') {
-                const res = await fetch(`/api/datasources/${datasourceId}/_search-metadata`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ query: toolCall.input.query }),
-                });
-                const data = await res.json();
-                // IMPORTANT: `tool` (the tool name) is required alongside toolCallId and output
-                emit({ tool: 'searchSchema', toolCallId: toolCall.toolCallId, output: data });
-            }
-        },
-    });
-
-    // Sync the ref after hook returns — onToolCall reads from this ref
-    addToolOutputRef.current = addToolOutput;
-
-    const isLoading = status === 'submitted' || status === 'streaming';
-
-    return (
-        <input
-            placeholder="Describe what you want to query..."
-            disabled={isLoading}
-            onKeyDown={(e) => {
-                if (e.key === 'Enter') {
-                    sendMessage({
-                        parts: [{ type: 'text', text: e.target.value }],
-                    });
-                }
-            }}
-        />
-    );
-}
-```
-
-**Important patterns:**
-
-- **`addToolOutputRef` pattern:** `onToolCall` is passed into `useChat` at hook init time, but it needs `addToolOutput` from the hook's return value. Use a ref that's synced after the hook call — the callback reads from the ref at execution time.
-- **`tool` parameter is required:** `addToolOutput` requires `{ tool, toolCallId, output }` — passing just `{ toolCallId, output }` will cause a TypeScript error. The `tool` value must be the tool name string (e.g. `'searchSchema'`).
-
-**How the loop works:**
-1. `sendMessage()` sends the user message to `/api/models/go_everyday/_chat`
-2. The server streams back SSE events — `useChat` parses them into `messages` automatically
-3. When a `tool-input-available` event arrives, `onToolCall` fires with the parsed tool call
-4. You execute the tool locally and call `addToolOutput()` with the result
-5. `sendAutomaticallyWhen: lastAssistantMessageIsCompleteWithToolCalls` detects all tool calls have results and resubmits the conversation automatically
-6. The server generates the next response (which may have more tool calls or final text)
-7. The loop continues until the model produces a text-only response and `status` becomes `'ready'`
-
-**Key `useChat` return values:**
-
-| Value | Type | Description |
-|-------|------|-------------|
-| `messages` | `UIMessage[]` | Full conversation history with typed `parts` arrays |
-| `sendMessage` | `function` | Send a new user message (with `parts` or `text`) |
-| `addToolOutput` | `function` | Feed a tool result back: `{ tool, toolCallId, output }` — `tool` is the tool name string |
-| `status` | `string` | `'ready'` \| `'submitted'` \| `'streaming'` \| `'error'` |
-| `stop` | `function` | Abort the current stream |
-| `error` | `Error` | Last error, if any |
-
-**Full `_chat` payload options:**
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `messages` | `array` | **Required.** AI SDK UIMessage format — each message has `role` and `parts: [{ type: 'text', text }]`. |
-| `system` | `string` | System prompt — sets the AI's behavior and context. Do NOT put system as a message; use this field. |
-| `tools` | `object` | Inline tool definitions — **object keyed by name**, each with `description` and `inputSchema`. |
-| `functions` | `string[]` | Built-in server function names to enable: `"evaluateMath"`, `"webSearch"`, etc. |
-| `toolkitIds` | `string[]` | Server-side toolkit IDs to attach. |
-| `maxSteps` | `number` | Max tool-calling round trips (default: 20). |
-| `outputSize` | `string` | `"small"`, `"medium"` (default), or `"large"` — controls max output length. |
-
-#### Simple Completion (`_completion`)
-
-Fastest path for one-shot text generation. No tools, no multi-turn.
-
-```javascript
-const response = await fetch('/api/models/go_everyday/_completion', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-        prompt: 'Write a one-sentence summary of this data: ' + JSON.stringify(chartData)
-    })
-});
-
-// Same SSE stream format as _chat — parse text-delta events
-const text = await streamChat([], { prompt: '...' });
-```
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `prompt` | `string` | **Required.** The text prompt (converted to a user message internally). |
-| `messages` | `array` | Optional prior messages for context (UIMessage format with `parts`). |
-
-#### Structured Output (`_object`)
-
-Returns a JSON object matching a schema. Not streaming — returns a single JSON response.
-
-```javascript
-const response = await fetch('/api/models/go_everyday/_object', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-        messages: [
-            {
-                role: 'user',
-                parts: [{
-                    type: 'text',
-                    text: `Analyze this data and extract insights:\n${JSON.stringify(salesData)}`
-                }]
-            }
-        ],
-        schema: {
-            type: 'object',
-            properties: {
-                summary: { type: 'string', description: 'One paragraph overview' },
-                trend: { type: 'string', enum: ['up', 'down', 'flat'] },
-                topMetric: { type: 'string' },
-                recommendations: {
-                    type: 'array',
-                    items: { type: 'string' }
-                }
-            },
-            required: ['summary', 'trend', 'recommendations']
-        }
-    })
-});
-
-const insights = await response.json();
-// { summary: "...", trend: "up", topMetric: "Revenue", recommendations: ["...", "..."] }
-```
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `messages` | `array` | **Required.** Messages to analyze (UIMessage format with `parts`). |
-| `schema` | `object` | **Required.** JSON Schema defining the output structure. |
-| `outputSize` | `string` | `"small"`, `"medium"` (default), or `"large"`. |
-
-**Dev mode:** All three endpoints work in local dev mode — the Vite proxy handles authentication automatically.
-
-#### Defensive Parsing for `_object` Responses
-
-The `_object` endpoint uses `go_everyday` (Haiku-class) which sometimes deviates from the provided JSON schema. Common failure modes:
-
-- **Array fields returned as strings** — e.g. `risks: "some text"` instead of `risks: ["some text"]`
-- **Array items scattered into top-level keys** — e.g. `item_1: "...", item_2: "..."` instead of a proper array
-- **Enum values slightly off** — missing or novel labels
-- **Numbers as strings** — e.g. `score: "75"` instead of `score: 75`
-
-Always normalize `_object` responses before using them. Never call `.map()` or access array methods on a response field without checking its type first. Write a normalizer function that:
-
-1. Validates each field's type and coerces when possible (`typeof x === 'string'` → wrap in array)
-2. Collects scattered `item_N` keys back into arrays
-3. Clamps numeric ranges
-4. Falls back to sensible defaults for missing/malformed fields
-
-**Reinforce the schema in the prompt text itself** — include a concrete JSON example showing the exact shape you expect. This gives the model two signals (prompt + schema) and significantly reduces drift:
-
-```javascript
-const resp = await fetch('/api/models/go_everyday/_object', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-        messages: [{
-            role: 'user',
-            parts: [{
-                type: 'text',
-                // Include explicit JSON shape example at the end of the prompt
-                text: `Analyze this data...\n\nRespond with JSON only: { "summary": "<text>", "items": ["<item1>", "<item2>"] }`
-            }]
-        }],
-        schema: { /* formal schema here */ }
-    })
-});
-
-const raw = await resp.json();
-// NEVER use raw directly — always normalize first
-const result = normalize(raw);
-```
-
-### Responding to Theme
-
-Use the theme value to adapt your app's appearance:
-
-```javascript
-const theme = window.__INFORMER__?.theme || 'light';
-document.documentElement.setAttribute('data-theme', theme);
-```
-
-```css
-:root { --bg: #ffffff; --text: #1a1a1a; }
-[data-theme="dark"] { --bg: #1e1e1e; --text: #e0e0e0; }
-body { background: var(--bg); color: var(--text); }
-```
-
-To override the theme in dev mode, pass `mock.theme` in `vite.config.js`:
-
-```javascript
-import informer from '@entrinsik/vite-plugin-informer';
-
-export default {
-    plugins: [informer({ mock: { theme: 'dark' } })]
-};
-```
-
-## Agents (Event-Driven AI Automation)
-
-Apps can define **agents** — AI-powered workflows that listen for events, execute tools, and chain together to automate complex tasks. Agents are declared in `informer.yaml`, run server-side in isolated V8 sandboxes, and have access to the app's workspace database, API whitelist, and custom tools.
-
-### Defining Agents in `informer.yaml`
-
-Add an `agents:` section to your `informer.yaml`:
+Apps can declare **agents** in `informer.yaml` — AI-powered workflows that listen for events, execute tools defined in `tools/*.js`, and chain together to automate complex tasks. Two trigger paths: event-driven (via `emit()`) and cron-scheduled.
 
 ```yaml
 # informer.yaml
-dependencies:
-  sales:
-    target: dataset
-    defaultBinding: 7d5a9b1e-0c83-4bde-9e2a-3a4b5c6d7e8f
-
-agents:
-  order-processor:
-    description: "Processes new orders and updates inventory"
-    instructions: |
-      You are an order processing agent. When triggered by a new order event,
-      validate the order, check inventory levels, and update the database.
-      Use the check_inventory tool to verify stock before confirming.
-    model: go_everyday
-    tools:
-      - check_inventory
-      - update_status
-    on:
-      - order_created
-
-  daily-report:
-    description: "Generates a daily summary report"
-    instructions: |
-      Generate a summary of today's activity. Query the orders table
-      for today's records and calculate totals. Post results to Slack.
-    model: go_everyday
-    webSearch: true
-    tools:
-      - send_notification
-    toolkits:
-      - admin:slack-notifications
-    assistants:
-      - admin:report-writer
-    cron: "0 8 * * 1-5"   # Weekdays at 8:00 AM
-
-events:
-  order_created:
-    description: "Fired when a new order is submitted"
-```
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `description` | `string` | Display name/description shown in the Agents UI |
-| `instructions` | `string` | System prompt for the AI model — tells the agent what to do |
-| `model` | `string` | AI model slug (default: `go_everyday`) |
-| `tools` | `string[]` | Tool names from the app's `tools/` directory |
-| `toolkits` | `string[]` | Informer toolkit IDs (naturalId or UUID) to attach — their tools become available to the agent |
-| `assistants` | `string[]` | Informer assistant IDs (naturalId or UUID) — their instructions are merged into the agent's system prompt |
-| `on` | `string \| string[]` | Event name(s) that trigger this agent |
-| `cron` | `string` | 5-field cron expression for scheduled execution (e.g. `"0 8 * * 1-5"` = weekdays at 8 AM) |
-| `webSearch` | `boolean` | Enable web search (default: `false`). When enabled, the AI model can search the web for current information during execution. |
-
-The optional `events:` section documents available events (for reference only — events don't need to be declared to work).
-
-### Tools
-
-Agents use tools defined in your app's `tools/` directory. Each tool is a `.js` file that exports a `description`, `schema`, and `handler`:
-
-```
-my-app/
-  tools/
-    check_inventory.js
-    update_status.js
-    notifications/
-      send_notification.js    → tool name: "notifications_send_notification"
-  server/
-    orders/index.js
-  migrations/
-    001-create-orders.sql
-  informer.yaml
-```
-
-**Tool file structure:**
-
-```javascript
-// tools/check_inventory.js
-
-export const description = 'Check inventory levels for a product';
-
-export const schema = {
-    type: 'object',
-    properties: {
-        productId: { type: 'string', description: 'The product ID to check' },
-        quantity: { type: 'number', description: 'Required quantity' }
-    },
-    required: ['productId', 'quantity']
-};
-
-export async function handler(args, { query, fetch, emit, crypto, markdown, log, context }) {
-    const [product] = await query(
-        'SELECT * FROM inventory WHERE product_id = $1',
-        [args.productId]
-    );
-
-    if (!product) {
-        return { available: false, error: 'Product not found' };
-    }
-
-    return {
-        available: product.stock >= args.quantity,
-        currentStock: product.stock,
-        requested: args.quantity
-    };
-}
-```
-
-**Handler context:**
-
-| Property | Type | Description |
-|----------|------|-------------|
-| `query` | `async (sql, params?) => rows` | Execute SQL against the app's workspace |
-| `fetch` | `async (path, options?) => { status, body }` | Make authenticated API calls (subject to whitelist) |
-| `emit` | `async (event, payload) => void` | Emit an event to trigger other agents |
-| `notify` | `async (username, message) => { id }` | Enqueue a push notification (single or bulk) |
-| `email` | `async (to, message) => { id }` | Enqueue an email (single or bulk) |
-| `crypto` | `object` | Cryptographic helpers. `crypto.hmac(algorithm, key, data, encoding?)` computes an HMAC digest. |
-| `markdown` | `async (text) => string` | Convert markdown text to HTML |
-| `log` | `function` | Structured logging. `log(message, data?)` or `log.info()`/`log.warn()`/`log.error()`/`log.debug()`. See [Using `log()`](#using-log). |
-| `context` | `object` | `{ appId, agentId, runId, trigger }` |
-
-**Tool naming:** The tool name is derived from the file path relative to `tools/`. Nested directories use underscores: `tools/notifications/send_email.js` → `notifications_send_email`.
-
-### Toolkits
-
-In addition to custom tools defined in the `tools/` directory, agents can use **Informer toolkits** — shared tool collections managed at the system level (MCP servers, custom toolkits, etc.). Declare them in the agent's `toolkits` array using the toolkit's naturalId or UUID:
-
-```yaml
-# informer.yaml
-agents:
-  research-agent:
-    description: "Researches topics using external tools"
-    instructions: |
-      Use the available tools to research the requested topic.
-      Summarize findings and store results in the workspace.
-    tools:
-      - save_results
-    toolkits:
-      - admin:web-scraper
-      - admin:slack-notifications
-    on: research_requested
-```
-
-**How toolkit integration works:**
-
-1. **At deploy time**, each toolkit ref is validated — deploy **fails hard** if a referenced toolkit doesn't exist. Resolved refs are stored in the `app_toolkit` junction table.
-2. **At agent execution time**, the agent executor loads all toolkits declared on the agent, fetches their namespaced tool definitions, and merges them into the agent's available tools alongside any custom `tools/` directory tools.
-3. Toolkit **system instructions** (if configured) are appended to the agent's system prompt automatically.
-4. Tool names from toolkits are namespaced to avoid collisions (e.g., `web-scraper:fetch_page`).
-
-**Toolkits vs. custom tools:**
-
-| Feature | Custom tools (`tools/`) | Toolkits |
-|---------|------------------------|----------|
-| Defined in | App's `tools/` directory | System-level toolkit config |
-| Scope | Single app | Shared across apps/chats |
-| Execution | V8 sandbox (app context) | Toolkit driver (MCP, custom, etc.) |
-| Deploy validation | Warns on missing refs | Fails on missing refs |
-| Use case | App-specific logic | Shared capabilities (APIs, MCP servers) |
-
-### Assistants
-
-Agents can reference Informer assistants to inherit their instructions. Each referenced assistant's system prompt is merged into the agent's own instructions, allowing you to compose agent behavior from reusable assistant personas.
-
-```yaml
-agents:
-  support-agent:
-    description: "Customer support with a specialized persona"
-    instructions: |
-      Process support tickets and escalate critical issues.
-    assistants:
-      - admin:support-persona
-    on: support_request
-```
-
-**How assistant integration works:**
-
-1. **At deploy time**, each assistant ref is validated — deploy **fails hard** if a referenced assistant doesn't exist. Use either naturalId (`owner:slug`) or UUID.
-2. **At agent execution time**, the executor loads each assistant and collects its `instructions` field.
-3. Assistant instructions are prepended to the system prompt **before** toolkit instructions.
-
-### Events
-
-Events are the trigger mechanism for agents. They can be emitted from:
-
-1. **Server-side route handlers** — using the `emit()` callback
-2. **Other agent tools** — using `emit()` in a tool handler (enables agent chaining)
-3. **Manual triggers** — via the Agents UI or API (uses `_manual` event name)
-
-**Emitting events from server routes:**
-
-```javascript
-// server/orders/index.js
-
-export async function POST({ query, emit, request }) {
-    const { customer, total } = request.body;
-    const [order] = await query(
-        'INSERT INTO orders (customer, total) VALUES ($1, $2) RETURNING *',
-        [customer, total]
-    );
-
-    // Trigger agents listening for 'order_created'
-    await emit('order_created', { orderId: order.id, customer, total });
-
-    return { status: 201, body: order };
-}
-```
-
-**Emitting events from tools (agent chaining):**
-
-```javascript
-// tools/update_status.js
-
-export const description = 'Update order status and notify downstream';
-
-export const schema = {
-    type: 'object',
-    properties: {
-        orderId: { type: 'string' },
-        status: { type: 'string', enum: ['confirmed', 'shipped', 'delivered'] }
-    },
-    required: ['orderId', 'status']
-};
-
-export async function handler(args, { query, emit }) {
-    await query(
-        'UPDATE orders SET status = $1 WHERE id = $2',
-        [args.status, args.orderId]
-    );
-
-    // Chain: trigger another agent
-    await emit('order_status_changed', {
-        orderId: args.orderId,
-        newStatus: args.status
-    });
-
-    return { updated: true };
-}
-```
-
-### Cron Scheduling
-
-Agents can run on a schedule using standard 5-field cron expressions (`minute hour dom month dow`). When an agent has a `cron` field, the event dispatcher automatically triggers it at the scheduled time using the `_cron` event.
-
-```yaml
-agents:
-  daily-digest:
-    description: "Send daily activity digest"
-    instructions: |
-      Query today's activity and send a summary notification.
-    tools:
-      - send_notification
-    cron: "0 8 * * 1-5"   # Weekdays at 8:00 AM
-
-  hourly-sync:
-    description: "Sync external data every hour"
-    instructions: |
-      Fetch latest records from the external API and upsert into the workspace.
-    tools:
-      - fetch_external_data
-      - upsert_records
-    cron: "0 * * * *"     # Every hour on the hour
-```
-
-**Common cron patterns:**
-
-| Expression | Schedule |
-|-----------|----------|
-| `0 8 * * *` | Daily at 8:00 AM |
-| `0 8 * * 1-5` | Weekdays at 8:00 AM |
-| `*/15 * * * *` | Every 15 minutes |
-| `0 0 * * 0` | Sundays at midnight |
-| `0 9 1 * *` | First of every month at 9:00 AM |
-
-**How it works:**
-- At deploy time, the cron expression is validated and the next fire time (`nextRunAt`) is computed
-- The event dispatcher sweeps for agents whose `nextRunAt` has passed (using `FOR UPDATE SKIP LOCKED` for cluster safety)
-- When fired, the agent receives a `_cron` event with `{ cron, scheduledAt }` as the payload
-- After execution, `nextRunAt` is recomputed for the next occurrence
-- Only **active** agents with a valid cron expression are scheduled
-
-**Cron + event triggers can coexist** — an agent can have both `cron` and `on` fields. It will run on schedule AND when matching events are emitted.
-
-Updating an agent's status to `stopped` via the API clears its `nextRunAt`. Reactivating it recomputes the next fire time.
-
-### How Agent Execution Works
-
-1. An event is emitted (via `emit()`, cron schedule, or manual trigger)
-2. An `AppEvent` record is created with `status: 'pending'`
-3. The event dispatcher (real-time via Redis + periodic sweep fallback) picks it up
-4. All **active** agents whose `on` triggers include the event name are found
-5. For each matching agent, an execution loop runs:
-   - Creates an `AppAgentRun` record
-   - Loads the AI model and tool bundles from `tools/`
-   - Loads assistant instructions declared in the agent's `assistants` array and merges them into the system prompt
-   - Loads toolkit tools declared in the agent's `toolkits` array (namespaced tool defs + system instructions)
-   - Calls the AI with the system prompt (from `instructions` + assistant instructions + toolkit instructions), the event payload, and all available tools
-   - The AI can call tools (up to 20 steps) — custom tools run in isolated V8 sandboxes, toolkit tools delegate to their driver
-   - Run is marked `completed` or `failed` with execution steps and token usage
-
-**Sandbox constraints** (same as server routes):
-- No Node.js APIs (`require`, `fs`, `http`, etc.)
-- No direct network access — use `fetch()` (enforces whitelist)
-- 128 MB memory limit per isolate
-- 30-second timeout per tool execution
-
-### Agent Status
-
-Agents have a `status` field: `active` or `stopped`. Only active agents respond to events. You can toggle status via:
-
-- **The Agents UI** — click the play/stop button next to an agent
-- **The API** — `PUT /api/apps/{id}/agents/{agentId}` with `{ "status": "active" }`
-
-When you redeploy, agents defined in `informer.yaml` are upserted. Agents removed from YAML are set to `stopped`. Runtime instruction overrides (`instructionsOverride`) are preserved across deploys.
-
-### Agent REST API
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | `/api/apps/{id}/agents` | List all agents |
-| GET | `/api/apps/{id}/agents/{agentId}` | Get agent details |
-| PUT | `/api/apps/{id}/agents/{agentId}` | Update agent (instructions, status, model) |
-| GET | `/api/apps/{id}/agents/{agentId}/runs` | List runs (paginated, newest first) |
-| GET | `/api/apps/{id}/agents/{agentId}/runs/{runId}` | Get run details with step-by-step log |
-| POST | `/api/apps/{id}/agents/{agentId}/_trigger` | Manually trigger (payload: `{ event, payload }`) |
-
-### Local Development
-
-Agents run locally during `npm run dev` via the Vite plugin. The plugin:
-
-1. Detects a `tools/` directory or `agents:` section in `informer.yaml`
-2. Mounts middleware at `/api/_agent` that loads agent definitions and tool handlers
-3. Loads tool handlers via `ssrLoadModule` (same as server routes) — HMR works for tool code
-4. Proxies AI calls to the Informer server's `_chat` endpoint
-
-**Local agent endpoints:**
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | `/api/_agent` | List agents from `informer.yaml` |
-| POST | `/api/_agent/{name}/_trigger` | Run agent locally with tool dispatch |
-
-**Triggering locally:**
-
-```javascript
-// From your app's frontend code during dev
-const response = await fetch('/api/_agent/validate-order/_trigger', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-        event: 'order_created',
-        payload: { orderId: 123, customer: 'Acme Corp', total: 1500 }
-    })
-});
-
-const result = await response.json();
-// { agent: 'validate-order', trigger: 'order_created', status: 'completed', tokens: 450, steps: [...] }
-```
-
-**Differences from production:**
-- `emit()` is a no-op in dev mode (logs to console instead of creating events)
-- AI calls proxy through the Informer server — the model must be configured there
-- No agent run records are persisted locally
-- Tool code reloads on save (HMR)
-
-### Project Structure with Agents
-
-```
-my-app/
-  tools/
-    check_inventory.js        ← Agent tool
-    update_status.js          ← Agent tool
-    notifications/
-      send_email.js           ← Nested tool (name: notifications_send_email)
-  server/
-    orders/
-      index.js                ← Emits events via emit()
-  migrations/
-    001-create-orders.sql
-    002-create-inventory.sql
-  public/
-    favicon.svg
-  src/
-    main.js
-  informer.yaml               ← Declares agents, tools, events, dependencies
-  index.html
-  package.json
-```
-
-### Full Example: Order Processing Pipeline
-
-```yaml
-# informer.yaml
-dependencies:
-  products:
-    target: dataset
-    defaultBinding: 3e4f5a6b-7c8d-9e0f-1234-567890abcdef
-
 agents:
   validate-order:
     description: "Validates new orders and checks inventory"
     instructions: |
       When an order_created event arrives, use check_inventory for each item.
-      If all items are in stock, use update_status to set the order to 'confirmed'.
-      If any item is out of stock, set it to 'backordered'.
+      If all in stock, use update_status to confirm. Otherwise mark backordered.
     tools:
       - check_inventory
       - update_status
     on: order_created
 
-  send-confirmation:
-    description: "Sends order confirmation emails"
+  daily-digest:
+    description: "Daily activity summary"
     instructions: |
-      When an order is confirmed (order_status_changed with newStatus='confirmed'),
-      use the Slack toolkit to notify the sales channel, then use send_email for the customer.
-    tools:
-      - notifications_send_email
-    toolkits:
-      - admin:slack-notifications
-    on: order_status_changed
-
-  daily-order-summary:
-    description: "Generates a daily order summary"
-    instructions: |
-      Query yesterday's orders, calculate totals and trends,
-      and send a summary notification to the ops team.
+      Query today's orders and send a notification.
     tools:
       - send_notification
-    cron: "0 7 * * 1-5"   # Weekdays at 7:00 AM
+    cron: "0 8 * * 1-5"
 ```
 
-This creates an automated pipeline: order submitted → validated → status updated → confirmation sent — with each step handled by a different agent. The daily summary runs on a cron schedule independently.
+Tools live in `tools/` and share the same V8 sandbox as server route handlers — same `query` / `fetch` / `emit` / `notify` / `email` / `log` / `crypto` / `markdown` / base64 helpers. Tool names mirror the file path with underscores: `tools/notifications/send_email.js` → `notifications_send_email`.
+
+Load `references/agents.md` for: full `agents:` field reference (`tools` / `toolkits` / `assistants` / `on` / `cron` / `webSearch` / `model`), tool file structure, event emission (server routes + agent chaining via `emit()`), toolkit integration (system-level + deploy validation), assistant prompt merging, cron lifecycle (separate `app_automation` table, bypasses event queue), agent REST API, local dev with `/api/_agent/{name}/_trigger`, full order-processing pipeline example.
 
 ## PDF Export
 
@@ -3278,7 +867,7 @@ Apps can be exported to PDF via `POST /api/apps/{id}/_print`.
 
 1. Informer opens your app in a headless browser (Puppeteer)
 2. Waits for network requests to complete
-3. Waits for `window.informerReady` to become `true`
+3. Waits for `window.informerReady !== false` — undefined / null / unset all pass immediately; only an explicit `false` blocks until timeout. Set it to `false` early in your app shell, then to `true` once data is loaded.
 4. Adds `.print` class to `<html>`
 5. Captures the page as PDF using print media
 
@@ -3348,8 +937,20 @@ await fetch(`/api/apps/${appId}/_print`, {
 
 ## Reference Files
 
-- `references/api-reference.md` - Detailed API documentation
-- `references/app-templates.md` - HTML/CSS/JS starter templates
+The orientation above points to each file; this is the canonical list of what's available under `references/`:
+
+| File | Covers |
+|---|---|
+| `references/server-routes.md` | `server/` handlers, full sandbox-helper reference (`query`, `fetch`, `respond`, `notify`, `email`, `log`, `crypto`, base64/markdown globals), `config.timeout` / `config.roles`, worked CRUD example |
+| `references/webhooks.md` | `webhooks/` handlers, signed `?token=` flow, HMAC verification, capability subset vs server routes |
+| `references/persistence.md` | `migrations/`, dev workspace lifecycle, CRUD worked example |
+| `references/widgets.md` | `widgets:` declaration, self-contained HTML template, iframe constraints, SVG charts without libraries |
+| `references/copilot.md` | `openChat()` / `showCopilot()` / `registerTool()`, AI completion endpoints (`_chat` / `_completion` / `_object`), `useChat` hook pattern, defensive `_object` parsing |
+| `references/agents.md` | `agents:` declaration, `tools/*.js`, event chaining via `emit()`, cron lifecycle, toolkits/assistants, agent REST API |
+| `references/informer-yaml.md` | Full `informer.yaml` schema deep dive — slot fields, `$user.*` variables, modernizing legacy `access:` blocks |
+| `references/docs-html.md` | In-gallery `docs.html` page, in-app `?` help button, `README.md` fallback |
+| `references/api-reference.md` | Raw API surface behind the typed-slot proxy (useful for diagnostics) |
+| `references/app-templates.md` | HTML/CSS/JS starter snippets — charts, layouts |
 
 ## Terminology Note
 
