@@ -711,44 +711,84 @@ export default {
 
 ## HTML5 Client-Side Routing
 
-Apps can use client-side routers (React Router, etc.) with HTML5 history mode. The server supports this via a catch-all route — any path under `/apps/{id}/view/{path*}` that doesn't match the API proxy (`/view/api/...`) or static assets (`/view/-/...`) will serve the app's `index.html` with full context injection.
+Apps can use client-side routers (React Router, Vue Router, vanilla `history.pushState`) with HTML5 history mode. Use HTML5 routing — not hash routing — for cleaner URLs and shareable deep links. Hash routing also works but offers no benefit since the server fully supports history routing.
 
-This means if a user navigates to `/apps/{id}/view/dashboard/settings` and refreshes the browser, the server returns the entry point HTML and the client-side router takes over.
+**How it works:** The server injects `<base href="/api/apps/{naturalId}/view/-/">` on every render, so all of your relative URLs (assets, router routes, anchor `href`s) resolve under `/-/`. The `/-/{path*}` route serves a real library file when one matches, and otherwise — for top-level HTML navigations (`Accept: text/html`) — falls through to the host `index.html`. That fall-through is what lets a hard refresh of `/-/orders/123` come back with the SPA shell instead of a 404. Asset requests (`<script src>`, `<link href>`, JSON `fetch()`) keep getting real 404s when their file is missing, so broken-asset bugs aren't masked.
+
+**Best practices:**
+
+- **Use relative paths everywhere.** Because the server sets `<base href>`, write `<a href="orders/123">` and `pushState({}, '', 'orders/123')` — never hard-code `/api/apps/...`. The same code works in dev (where there is no `<base>`) and production.
+- **Derive the router `basename` from the `<base>` tag.** This makes it work in both prod (where the base is the full app-view path) and dev (where there is no `<base>` tag and routes live at the root).
+- **Set explicit `Accept` on programmatic fetches that expect non-HTML responses.** The server uses `Accept: text/html` to choose between a real 404 and the SPA fallback, so an explicit `Accept: application/json` is the safest signal that you want a 404 if the file is missing.
 
 ### Setup with React Router
 
 ```jsx
 import { createBrowserRouter, RouterProvider } from 'react-router-dom';
 
-// Derive the base path from the URL. In production the app is served at
-// /api/apps/{naturalId}/view — extract that prefix so the router can
-// strip it before matching routes. In dev mode, routes are at the root.
-const viewMatch = window.location.pathname.match(/^(\/.*\/apps\/[^/]+\/view)/);
-const basePath = viewMatch ? viewMatch[1] : '/';
+// In production, <base href> is set to /api/apps/{naturalId}/view/-/
+// In dev mode (vite), there's no <base> tag — fall back to '/'.
+const baseEl = document.querySelector('base');
+const basename = baseEl ? new URL(baseEl.href).pathname : '/';
 
 const router = createBrowserRouter(
-  [
-    { path: '/', element: <Home /> },
-    { path: '/settings', element: <Settings /> },
-    { path: '/dashboard/:id', element: <Dashboard /> },
-  ],
-  { basename: basePath }
+    [
+        { path: '/', element: <Home /> },
+        { path: '/settings', element: <Settings /> },
+        { path: '/dashboard/:id', element: <Dashboard /> }
+    ],
+    { basename }
 );
 
 function App() {
-  return <RouterProvider router={router} />;
+    return <RouterProvider router={router} />;
 }
+```
+
+### Setup with Vue Router
+
+```javascript
+import { createRouter, createWebHistory } from 'vue-router';
+
+const baseEl = document.querySelector('base');
+const basename = baseEl ? new URL(baseEl.href).pathname : '/';
+
+const router = createRouter({
+    history: createWebHistory(basename),
+    routes: [
+        { path: '/', component: Home },
+        { path: '/settings', component: Settings },
+        { path: '/dashboard/:id', component: Dashboard }
+    ]
+});
+```
+
+### Vanilla `history.pushState`
+
+```javascript
+function getBase() {
+    const baseEl = document.querySelector('base');
+    return baseEl ? new URL(baseEl.href).pathname : '/';
+}
+
+// Navigate — pass a path relative to the base href.
+function navigate(path) {
+    history.pushState({}, '', getBase() + path.replace(/^\/+/, ''));
+    render();
+}
+
+window.addEventListener('popstate', render);
 ```
 
 ### Dev Mode
 
-In local development, Vite's dev server handles HTML5 fallback automatically — no extra configuration needed. The `basename` conditional above (`/` in dev mode vs the full view path in production) ensures routes resolve correctly in both environments.
+In local development, Vite's dev server handles HTML5 fallback automatically — no extra configuration needed. Because the basename derivation above checks for the `<base>` tag (which Vite does not inject), routes resolve at the root in dev and under `/api/apps/{naturalId}/view/-/` in production with no environment-specific code.
 
 ### Important Notes
 
-- **Static assets are unaffected.** Requests to `/view/-/...` still resolve to actual files and return 404 for missing assets — these are not caught by the fallback.
+- **Asset 404s still fire when expected.** A `<script src="missing.js">` or `fetch('data.json')` for a file that isn't in the library returns a real 404 — the SPA fallback only triggers on `Accept: text/html` requests.
 - **API routes are unaffected.** Requests to `/view/api/...` still proxy to the Informer API.
-- **The `<base href>` tag** points to `/api/apps/{naturalId}/view/-/`, which is the asset root. Client-side routers use `basename` independently of `<base href>`, so there is no conflict.
+- **Empty path lands on the SPA root.** A request to `/api/apps/{id}/view/-/` (no path) serves the host page, so `<a href="">` or programmatic navigation to the base href works as expected.
 
 ## App Roles
 

@@ -153,6 +153,36 @@ export async function DELETE({ query, request }) {
 }
 ```
 
+**Binary response** — set `encoding: 'base64'` to send raw bytes (images, PDFs, file downloads). The body is decoded from base64 before being written to the HTTP response, and the `content-type` you set on `headers` is sent as-is:
+```javascript
+export async function GET({ query, request }) {
+    const [row] = await query(
+        `SELECT encode(data, 'base64') AS data, mime_type, name
+         FROM attachments WHERE id = $1`,
+        [request.params.id]
+    );
+    if (!row) return { status: 404, body: { error: 'Not found' } };
+    return {
+        status: 200,
+        headers: {
+            'content-type': row.mime_type,
+            'content-disposition': `inline; filename="${row.name}"`
+        },
+        body: row.data,
+        encoding: 'base64'
+    };
+}
+```
+
+This is the recommended pattern for serving file attachments stored as `bytea` in the workspace — Postgres' `encode(col, 'base64')` does the heavy lifting in SQL, so the handler just passes the string through. For `inline` disposition the browser will render the file directly (images, PDFs); use `attachment` to force a download.
+
+| Response field | Type | Notes |
+|----------------|------|-------|
+| `status` | `number` | HTTP status code |
+| `headers` | `object` | Response headers. `content-type` is forwarded verbatim; defaults to `application/json` if unset |
+| `body` | `any` | Object/array → JSON-stringified. String → sent as-is. With `encoding: 'base64'` → decoded to bytes |
+| `encoding` | `'base64'` | Optional. When set, `body` must be a base64-encoded string and is written as raw bytes |
+
 ## Using `query()`
 
 The `query` callback executes SQL against the app's Postgres workspace — the same schema managed by `migrations/`. It takes a SQL string and an optional params array, and returns the result rows directly.
