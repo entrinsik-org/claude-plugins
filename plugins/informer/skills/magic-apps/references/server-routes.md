@@ -239,6 +239,48 @@ export async function POST({ fetch, request }) {
 
 The `path` argument is relative to `/api/` — pass `'datasets/admin:sales-data/_search'`, not `'/api/datasets/...'`.
 
+### Common pitfalls
+
+The sandboxed `fetch` and `request` behave differently from their browser counterparts. The four mistakes below come up often because muscle memory from browser code doesn't transfer.
+
+**1. `fetch()` returns `{ status, body }`, not a Web `Response`.** No `.ok`, no `.json()`, no `.text()`, no `.headers` getter.
+
+```javascript
+// WRONG — Web Response methods don't exist server-side
+const response = await fetch('datasets/admin:sales/_search', { method: 'POST', body: { query: { match_all: {} } } });
+if (!response.ok) throw new Error('Failed');     // ❌ .ok is undefined
+const data = await response.json();              // ❌ .json is not a function
+
+// CORRECT — destructure or read fields directly
+const result = await fetch('datasets/admin:sales/_search', { method: 'POST', body: { query: { match_all: {} } } });
+if (result.status !== 200) return { status: result.status, body: { error: 'Search failed' } };
+const hits = result.body.hits.hits.map(h => h._source);
+```
+
+**2. Pass `body` as a plain object — never `JSON.stringify` it, never set `Content-Type`.** The runtime handles both.
+
+```javascript
+// WRONG — double-serializes into a JSON string literal
+body: JSON.stringify({ query: { match_all: {} } })
+
+// CORRECT
+body: { query: { match_all: {} } }
+```
+
+**3. Don't `new URL(request.url)`.** The sandbox doesn't ship a full origin/host on `request.url`. The fields you'd extract are already parsed:
+
+```javascript
+// WRONG — request.url may not be a fully-qualified URL; URL() can throw
+const url = new URL(request.url);
+const status = url.searchParams.get('status');
+
+// CORRECT — use the pre-parsed objects
+const status = request.query.status;
+const orderId = request.params.id;
+```
+
+**4. Plain-text upstream responses break the dev `apiFetch` body parser.** In dev mode, the Vite plugin's `apiFetch` reads the upstream body with `resp.json()` first and only falls back to `resp.text()` on failure — but `resp.json()` already consumes the stream, so the fallback throws "Body already read" and the call appears to fail silently. If you're proxying through an upstream that returns `text/plain`, parse it in the handler and return JSON, rather than passing the raw body through.
+
 ## Using `respond()`
 
 The `respond` callback sends an early HTTP response to the caller while the handler keeps running in the background. This is useful when an external caller has a tight response deadline (e.g. Slack's 3-second limit for slash commands) but the handler needs more time to complete its work.
