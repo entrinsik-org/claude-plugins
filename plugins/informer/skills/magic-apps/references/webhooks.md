@@ -77,7 +77,7 @@ Webhook handlers have a subset of server-route capabilities. `notify()` and `ema
 | `query(sql, params?)` | Execute SQL against the app's workspace |
 | `fetch(path, options?)` | Make authenticated API calls (runs as app owner) |
 | `emit(event, payload?)` | Fire app events (trigger agents) |
-| `respond(body)` | Send early response while handler continues in background |
+| `respond(response)` | Send early response while handler continues in background. Same shape as handler return: plain value (wrapped as 200 JSON), `{ status, body }`, or `{ status, headers, body, encoding: 'base64' }` for binary. |
 | `crypto.hmac(algorithm, key, data, encoding?)` | Compute HMAC digest (delegates to Node.js `crypto` on the host). Default encoding: `'hex'`. |
 | `markdown(text)` | Convert markdown text to HTML (async). Uses `marked`. |
 | `log(message, data?)` | Structured logging. Also `log.info()`/`log.warn()`/`log.error()`/`log.debug()`. Writes to `app_log`. See "Using `log()`" in `server-routes.md`. |
