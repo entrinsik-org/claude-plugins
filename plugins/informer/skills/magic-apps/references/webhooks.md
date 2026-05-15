@@ -35,7 +35,9 @@ export const config = { timeout: 15000 };
 export async function POST({ query, request, fetch, emit, log, crypto, env }) {
     // request.body — parsed JSON payload
     // request.rawBody — original body string (for HMAC verification)
-    // request.headers — raw request headers
+    // request.headers — incoming headers with `cookie` and `proxy-authorization` stripped;
+    //                   `authorization` and signature headers (x-hub-signature-*, stripe-signature, etc.) are preserved
+    // request.query — incoming query params with the URL-gate `token` and `app_token` stripped
     // crypto.hmac() — compute HMAC digests
     // env — app environment variables (secrets, config)
 
@@ -86,6 +88,29 @@ Webhook handlers have a subset of server-route capabilities. `notify()` and `ema
 | `env` | App environment variables from `app.defn.env` |
 
 Webhook routes also provide `request.rawBody` — the original request body as a string, preserving the exact bytes sent by the caller. Use this for HMAC signature verification (not `request.body`, which is parsed JSON).
+
+## Sanitized Request Inputs
+
+Webhook handlers receive `request.headers` and `request.query` with Informer's auth-bearing values removed before the handler runs. The deny-lists are narrower than for server routes because webhook contracts genuinely depend on incoming headers (signatures, shared-secret Bearer tokens).
+
+**`request.headers` — stripped:**
+- `cookie` — a misrouted browser request could carry the visitor's app-token cookie; webhooks have no business reading it
+- `proxy-authorization` — never part of a documented webhook contract
+
+**`request.headers` — preserved:**
+- `authorization` — kept so shared-secret patterns like `Authorization: Bearer <secret>` work
+- All signature headers (`x-hub-signature-256`, `stripe-signature`, `x-shopify-hmac-sha256`, etc.)
+- Service-specific event headers (`x-github-event`, `user-agent`, etc.)
+
+**`request.query` — stripped:**
+- `token` — the URL-gate signed token consumed by the webhook proxy; the handler doesn't need it (verification already happened)
+- `app_token` — defense in depth; never expected on a webhook URL, but stripped in case a misrouted request carries it
+
+Your own custom query parameters pass through untouched. If your handler reads `request.query.id` or similar, nothing changes.
+
+## Imports
+
+Webhook files are bundled by the same esbuild plugin as server routes — imports resolve only against the app's library, no `node_modules`, no host filesystem. See the [Imports](server-routes.md#imports) section in `server-routes.md` for the full allow/deny list and error messages. Shared helpers across `server/`, `webhooks/`, and `tools/` are supported via relative paths (e.g. `import { verifySig } from '../lib/sig.js'`).
 
 ## Webhook Verification
 
