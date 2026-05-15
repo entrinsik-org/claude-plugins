@@ -269,6 +269,76 @@ function formatCurrency(val) {
 init();
 ```
 
+## Styling Patterns
+
+### Theme variables — never hardcode `rgba()`
+
+The #1 cause of "looks great in dark mode, unreadable in light mode" bugs is hardcoding `rgba()` background or border colors. Define theme variables in `:root` and `[data-theme="dark"]` and reference them everywhere — the app then adapts automatically when the viewer flips themes.
+
+```css
+/* WRONG — dark-navy hardcoded; invisible in light mode */
+.actions-bar {
+    background: rgba(6, 11, 24, 0.95);
+    border: 1px solid rgba(125, 211, 252, 0.2);
+}
+
+/* CORRECT — variables resolve per theme */
+.actions-bar {
+    background: var(--glass-heavy);
+    border: 1px solid var(--border-accent);
+}
+```
+
+A serviceable glass-and-frost palette:
+
+```css
+:root {
+    --glass-heavy: rgba(255, 255, 255, 0.92);
+    --glass-light: rgba(241, 245, 249, 0.7);
+    --frost: rgba(0, 0, 0, 0.02);
+}
+[data-theme="dark"] {
+    --glass-heavy: rgba(6, 11, 24, 0.92);
+    --glass-light: rgba(17, 25, 39, 0.7);
+    --frost: rgba(255, 255, 255, 0.03);
+}
+```
+
+Use `var(--glass-heavy)` for sticky footers, floating bars, and overlays; `var(--frost)` for subtle section backgrounds.
+
+### CSS Modules for React apps
+
+For React-based apps, prefer **CSS Modules** (`.module.css`) over plain CSS or BEM naming. Vite handles `.module.css` natively (no config), class names get hashed at build time, and you avoid collisions with the Informer host UI when the app is embedded.
+
+```css
+/* MappingCard.module.css */
+.row {
+    display: grid;
+    grid-template-columns: 32px 72px 1fr 20px 1fr 52px auto;
+    height: 48px;
+    align-items: center;
+}
+
+.statusLabel {
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+}
+```
+
+```tsx
+// MappingCard.tsx
+import styles from './MappingCard.module.css';
+
+export function MappingCard({ mapping }) {
+    return (
+        <div className={styles.row}>
+            <span className={styles.statusLabel}>{mapping.status}</span>
+        </div>
+    );
+}
+```
+
 ## PDF Export Tips
 
 The PDF renderer uses **print media** and adds a `.print` class to `<html>`.

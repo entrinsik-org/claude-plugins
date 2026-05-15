@@ -34,7 +34,7 @@ This file is the orientation layer. Most topics have a dedicated reference under
 | Deep `informer.yaml` work — `dependencies:` slot field reference, RLS via `$user.*`, modernizing a legacy `access:` block, `defaultBinding` lookup | `references/informer-yaml.md` |
 | In-gallery app docs (`docs.html`), in-app `?` help button, `README.md` fallback | `references/docs-html.md` |
 | Looking up the raw API surface behind the typed-slot proxy (still useful when something fails) | `references/api-reference.md` |
-| HTML/CSS/JS starter snippets (charts, layouts) | `references/app-templates.md` |
+| HTML/CSS/JS starter snippets, theme-variable patterns, CSS Modules for React | `references/app-templates.md` |
 
 The sections that **stay in this file** are the ones nearly every project touches: bootstrapping, local-dev essentials, the dep-access centerpiece, the small surfaces (App Context, HTML5 routing, App Roles, PDF Export). Everything else is one click away in `references/`.
 
@@ -134,6 +134,22 @@ npm install -D @entrinsik/vite-plugin-informer@2.4.0
 
 Code splitting is supported. Use Vite's defaults — dynamic `import()` and route-level lazy loading work in published apps with no extra config. Don't override `build.rollupOptions.output`; the server injects an import map at serve time so chunk URLs carry the auth token, and custom chunk paths outside `dist/` will not be served.
 
+### External Scripts (Approved Resources)
+
+Informer blocks external CDN scripts by default via CSP. To load anything from an outside host (CDN libraries, web worker payloads, etc.):
+
+1. Add the URL to **Informer Admin → Approved Resources → Scripts**
+2. Check **ESM** if it's an ES module (`.mjs`)
+3. Use the `https://cdn.jsdelivr.net/npm/...` format (Informer's standard CDN)
+
+For packages that ship a separate Web Worker bundle (e.g. `pdfjs-dist`), point `workerSrc` at the CDN copy and add that URL to Approved Resources too — local worker files create separate assets in `dist/` that the auth/token rewrite doesn't reach:
+
+```typescript
+import * as pdfjsLib from 'pdfjs-dist';
+pdfjsLib.GlobalWorkerOptions.workerSrc =
+    `https://cdn.jsdelivr.net/npm/pdfjs-dist@${pdfjsLib.version}/build/pdf.worker.min.mjs`;
+```
+
 ### Development Mode (`npm run dev`)
 
 The Vite plugin proxies `/api/*` requests to your Informer server with Basic auth. This means:
@@ -174,6 +190,8 @@ Create mode-specific env files (e.g., `.env.test`, `.env.production`) with serve
 ```javascript
 informer({ proxy: { secure: false } })
 ```
+
+**Blank white page after concurrent edits?** Vite's HMR cache can wedge when two editors (or an editor and an AI agent) modify the same module graph at the same time. Symptoms: blank page, console errors about stale modules or `TypeError`s on previously-working imports. Fix: kill the dev server, `rm -rf node_modules/.vite`, restart. Not Informer-specific — it's a Vite quirk — but worth knowing because the symptom is silent.
 
 ### Deploying (`npm run deploy`)
 

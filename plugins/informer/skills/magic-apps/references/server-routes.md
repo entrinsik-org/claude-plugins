@@ -60,7 +60,7 @@ Each handler function receives a single context object with these properties:
 | `query` | `async (sql, params?) => rows` | Execute SQL against the app's workspace. Returns an array of row objects. |
 | `fetch` | `async (path, options?) => { status, body }` | Make an authenticated API call through Informer (subject to the app's whitelist). |
 | `context` | `object` | Typed dep proxies keyed by slot name. Call deps as `context.<slotName>.<method>(args)`. Methods per `target`: `dataset` → `search(esQuery)` / `fields()`; `query` → `execute(params)`; `datasource` → `query(payload)`; `integration` → `request(opts)`. Throws boom 422 with `errorCode: 'dependency_unbound'` if the installer hasn't bound the slot yet, or `'dependency_broken'` if the bound target was deleted. Prefer this over raw `fetch()` — slots survive bundle export/import and resource renames; raw paths don't. |
-| `respond` | `async (body) => void` | Send an early HTTP response while the handler continues running in the background. See [Using `respond()`](#using-respond). |
+| `respond` | `async (response) => void` | Send an early HTTP response while the handler continues running in the background. Accepts the same shape as a synchronous return — a response object (`{ status, headers?, body?, encoding? }`) or any plain value (wrapped as 200 JSON). See [Using `respond()`](#using-respond). |
 | `emit` | `async (event, payload) => void` | Emit an app event to trigger agents. Creates an `AppEvent` record and notifies the event dispatcher. |
 | `notify` | `async (username, message) => { id }` | Enqueue a push notification for delivery to a user's Informer GO devices. See [Using `notify()`](#using-notify). |
 | `email` | `async (to, message) => { id }` | Enqueue an email for delivery via the tenant's mail transport. See [Using `email()`](#using-email). |
@@ -119,7 +119,7 @@ The short version: in a handler, write `context.<slotName>.<method>(args)` — n
 
 ## Return Values
 
-Handlers can return values in two formats:
+Handlers can return values in several formats — pick the one that matches the response you want to send:
 
 **Simple value** — automatically wrapped as a 200 JSON response:
 ```javascript
@@ -153,6 +153,22 @@ export async function DELETE({ query, request }) {
 }
 ```
 
+**Text response (non-JSON)** — when `body` is a string with no `encoding` field, the runtime sends it as-is. Use this for CSV, HTML, SVG, plain text — anything you can produce as a UTF-8 string:
+```javascript
+export async function GET({ query }) {
+    const rows = await query('SELECT id, customer, total FROM orders');
+    const csv = ['id,customer,total', ...rows.map(r => `${r.id},${r.customer},${r.total}`)].join('\n');
+    return {
+        status: 200,
+        headers: {
+            'content-type': 'text/csv',
+            'content-disposition': 'attachment; filename="orders.csv"'
+        },
+        body: csv
+    };
+}
+```
+
 **Binary response** — set `encoding: 'base64'` to send raw bytes (images, PDFs, file downloads). The body is decoded from base64 before being written to the HTTP response, and the `content-type` you set on `headers` is sent as-is:
 ```javascript
 export async function GET({ query, request }) {
@@ -175,6 +191,8 @@ export async function GET({ query, request }) {
 ```
 
 This is the recommended pattern for serving file attachments stored as `bytea` in the workspace — Postgres' `encode(col, 'base64')` does the heavy lifting in SQL, so the handler just passes the string through. For `inline` disposition the browser will render the file directly (images, PDFs); use `attachment` to force a download.
+
+If your source is base64url instead of standard base64 (Gmail API attachments, JWT segments), normalize first: `await base64Encode(await base64UrlDecode(input))`. The runtime validates against the standard alphabet and rejects the `-` / `_` characters that base64url uses.
 
 | Response field | Type | Notes |
 |----------------|------|-------|
@@ -239,6 +257,48 @@ export async function POST({ fetch, request }) {
 
 The `path` argument is relative to `/api/` — pass `'datasets/admin:sales-data/_search'`, not `'/api/datasets/...'`.
 
+### Common pitfalls
+
+The sandboxed `fetch` and `request` behave differently from their browser counterparts. The four mistakes below come up often because muscle memory from browser code doesn't transfer.
+
+**1. `fetch()` returns `{ status, body }`, not a Web `Response`.** No `.ok`, no `.json()`, no `.text()`, no `.headers` getter.
+
+```javascript
+// WRONG — Web Response methods don't exist server-side
+const response = await fetch('datasets/admin:sales/_search', { method: 'POST', body: { query: { match_all: {} } } });
+if (!response.ok) throw new Error('Failed');     // ❌ .ok is undefined
+const data = await response.json();              // ❌ .json is not a function
+
+// CORRECT — destructure or read fields directly
+const result = await fetch('datasets/admin:sales/_search', { method: 'POST', body: { query: { match_all: {} } } });
+if (result.status !== 200) return { status: result.status, body: { error: 'Search failed' } };
+const hits = result.body.hits.hits.map(h => h._source);
+```
+
+**2. Pass `body` as a plain object — never `JSON.stringify` it, never set `Content-Type`.** The runtime handles both.
+
+```javascript
+// WRONG — double-serializes into a JSON string literal
+body: JSON.stringify({ query: { match_all: {} } })
+
+// CORRECT
+body: { query: { match_all: {} } }
+```
+
+**3. Don't `new URL(request.url)`.** The sandbox doesn't ship a full origin/host on `request.url`. The fields you'd extract are already parsed:
+
+```javascript
+// WRONG — request.url may not be a fully-qualified URL; URL() can throw
+const url = new URL(request.url);
+const status = url.searchParams.get('status');
+
+// CORRECT — use the pre-parsed objects
+const status = request.query.status;
+const orderId = request.params.id;
+```
+
+**4. Plain-text upstream responses break the dev `apiFetch` body parser.** In dev mode, the Vite plugin's `apiFetch` reads the upstream body with `resp.json()` first and only falls back to `resp.text()` on failure — but `resp.json()` already consumes the stream, so the fallback throws "Body already read" and the call appears to fail silently. If you're proxying through an upstream that returns `text/plain`, parse it in the handler and return JSON, rather than passing the raw body through.
+
 ## Using `respond()`
 
 The `respond` callback sends an early HTTP response to the caller while the handler keeps running in the background. This is useful when an external caller has a tight response deadline (e.g. Slack's 3-second limit for slash commands) but the handler needs more time to complete its work.
@@ -271,7 +331,7 @@ export async function POST({ query, fetch, respond, request }) {
 **Key behavior:**
 
 - Only the **first** `respond()` call takes effect — subsequent calls are ignored
-- The response body is always sent as **200 JSON** (`Content-Type: application/json`)
+- `respond()` accepts the same shapes as a synchronous return: a plain value (wrapped as 200 JSON), a response object (`{ status, body, headers? }`), or a binary response (`{ status, headers, body, encoding: 'base64' }`) — see [Return Values](#return-values) for the full shape table
 - The isolate, database connection, and timeout all remain active until the handler fully returns (or times out)
 - If background work throws an error after `respond()`, the error is logged server-side but does **not** affect the already-sent response
 - If `respond()` is never called, the handler returns normally — `respond` is entirely opt-in
