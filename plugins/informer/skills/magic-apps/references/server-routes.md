@@ -105,6 +105,12 @@ The following are available as **globals** inside the V8 isolate — not as keys
 | `request.user.email` | `string\|null` | Email address |
 | `request.user.timezone` | `string\|null` | Timezone (e.g. `America/New_York`) |
 
+## Sanitized Request Inputs
+
+`request.headers` is always `{}` for server routes — use `request.user` / `request.roles` for identity. `request.query` has Informer's `app_token` stripped before the handler runs (your own params pass through untouched).
+
+Webhook handlers use a narrower deny-list (signature headers and Bearer tokens are preserved for verification) — see [Sanitized Request Inputs](webhooks.md#sanitized-request-inputs) in `webhooks.md`.
+
 ## Calling Typed Dep Slots
 
 The handler's `context` object carries one property per `dependencies:` slot, with methods that proxy to the bound target. See "Accessing Your Dependencies" in SKILL.md — that's the canonical reference, with worked examples for all four target types (`dataset` / `query` / `datasource` / `integration`), the `dependency_unbound` / `dependency_broken` error pattern, and the rules for the frontend equivalents.
@@ -396,11 +402,25 @@ const { ids, queued } = await email([
 
 **Bulk:** Array of `{ to, subject, html, from? }` objects.
 
+## Imports
+
+Files under `server/`, `webhooks/`, and `tools/` are bundled at deploy by an esbuild plugin that resolves imports **only against the app's own library** — the host filesystem and `node_modules` are invisible.
+
+**Use relative imports only** (`./foo`, `../shared/util.js`); implicit `.js` / `.json` / `/index.js` resolution works. The bundler rejects (and `npm run deploy` fails on):
+
+- Bare specifiers — `fs`, `node:crypto`, `lodash`, anything not starting with `./` or `../`. Apps have no `node_modules` and no Node built-ins.
+- Absolute paths (`/etc/...`, `C:\...`).
+- `..` paths that escape the project root.
+
+For HTTP, hashing, base64, and markdown, use the injected sandbox helpers (`fetch`, `crypto.hmac`, the `base64*` globals, `markdown`) — don't try to import their underlying libraries. For third-party logic, copy what you need into a project-local file and import that.
+
+`npm run dev` uses Vite, not this bundler — a forbidden import may run in dev and only fail at deploy.
+
 ## Sandbox Constraints
 
 Server handlers run in a sandboxed V8 isolate. This means:
 
-- **No Node.js APIs** — no `require()`, `fs`, `http`, `process`, `Buffer`, etc.
+- **No Node.js APIs** — no `require()`, `fs`, `http`, `process`, `Buffer`, etc. The bundler blocks these as imports (see [Imports](#imports) above); even if you got one past the bundler, the runtime has no Node module system to load it.
 - **No network access** — all external calls must go through `fetch()` (which enforces the whitelist)
 - **No filesystem** — use `query()` for persistence
 - **`btoa()` and `atob()` are available** — base64 encode/decode strings (Latin-1 only, per spec)
