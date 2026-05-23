@@ -889,7 +889,7 @@ Load `references/copilot.md` for: full `openChat()` / `showCopilot()` / `registe
 
 ## Agents — overview
 
-Apps can declare **agents** in `informer.yaml` — AI-powered workflows that listen for events, execute tools defined in `tools/*.js`, and chain together to automate complex tasks. Two trigger paths: event-driven (via `emit()`) and cron-scheduled.
+Apps can declare **agents** in `informer.yaml` — AI-powered workflows that listen for events, execute tools defined in `tools/*.js`, and chain together to automate complex tasks. Two trigger paths: event-driven (via `emit()`) and cron-scheduled. Declare `onFailure: <event>` on an agent to emit an error event when a run terminally fails, so the workflow branches to a handler instead of stalling.
 
 ```yaml
 # informer.yaml
@@ -915,7 +915,7 @@ agents:
 
 Tools live in `tools/` and share the same V8 sandbox as server route handlers — same `query` / `fetch` / `emit` / `notify` / `email` / `log` / `crypto` / `markdown` / base64 helpers. Tool names mirror the file path with underscores: `tools/notifications/send_email.js` → `notifications_send_email`.
 
-Load `references/agents.md` for: full `agents:` field reference (`tools` / `toolkits` / `assistants` / `on` / `cron` / `webSearch` / `model`), tool file structure, event emission (server routes + agent chaining via `emit()`), toolkit integration (system-level + deploy validation), assistant prompt merging, cron lifecycle (separate `app_automation` table, bypasses event queue), agent REST API, local dev with `/api/_agent/{name}/_trigger`, full order-processing pipeline example.
+Load `references/agents.md` for: full `agents:` field reference (`tools` / `toolkits` / `assistants` / `on` / `cron` / `webSearch` / `onFailure` / `model`), tool file structure, event emission (server routes + agent chaining via `emit()`), the `onFailure` error-transition pattern (emit-on-terminal-failure with envelope + loop guard), toolkit integration (system-level + deploy validation), assistant prompt merging, cron lifecycle (separate `app_automation` table, bypasses event queue), agent REST API, local dev with `/api/_agent/{name}/_trigger`, full order-processing pipeline example.
 
 ## PDF Export
 

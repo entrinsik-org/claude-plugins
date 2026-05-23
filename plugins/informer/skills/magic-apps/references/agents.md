@@ -62,6 +62,7 @@ events:
 | `on` | `string \| string[]` | Event name(s) that trigger this agent |
 | `cron` | `string` | 5-field cron expression for scheduled execution (e.g. `"0 8 * * 1-5"` = weekdays at 8 AM) |
 | `webSearch` | `boolean` | Enable web search (default: `false`). When enabled, the AI model can search the web for current information during execution. |
+| `onFailure` | `string` | Event to emit when a run of this agent **terminally fails** — declares an error branch so the workflow advances instead of stalling. See [Handling Failures](#handling-failures). |
 
 The optional `events:` section documents available events (for reference only — events don't need to be declared to work).
 
@@ -251,6 +252,45 @@ export async function handler(args, { query, emit }) {
     return { updated: true };
 }
 ```
+
+## Handling Failures
+
+A successful run advances the workflow by `emit()`-ing the next event from a tool. If a run **terminally fails**, nothing is emitted and the workflow stops — the failure is visible in the app's logs, but there's no forward transition.
+
+Declare `onFailure` to give an agent an explicit error branch: when a run of that agent terminally fails, the platform emits the named event so another agent can react — compensate, notify, mark the work item failed, and so on.
+
+```yaml
+agents:
+  research-topic:
+    instructions: Research the requested topic and save findings.
+    tools: [web_search, save_findings]
+    on: research_requested
+    onFailure: research_failed      # emitted if a run terminally fails
+
+  handle-research-failure:
+    instructions: Mark the workflow item failed and notify the owner.
+    tools: [mark_failed, notify_owner]
+    on: research_failed             # your error branch
+```
+
+The `onFailure` event fires with a standard envelope describing the failure:
+
+```json
+{
+  "error": "<failure message>",
+  "runId": "<failed run id>",
+  "agent": "research-topic",
+  "event": "research_requested",
+  "payload": { "...": "the payload that triggered the failed run" }
+}
+```
+
+**Semantics:**
+
+- **Fires once** — emitted when a run terminally fails; never re-emitted if the source event is later retried.
+- **Branches instead of retrying** — declaring `onFailure` hands a failed run to your error branch and marks the source event handled, instead of the default blind retry. An event whose matching agents declare *no* `onFailure` keeps the default behavior: retry up to 5 times, then dead-letter.
+- **Shared events** — when several agents trigger on the same event, each agent's failure is independent: any failed agent that declares `onFailure` emits its failure event. The event only falls back to retry/dead-letter when *every* matching agent fails *and none* declares `onFailure`.
+- **Loop guard** — failure events carry a reserved `_failureDepth` counter (the platform adds it to the payload — don't set or rename it). If an error handler itself fails and also declares `onFailure`, the chain is capped after 3 hops so a broken handler can't spawn a runaway failure-event chain.
 
 ## Cron Scheduling
 
