@@ -35,6 +35,7 @@ This file is the orientation layer. Most topics have a dedicated reference under
 | In-gallery app docs (`docs.html`), in-app `?` help button, `README.md` fallback | `references/docs-html.md` |
 | Looking up the raw API surface behind the typed-slot proxy (still useful when something fails) | `references/api-reference.md` |
 | HTML/CSS/JS starter snippets, theme-variable patterns, CSS Modules for React | `references/app-templates.md` |
+| Running a WASM library or Web Worker in the sandbox (DuckDB-WASM, sql.js, ffmpeg.wasm, pdf.js, ONNX) — the blob-worker pattern, bundling wasm locally, `new Worker` failing with origin `'null'`, external extension fetches | `references/wasm-workers.md` |
 
 The sections that **stay in this file** are the ones nearly every project touches: bootstrapping, local-dev essentials, the dep-access centerpiece, the small surfaces (App Context, HTML5 routing, App Roles, PDF Export). Everything else is one click away in `references/`.
 
@@ -134,21 +135,20 @@ npm install -D @entrinsik/vite-plugin-informer@2.4.0
 
 Code splitting is supported. Use Vite's defaults — dynamic `import()` and route-level lazy loading work in published apps with no extra config. Don't override `build.rollupOptions.output`; the server injects an import map at serve time so chunk URLs carry the auth token, and custom chunk paths outside `dist/` will not be served.
 
-### External Scripts (Approved Resources)
+### External Scripts & Resources (Approved Resources)
 
-Informer blocks external CDN scripts by default via CSP. To load anything from an outside host (CDN libraries, web worker payloads, etc.):
+Informer blocks outside hosts by default via CSP. A tenant admin approves external origins under **Informer Admin → Approved Resources**, and the resource *type* decides which CSP directive opens — so match the type to **how the browser loads the thing**:
 
-1. Add the URL to **Informer Admin → Approved Resources → Scripts**
-2. Check **ESM** if it's an ES module (`.mjs`)
-3. Use the `https://cdn.jsdelivr.net/npm/...` format (Informer's standard CDN)
+| You're loading… | how it loads | Approved Resource type | CSP directive |
+|---|---|---|---|
+| A JS library via `<script src>` | script tag | **Script** (check **ESM** for `.mjs`) | `script-src` |
+| A stylesheet | link tag | **Style** | `style-src` |
+| An image / font | `<img>` / `@font-face` | **Asset** (image / font) | `img-src` / `font-src` |
+| **A `fetch()`/XHR target** (remote data, WASM extension packs, …) | `fetch`/XHR | **Asset, type `data`** | `connect-src` |
 
-For packages that ship a separate Web Worker bundle (e.g. `pdfjs-dist`), point `workerSrc` at the CDN copy and add that URL to Approved Resources too — local worker files create separate assets in `dist/` that the auth/token rewrite doesn't reach:
+The last row is the common gotcha: anything an app *fetches* (not script-tag-loads) — e.g. a DuckDB extension pack pulled from `extensions.duckdb.org` — needs a **`data` asset**, not a Script. A Script entry only opens `script-src` and will **not** authorize the `fetch`. Use the `https://cdn.jsdelivr.net/npm/...` format for the standard CDN.
 
-```typescript
-import * as pdfjsLib from 'pdfjs-dist';
-pdfjsLib.GlobalWorkerOptions.workerSrc =
-    `https://cdn.jsdelivr.net/npm/pdfjs-dist@${pdfjsLib.version}/build/pdf.worker.min.mjs`;
-```
+**Web Workers & WASM — bundle locally, do not point at a CDN.** Apps run in an opaque-origin sandboxed iframe, so a worker can't be constructed from an `http(s)` URL and CDN fetches are blocked by `connect-src`. The supported pattern is to bundle the worker/wasm *with your app* (Vite `?url`) and construct the worker from a **blob URL** — no Approved Resource is needed for your own assets. (Earlier guidance to point `workerSrc` at a CDN copy is superseded.) See **`references/wasm-workers.md`** for the full recipe (DuckDB-WASM, sql.js, ffmpeg.wasm, pdf.js, ONNX).
 
 ### Development Mode (`npm run dev`)
 
@@ -889,7 +889,7 @@ Load `references/copilot.md` for: full `openChat()` / `showCopilot()` / `registe
 
 ## Agents — overview
 
-Apps can declare **agents** in `informer.yaml` — AI-powered workflows that listen for events, execute tools defined in `tools/*.js`, and chain together to automate complex tasks. Two trigger paths: event-driven (via `emit()`) and cron-scheduled.
+Apps can declare **agents** in `informer.yaml` — AI-powered workflows that listen for events, execute tools defined in `tools/*.js`, and chain together to automate complex tasks. Two trigger paths: event-driven (via `emit()`) and cron-scheduled. Declare `onFailure: <event>` on an agent to emit an error event when a run terminally fails, so the workflow branches to a handler instead of stalling.
 
 ```yaml
 # informer.yaml
@@ -915,7 +915,7 @@ agents:
 
 Tools live in `tools/` and share the same V8 sandbox as server route handlers — same `query` / `fetch` / `emit` / `notify` / `email` / `log` / `crypto` / `markdown` / base64 helpers. Tool names mirror the file path with underscores: `tools/notifications/send_email.js` → `notifications_send_email`.
 
-Load `references/agents.md` for: full `agents:` field reference (`tools` / `toolkits` / `assistants` / `on` / `cron` / `webSearch` / `model`), tool file structure, event emission (server routes + agent chaining via `emit()`), toolkit integration (system-level + deploy validation), assistant prompt merging, cron lifecycle (separate `app_automation` table, bypasses event queue), agent REST API, local dev with `/api/_agent/{name}/_trigger`, full order-processing pipeline example.
+Load `references/agents.md` for: full `agents:` field reference (`tools` / `toolkits` / `assistants` / `on` / `cron` / `webSearch` / `onFailure` / `model`), tool file structure, event emission (server routes + agent chaining via `emit()`), the `onFailure` error-transition pattern (emit-on-terminal-failure with envelope + loop guard), toolkit integration (system-level + deploy validation), assistant prompt merging, cron lifecycle (separate `app_automation` table, bypasses event queue), agent REST API, local dev with `/api/_agent/{name}/_trigger`, full order-processing pipeline example.
 
 ## PDF Export
 
@@ -1009,6 +1009,7 @@ The orientation above points to each file; this is the canonical list of what's 
 | `references/docs-html.md` | In-gallery `docs.html` page, in-app `?` help button, `README.md` fallback |
 | `references/api-reference.md` | Raw API surface behind the typed-slot proxy (useful for diagnostics) |
 | `references/app-templates.md` | HTML/CSS/JS starter snippets — charts, layouts |
+| `references/wasm-workers.md` | Running WASM / Web-Worker libs in the sandbox — why `new Worker(url)` fails on the opaque origin, the local-bundle + blob-worker pattern, handing wasm to the worker as a blob URL, external fetch targets as `data` Approved Resources, loading Informer data into the engine |
 
 ## Terminology Note
 
