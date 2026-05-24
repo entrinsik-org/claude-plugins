@@ -100,7 +100,7 @@ export const schema = {
     required: ['productId', 'quantity']
 };
 
-export async function handler(args, { query, fetch, emit, notify, email, crypto, log, context }) {
+export async function handler({ args, query, fetch, emit, notify, email, crypto, log, context, run }) {
     const [product] = await query(
         'SELECT * FROM inventory WHERE product_id = $1',
         [args.productId]
@@ -118,19 +118,24 @@ export async function handler(args, { query, fetch, emit, notify, email, crypto,
 }
 ```
 
-**Handler context:**
+**Handler bag** — a single object, the same service surface as server routes/webhooks:
 
 | Property | Type | Description |
 |----------|------|-------------|
+| `args` | `object` | The AI-supplied tool input (validated against `schema`) |
+| `run` | `object` | Agent-run metadata: `{ appId, agentId, runId, trigger }` (the triggering event is `run.trigger`) |
+| `context` | `object` | Typed bound dependencies — `context.<slot>.<method>(...)` (see `informer-yaml.md`) |
 | `query` | `async (sql, params?) => rows` | Execute SQL against the app's workspace |
 | `fetch` | `async (path, options?) => { status, body }` | Make authenticated API calls (subject to whitelist) |
 | `emit` | `async (event, payload) => void` | Emit an event to trigger other agents |
 | `notify` | `async (username, message) => { id }` | Enqueue a push notification (single or bulk) |
 | `email` | `async (to, message) => { id }` | Enqueue an email (single or bulk) |
-| `crypto` | `object` | Cryptographic helpers. `crypto.hmac(algorithm, key, data, encoding?)` computes an HMAC digest. |
+| `crypto` | `object` | `hmac`, `hash`, `randomUUID`, `randomBytes`, `timingSafeEqual`, `verifyHmac`, `encrypt`/`decrypt`, `verify` — all async. See `server-routes.md`. |
 | `markdown` | `async (text) => string` | Convert markdown text to HTML |
 | `log` | `function` | Structured logging. `log(message, data?)` or `log.info()`/`log.warn()`/`log.error()`/`log.debug()`. See `server-routes.md`. |
-| `context` | `object` | `{ appId, agentId, runId, trigger }` |
+| `env` | `object` | App environment variables |
+
+> **Migration note:** earlier tools used `handler(args, ctx)` and read run metadata from `ctx.context`. Tools now take a **single bag**: AI input is `args`, run metadata is `run`, and `context` is the typed dependency proxy. Tools also gained `crypto`, `env`, `notify`, and `email`.
 
 **Tool naming:** The tool name is derived from the file path relative to `tools/`. Nested directories use underscores: `tools/notifications/send_email.js` → `notifications_send_email`.
 
@@ -237,7 +242,7 @@ export const schema = {
     required: ['orderId', 'status']
 };
 
-export async function handler(args, { query, emit }) {
+export async function handler({ args, query, emit }) {
     await query(
         'UPDATE orders SET status = $1 WHERE id = $2',
         [args.status, args.orderId]
