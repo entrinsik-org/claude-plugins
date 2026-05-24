@@ -668,16 +668,18 @@ Apps can expose **token-gated external endpoints** under `webhooks/` for receivi
 ```javascript
 // webhooks/github.js
 export async function POST({ crypto, request, env, query }) {
-    const signature = request.headers['x-hub-signature-256'];
-    const expected = await crypto.hmac('sha256', env.GITHUB_WEBHOOK_SECRET, request.rawBody);
-    if (signature !== `sha256=${expected}`) {
+    // GitHub sends `x-hub-signature-256: sha256=<hex>`
+    const signature = (request.headers['x-hub-signature-256'] || '').replace(/^sha256=/, '');
+    // verifyHmac computes the HMAC and constant-time-compares — no `===` timing leak
+    const ok = await crypto.verifyHmac('sha256', env.GITHUB_WEBHOOK_SECRET, request.rawBody, signature);
+    if (!ok) {
         return { status: 401, body: { error: 'Invalid signature' } };
     }
     // ...process the event
 }
 ```
 
-Webhook handlers have a **subset** of server-route capabilities: `query`, `fetch`, `emit`, `respond`, `crypto`, `markdown`, `log`, the base64 globals, `env`, and `request.rawBody` (for HMAC verification). **`notify()` and `email()` are NOT available** — they throw `TypeError`.
+Webhook handlers receive the **same bag as server routes** — `query`, `fetch`, `context`, `respond`, `emit`, `notify`, `email`, `crypto`, `markdown`, `log`, `env`, plus the base64 globals and `request.rawBody` (for HMAC verification). `notify()` and `email()` **are** available (handlers run as the app owner). The only differences are inbound identity: `request.user` is `null` (no user session) and `request.roles` is `[]` — the handler still *runs as* the app owner, so `fetch()`, `notify()`, and `email()` use owner credentials.
 
 Load `references/webhooks.md` for: file-convention routing, the `?token=` issuance/verification flow, full HMAC verification examples (GitHub, Stripe, shared-secret), `app.defn.env` for storing secrets.
 
@@ -913,7 +915,18 @@ agents:
     cron: "0 8 * * 1-5"
 ```
 
-Tools live in `tools/` and share the same V8 sandbox as server route handlers — same `query` / `fetch` / `emit` / `notify` / `email` / `log` / `crypto` / `markdown` / base64 helpers. Tool names mirror the file path with underscores: `tools/notifications/send_email.js` → `notifications_send_email`.
+Tools live in `tools/` and share the same V8 sandbox as server route handlers. A tool exports a named `handler` that receives a **single bag** with the same service surface as routes/webhooks — `context` (typed deps), `query`, `fetch`, `emit`, `notify`, `email`, `crypto`, `markdown`, `log`, `env` — plus `args` (the AI tool input) and `run` (`{ appId, agentId, runId, trigger }`):
+
+```javascript
+// tools/notifications/send_email.js
+export const description = 'Email a user';
+export const schema = { properties: { to: { type: 'string' } }, required: ['to'] };
+export async function handler({ args, email }) {
+    return await email(args.to, { subject: 'Hi', html: '<p>Hello</p>' });
+}
+```
+
+Tool names mirror the file path with underscores: `tools/notifications/send_email.js` → `notifications_send_email`.
 
 Load `references/agents.md` for: full `agents:` field reference (`tools` / `toolkits` / `assistants` / `on` / `cron` / `webSearch` / `onFailure` / `model`), tool file structure, event emission (server routes + agent chaining via `emit()`), the `onFailure` error-transition pattern (emit-on-terminal-failure with envelope + loop guard), toolkit integration (system-level + deploy validation), assistant prompt merging, cron lifecycle (separate `app_automation` table, bypasses event queue), agent REST API, local dev with `/api/_agent/{name}/_trigger`, full order-processing pipeline example.
 
@@ -1000,7 +1013,7 @@ The orientation above points to each file; this is the canonical list of what's 
 | File | Covers |
 |---|---|
 | `references/server-routes.md` | `server/` handlers, full sandbox-helper reference (`query`, `fetch`, `respond`, `notify`, `email`, `log`, `crypto`, base64/markdown globals), `config.timeout` / `config.roles`, worked CRUD example |
-| `references/webhooks.md` | `webhooks/` handlers, signed `?token=` flow, HMAC verification, capability subset vs server routes |
+| `references/webhooks.md` | `webhooks/` handlers, signed `?token=` flow, HMAC verification (`crypto.verifyHmac`), how webhooks differ from server routes (inbound identity only — same handler bag) |
 | `references/persistence.md` | `migrations/`, dev workspace lifecycle, CRUD worked example |
 | `references/widgets.md` | `widgets:` declaration, self-contained HTML template, iframe constraints, SVG charts without libraries |
 | `references/copilot.md` | `openChat()` / `showCopilot()` / `registerTool()`, AI completion endpoints (`_chat` / `_completion` / `_object`), `useChat` hook pattern, defensive `_object` parsing |

@@ -1,10 +1,10 @@
 # Webhooks (Token-Gated External Endpoints)
 
-> **Load this reference when:** receiving callbacks from external services (Stripe, GitHub, Shopify, Slack, Gmail push, etc.) — anything that doesn't come with an Informer user session. Covers the `webhooks/` directory, the signed `?token=` URL gate, HMAC body-signature verification with `crypto.hmac()`, and the capability subset compared to `server/` routes.
+> **Load this reference when:** receiving callbacks from external services (Stripe, GitHub, Shopify, Slack, Gmail push, etc.) — anything that doesn't come with an Informer user session. Covers the `webhooks/` directory, the signed `?token=` URL gate, HMAC body-signature verification with `crypto.verifyHmac()`, and how webhooks differ from `server/` routes (inbound identity only).
 >
 > **Not in this file:** authenticated app-internal routes — see `server-routes.md`. Agents triggered by webhooks via `emit()` — see `agents.md`.
 
-Apps can expose **webhook endpoints** that receive requests from external services (Gmail push notifications, Slack commands, Stripe events, etc.) without requiring a logged-in Informer user. Each webhook URL embeds a signed `token` query parameter that the handler verifies — the endpoint is unguessable and tamper-proof, not anonymous. Webhook handlers run as the app owner and have access to `query()`, `fetch()`, and `emit()`. **`notify()` and `email()` are NOT available in webhook handlers** — only in server routes and agent tools.
+Apps can expose **webhook endpoints** that receive requests from external services (Gmail push notifications, Slack commands, Stripe events, etc.) without requiring a logged-in Informer user. Each webhook URL embeds a signed `token` query parameter that the handler verifies — the endpoint is unguessable and tamper-proof, not anonymous. Webhook handlers run as the app owner and receive the **same handler bag as server routes** — including `query()`, `fetch()`, `emit()`, `notify()`, `email()`, `crypto`, and the typed `context`. The only differences are inbound identity (no user session — see the table below).
 
 ## How It Works
 
@@ -38,7 +38,7 @@ export async function POST({ query, request, fetch, emit, log, crypto, env }) {
     // request.headers — incoming headers with `cookie` and `proxy-authorization` stripped;
     //                   `authorization` and signature headers (x-hub-signature-*, stripe-signature, etc.) are preserved
     // request.query — incoming query params with the URL-gate `token` and `app_token` stripped
-    // crypto.hmac() — compute HMAC digests
+    // crypto — hmac/verifyHmac/hash/randomUUID/encrypt/decrypt/verify (see server-routes.md)
     // env — app environment variables (secrets, config)
 
     const payload = request.body;
@@ -63,22 +63,24 @@ export async function POST({ query, request, fetch, emit, log, crypto, env }) {
 | **`request.user`** | Current viewer's identity | `null` |
 | **`request.roles`** | Viewer's assigned roles | `[]` |
 | **`fetch()` runs as** | The viewer | The app owner (team admin) |
-| **`notify()` / `email()`** | Available | **Not available** |
+| **`notify()` / `email()`** | Available | Available (run as the app owner) |
 | **Use case** | App-internal CRUD, user-specific logic | External service callbacks |
 
 The signed `token` is issued at deploy time via `GET /api/apps/{id}/webhooks`. External callers must include the token in the URL — the handler runs only if the token verifies against the app's webhook secret.
 
 ## Sandbox Capabilities
 
-Webhook handlers have a subset of server-route capabilities. `notify()` and `email()` are **not** wired into the webhook dispatcher — calling either throws `TypeError: notify is not a function`.
+Webhook handlers receive the **same bag as server routes** (see `server-routes.md` for full details on each). `notify()` and `email()` **are** available — webhook handlers run as the app owner, so message attribution is well-defined.
 
 | Callback | Description |
 |----------|-------------|
 | `query(sql, params?)` | Execute SQL against the app's workspace |
 | `fetch(path, options?)` | Make authenticated API calls (runs as app owner) |
+| `context.<slot>.<method>()` | Typed bound dependencies (see `informer-yaml.md`) |
 | `emit(event, payload?)` | Fire app events (trigger agents) |
+| `notify(user, message)` / `email(to, message)` | Enqueue a push notification / email |
 | `respond(response)` | Send early response while handler continues in background. Same shape as handler return: plain value (wrapped as 200 JSON), `{ status, body }`, or `{ status, headers, body, encoding: 'base64' }` for binary. |
-| `crypto.hmac(algorithm, key, data, encoding?)` | Compute HMAC digest (delegates to Node.js `crypto` on the host). Default encoding: `'hex'`. |
+| `crypto` | `hmac`, `hash`, `randomUUID`, `randomBytes`, `timingSafeEqual`, `verifyHmac`, `encrypt`/`decrypt` (AES-256-GCM), `verify` — all async. Use `verifyHmac` for signature checks. See `server-routes.md`. |
 | `markdown(text)` | Convert markdown text to HTML (async). Uses `marked`. |
 | `log(message, data?)` | Structured logging. Also `log.info()`/`log.warn()`/`log.error()`/`log.debug()`. Writes to `app_log`. See "Using `log()`" in `server-routes.md`. |
 | `base64Decode(encoded)` | Decode base64 to UTF-8 string (async). Handles multi-byte characters correctly. |
@@ -114,19 +116,20 @@ Webhook files are bundled by the same esbuild plugin as server routes — import
 
 ## Webhook Verification
 
-The signed `token` query parameter proves the URL came from Informer (i.e. the *caller knows the URL*), but not that the URL was used by the right service. For end-to-end authenticity, **also verify the upstream's signature on the request body** — most webhook providers (GitHub, Stripe, Shopify, Slack) sign with HMAC-SHA256. The sandbox provides `crypto.hmac()` and `env` for storing secrets.
+The signed `token` query parameter proves the URL came from Informer (i.e. the *caller knows the URL*), but not that the URL was used by the right service. For end-to-end authenticity, **also verify the upstream's signature on the request body** — most webhook providers (GitHub, Stripe, Shopify, Slack) sign with HMAC-SHA256. The sandbox provides `crypto.verifyHmac()` (constant-time) and `env` for storing secrets.
 
-**HMAC signature verification** (GitHub, Stripe, Shopify):
+**HMAC signature verification** (GitHub, Stripe, Shopify) — use `crypto.verifyHmac()`, which computes the digest and compares in constant time (avoid a plain `===`/`!==`, which leaks timing):
 
 ```javascript
 // webhooks/github.js
-export async function POST({ crypto, request, env }) {
-    const signature = request.headers['x-hub-signature-256'];
+export async function POST({ crypto, query, request, env }) {
+    // GitHub sends `x-hub-signature-256: sha256=<hex>`
+    const signature = (request.headers['x-hub-signature-256'] || '').replace(/^sha256=/, '');
     if (!signature) return { status: 401, body: { error: 'Missing signature' } };
 
-    // Compute HMAC over the raw body bytes (not parsed JSON)
-    const expected = await crypto.hmac('sha256', env.GITHUB_WEBHOOK_SECRET, request.rawBody);
-    if (signature !== `sha256=${expected}`) {
+    // verifyHmac computes the HMAC over the raw body bytes and constant-time-compares
+    const ok = await crypto.verifyHmac('sha256', env.GITHUB_WEBHOOK_SECRET, request.rawBody, signature);
+    if (!ok) {
         return { status: 401, body: { error: 'Invalid signature' } };
     }
 
@@ -139,12 +142,13 @@ export async function POST({ crypto, request, env }) {
 }
 ```
 
-**Shared secret** (custom integrations):
+**Shared secret** (custom integrations) — compare with `crypto.timingSafeEqual()` rather than `!==`:
 
 ```javascript
 // webhooks/my-callback.js
-export async function POST({ request, env }) {
-    if (request.headers['x-webhook-secret'] !== env.CALLBACK_SECRET) {
+export async function POST({ crypto, request, env }) {
+    const presented = request.headers['x-webhook-secret'] || '';
+    if (!(await crypto.timingSafeEqual(presented, env.CALLBACK_SECRET))) {
         return { status: 401, body: { error: 'Unauthorized' } };
     }
 

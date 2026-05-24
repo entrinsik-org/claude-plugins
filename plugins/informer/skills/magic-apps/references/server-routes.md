@@ -64,7 +64,7 @@ Each handler function receives a single context object with these properties:
 | `emit` | `async (event, payload) => void` | Emit an app event to trigger agents. Creates an `AppEvent` record and notifies the event dispatcher. |
 | `notify` | `async (username, message) => { id }` | Enqueue a push notification for delivery to a user's Informer GO devices. See [Using `notify()`](#using-notify). |
 | `email` | `async (to, message) => { id }` | Enqueue an email for delivery via the tenant's mail transport. See [Using `email()`](#using-email). |
-| `crypto` | `object` | Cryptographic helpers. `crypto.hmac(algorithm, key, data, encoding?)` computes an HMAC digest (default encoding: `'hex'`). |
+| `crypto` | `object` | Cryptographic helpers (all async): `hmac`, `hash`, `randomUUID`, `randomBytes`, `timingSafeEqual`, `verifyHmac`, `encrypt`/`decrypt` (AES-256-GCM), `verify`. See [Using `crypto`](#using-crypto). |
 | `log` | `function` | Structured logging. `log(message, data?)` or `log.info()`/`log.warn()`/`log.error()`/`log.debug()`. Writes to `app_log`. See [Using `log()`](#using-log). |
 | `env` | `object` | App environment variables (from `app.defn.env`). Set via `PUT /api/apps/{id}` with `defn.env`. |
 | `request` | `object` | The incoming request (see below). |
@@ -492,6 +492,30 @@ const { ids, queued } = await email([
 
 **Bulk:** Array of `{ to, subject, html, from? }` objects.
 
+## Using `crypto`
+
+Host-backed cryptographic helpers, available in server routes, webhooks, and agent tools alike. **Every method is async** — `await` them.
+
+| Method | Description |
+|--------|-------------|
+| `crypto.hmac(algorithm, key, data, encoding?='hex')` | HMAC digest |
+| `crypto.hash(algorithm, data, encoding?='hex')` | Plain digest (e.g. `sha256`) |
+| `crypto.randomUUID()` | RFC 4122 v4 UUID |
+| `crypto.randomBytes(length, encoding?='hex')` | Random bytes (length capped at 1024; lengths ≤ 0 are silently clamped to 1) |
+| `crypto.timingSafeEqual(a, b)` | Constant-time compare; `false` on length mismatch. **Throws on `null`/`undefined` inputs** — guard missing headers with `\|\| ''`. Use instead of `===` for secrets/signatures. |
+| `crypto.verifyHmac(algorithm, key, data, signature, encoding?='hex')` | Compute HMAC + constant-time compare → boolean. The safe way to verify webhook signatures. **Throws on a `null`/`undefined` signature** — guard a missing header with `\|\| ''`. |
+| `crypto.verify(algorithm, data, signature, publicKey, signatureEncoding?='base64')` | Verify an asymmetric (RSA/ECDSA) signature against a PEM key → boolean |
+| `crypto.encrypt(plaintext, key)` | AES-256-GCM → self-describing `iv:tag:ciphertext` (base64). `key` is any passphrase (hashed to 32 bytes). |
+| `crypto.decrypt(payload, key)` | Reverses `encrypt`; throws on a malformed payload (not `iv:tag:ciphertext`), wrong key, or tampering |
+
+```javascript
+const sig = await crypto.hmac('sha256', secret, payload, 'hex');
+const id = await crypto.randomUUID();
+const ok = await crypto.verifyHmac('sha256', secret, request.rawBody, header);
+const token = await crypto.encrypt(JSON.stringify({ userId: 7 }), env.APP_SECRET);
+const { userId } = JSON.parse(await crypto.decrypt(token, env.APP_SECRET));
+```
+
 ## Imports
 
 Files under `server/`, `webhooks/`, and `tools/` are bundled at deploy by an esbuild plugin that resolves imports **only against the app's own library** — the host filesystem and `node_modules` are invisible.
@@ -502,7 +526,7 @@ Files under `server/`, `webhooks/`, and `tools/` are bundled at deploy by an esb
 - Absolute paths (`/etc/...`, `C:\...`).
 - `..` paths that escape the project root.
 
-For HTTP, hashing, base64, and markdown, use the injected sandbox helpers (`fetch`, `crypto.hmac`, the `base64*` globals, `markdown`) — don't try to import their underlying libraries. For third-party logic, copy what you need into a project-local file and import that.
+For HTTP, hashing, base64, and markdown, use the injected sandbox helpers (`fetch`, the `crypto` helpers, the `base64*` globals, `markdown`) — don't try to import their underlying libraries. For third-party logic, copy what you need into a project-local file and import that.
 
 `npm run dev` uses Vite, not this bundler — a forbidden import may run in dev and only fail at deploy.
 
