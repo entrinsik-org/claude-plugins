@@ -123,7 +123,7 @@ export async function handler({ args, query, fetch, emit, notify, email, crypto,
 | Property | Type | Description |
 |----------|------|-------------|
 | `args` | `object` | The AI-supplied tool input (validated against `schema`) |
-| `run` | `object` | Agent-run metadata: `{ appId, agentId, runId, trigger }` (the triggering event is `run.trigger`) |
+| `run` | `object` | Agent-run metadata: `{ appId, agentId, runId, trigger }`. `run.trigger` is the **full triggering event** — read `run.trigger.event` (the name) and `run.trigger.payload` (the data), not `run.trigger` alone |
 | `context` | `object` | Typed bound dependencies — `context.<slot>.<method>(...)` (see `informer-yaml.md`) |
 | `query` | `async (sql, params?) => rows` | Execute SQL against the app's workspace |
 | `fetch` | `async (path, options?) => { status, body }` | Make authenticated API calls (subject to whitelist) |

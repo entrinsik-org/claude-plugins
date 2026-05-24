@@ -679,7 +679,7 @@ export async function POST({ crypto, request, env, query }) {
 }
 ```
 
-Webhook handlers receive the **same bag as server routes** — `query`, `fetch`, `context`, `respond`, `emit`, `notify`, `email`, `crypto`, `markdown`, `log`, `env`, plus the base64 globals and `request.rawBody` (for HMAC verification). `notify()` and `email()` **are** available (handlers run as the app owner). The only differences are inbound: `request.user` is the owner, `request.roles` is `[]`.
+Webhook handlers receive the **same bag as server routes** — `query`, `fetch`, `context`, `respond`, `emit`, `notify`, `email`, `crypto`, `markdown`, `log`, `env`, plus the base64 globals and `request.rawBody` (for HMAC verification). `notify()` and `email()` **are** available (handlers run as the app owner). The only differences are inbound identity: `request.user` is `null` (no user session) and `request.roles` is `[]` — the handler still *runs as* the app owner, so `fetch()`, `notify()`, and `email()` use owner credentials.
 
 Load `references/webhooks.md` for: file-convention routing, the `?token=` issuance/verification flow, full HMAC verification examples (GitHub, Stripe, shared-secret), `app.defn.env` for storing secrets.
 
