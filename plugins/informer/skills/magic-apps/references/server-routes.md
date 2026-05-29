@@ -66,7 +66,7 @@ Each handler function receives a single context object with these properties:
 | `email` | `async (to, message) => { id }` | Enqueue an email for delivery via the tenant's mail transport. See [Using `email()`](#using-email). |
 | `crypto` | `object` | Cryptographic helpers (all async): `hmac`, `hash`, `randomUUID`, `randomBytes`, `timingSafeEqual`, `verifyHmac`, `encrypt`/`decrypt` (AES-256-GCM), `verify`. See [Using `crypto`](#using-crypto). |
 | `log` | `function` | Structured logging. `log(message, data?)` or `log.info()`/`log.warn()`/`log.error()`/`log.debug()`. Writes to `app_log`. See [Using `log()`](#using-log). |
-| `env` | `object` | App environment variables (from `app.defn.env`). Set via `PUT /api/apps/{id}` with `defn.env`. |
+| `env` | `object` | App environment variables — decrypted values from the app's Environment. Set in **Admin → Environment**; declared keys in `informer.yaml` `env:` arrive as unset placeholders for the installer to fill per tenant. Encrypted at rest; never returned by any API. |
 | `request` | `object` | The incoming request (see below). |
 
 **Sandbox globals (available without destructuring):**
