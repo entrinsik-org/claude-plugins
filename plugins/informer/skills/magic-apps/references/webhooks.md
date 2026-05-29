@@ -87,7 +87,7 @@ Webhook handlers receive the **same bag as server routes** (see `server-routes.m
 | `base64Encode(string)` | Encode UTF-8 string to base64 (async). |
 | `base64UrlDecode(encoded)` | Decode base64url to UTF-8 string (async). Ideal for Gmail API payloads. |
 | `base64UrlEncode(string)` | Encode UTF-8 string to base64url (async). |
-| `env` | App environment variables from `app.defn.env` |
+| `env` | App environment variables — decrypted values from the app's Environment (set in the **Admin → Environment** tab, or declared as keys in `informer.yaml` `env:`). Encrypted at rest; never returned by any API. |
 
 Webhook routes also provide `request.rawBody` — the original request body as a string, preserving the exact bytes sent by the caller. Use this for HMAC signature verification (not `request.body`, which is parsed JSON).
 
@@ -157,17 +157,17 @@ export async function POST({ crypto, request, env }) {
 }
 ```
 
-**Setting environment variables:** Store secrets in `app.defn.env` via the app update endpoint:
+**Setting environment variables:** Open the app's **Admin → Environment** tab and add `GITHUB_WEBHOOK_SECRET` (and any other keys your handler reads). Values are encrypted at rest and injected into the handler's `env` bag — they're never echoed back to the UI after you save.
 
-```javascript
-await fetch(`/api/apps/${appId}`, {
-    method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-        defn: { env: { GITHUB_WEBHOOK_SECRET: 'your-secret-here' } }
-    })
-});
+If you want the key to appear pre-listed (as "Not set") for the installer rather than expecting them to remember its name, declare it in `informer.yaml`:
+
+```yaml
+env:
+  GITHUB_WEBHOOK_SECRET:
+    description: HMAC secret GitHub signs webhook payloads with
 ```
+
+On deploy, that seeds an unset placeholder row — the installer fills the value per tenant. See `informer-yaml.md` for the full `env:` schema. (The old `PUT /api/apps/{id}` with `defn.env` workflow is gone — that path leaked secrets in plaintext through GET responses.)
 
 ## Project Structure with Webhooks
 

@@ -120,6 +120,72 @@ access:
     - POST /api/models/go_everyday/_object   # raw API — stays in access
 ```
 
+## `env:` (environment variables)
+
+Apps declare environment variable **keys** their handlers read at runtime.
+Values are NOT stored in `informer.yaml` — they live encrypted in the app's
+Environment, set per-tenant via the **Admin → Environment** tab.
+
+```yaml
+env:
+  STRIPE_KEY:
+    description: Stripe secret key for live API calls
+  API_BASE_URL:
+    description: Base URL of the upstream API the app talks to
+  WEBHOOK_SECRET:
+    description: HMAC secret for inbound webhook signature verification
+```
+
+**What deploy does with this:**
+
+- For each declared key, the deploy seeds an **unset placeholder** row in the
+  app's Environment (value `NULL`). The keys appear in the Admin → Environment
+  tab as "Not set" so an installer knows exactly which secrets to fill in for
+  their tenant.
+- Reconciliation is **additive only** — re-deploys sync each row's
+  `description` from the manifest but **never touch a value** the installer
+  has set, and **never delete** a row whose key was removed from the manifest
+  (env rows are user data, not deploy-derived projections).
+
+**Accepted shapes** (all tolerated — pick what reads best in your manifest):
+
+```yaml
+env:
+  STRIPE_KEY:                   # bare key, no description
+  API_URL: Base URL of the API  # bare string is treated as the description
+  GREETING:
+    description: Friendly app greeting (not secret — safe demo value)
+```
+
+**Reading them in handlers** — the `env` bag is injected into every server
+route, webhook, and agent tool:
+
+```javascript
+// server/charge.js
+export async function POST({ env, fetch }) {
+    const res = await fetch('https://api.stripe.com/v1/charges', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${env.STRIPE_KEY}` },
+        // ...
+    });
+}
+```
+
+Only keys with a value present appear in `env` — declared-but-unset keys are
+absent, so `env.STRIPE_KEY` is `undefined` until the installer fills it.
+Values are **encrypted at rest** and **never returned** by any API; the
+Environment tab shows masked previews only.
+
+**Cross-tenant bundles:** when an app is exported and imported into another
+tenant, keys + descriptions travel but **values do not** — the receiving
+installer fills them per-tenant. (Encryption is tenant-scoped, so values
+couldn't be re-used across tenants anyway.)
+
+> **Legacy note:** earlier guidance told app authors to `PUT /api/apps/{id}`
+> with `{ defn: { env: { … } } }`. That path is gone — it leaked secrets in
+> plaintext through `GET` responses. Use the Environment tab (or declare keys
+> in `env:`) instead.
+
 ## Basic Data Access Example
 
 ```yaml
