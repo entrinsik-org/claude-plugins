@@ -1,0 +1,18 @@
+{
+  "name": "entrinsik-plugins",
+  "description": "Entrinsik plugins for Informer development (OpenAI Codex marketplace). Mirrors the Claude Code marketplace in .claude-plugin/marketplace.json.",
+  "plugins": [
+    {
+      "name": "informer",
+      "description": "Skills for Informer development. Currently includes magic-apps (Informer App development with Vite).",
+      "source": {
+        "source": "local",
+        "path": "./plugins/informer"
+      },
+      "policy": {
+        "installation": "AVAILABLE"
+      },
+      "category": "Development"
+    }
+  ]
+}
