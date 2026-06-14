@@ -132,6 +132,7 @@ export async function handler({ args, query, fetch, emit, notify, email, crypto,
 | `email` | `async (to, message) => { id }` | Enqueue an email (single or bulk) |
 | `crypto` | `object` | `hmac`, `hash`, `randomUUID`, `randomBytes`, `timingSafeEqual`, `verifyHmac`, `encrypt`/`decrypt`, `verify` — all async. See `server-routes.md`. |
 | `markdown` | `async (text) => string` | Convert markdown text to HTML |
+| `extractText` | `async (data, contentType) => string` | Extract plain text from a base64 file (PDF, Excel, Word, text). See `server-routes.md`. |
 | `log` | `function` | Structured logging. `log(message, data?)` or `log.info()`/`log.warn()`/`log.error()`/`log.debug()`. See `server-routes.md`. |
 | `env` | `object` | App environment variables |
 
@@ -140,6 +141,36 @@ export async function handler({ args, query, fetch, emit, notify, email, crypto,
 **Tool naming:** The tool name is derived from the file path relative to `tools/`. Nested directories use underscores: `tools/notifications/send_email.js` → `notifications_send_email`.
 
 > The full sandbox-helper reference (calling shapes, edge cases, return values) lives in `server-routes.md` — agent tools share the same V8 sandbox as server route handlers, so anything documented there applies here too.
+
+### Returning a document or image
+
+A tool's return value is serialized to the model as JSON (or as text for a string). To instead hand the model a file as a **native document or image part**, so it reads the actual PDF or image rather than extracted text, return a `$file` (or `$files`) marker:
+
+```javascript
+// tools/read-document.js
+export async function handler({ args, query }) {
+    const [doc] = await query(
+        'SELECT filename, content_type, data FROM documents WHERE id = $1',
+        [args.id]
+    );
+    if (!doc) return { error: `Document ${args.id} not found` };
+
+    // `data` is base64-encoded bytes. For a text-heavy file, return
+    // extractText(doc.data, doc.content_type) instead (cheaper, no vision tokens).
+    return {
+        $file: { mediaType: doc.content_type, data: doc.data, filename: doc.filename },
+        text: `Loaded ${doc.filename}.`
+    };
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `$file` | `object` | A single file: `{ mediaType, data, filename? }`, where `data` is base64 |
+| `$files` | `array` | Several files, each `{ mediaType, data }` |
+| `text` | `string` | Optional caption emitted before the file part(s) |
+
+`mediaType` must be `application/pdf` or an `image/*` type; provider support follows the underlying model. Reach for this when the document's layout, tables, or visuals matter, or for a scanned PDF with no text layer.
 
 ## Toolkits
 

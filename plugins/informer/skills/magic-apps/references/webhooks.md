@@ -82,6 +82,7 @@ Webhook handlers receive the **same bag as server routes** (see `server-routes.m
 | `respond(response)` | Send early response while handler continues in background. Same shape as handler return: plain value (wrapped as 200 JSON), `{ status, body }`, or `{ status, headers, body, encoding: 'base64' }` for binary. |
 | `crypto` | `hmac`, `hash`, `randomUUID`, `randomBytes`, `timingSafeEqual`, `verifyHmac`, `encrypt`/`decrypt` (AES-256-GCM), `verify` — all async. Use `verifyHmac` for signature checks. See `server-routes.md`. |
 | `markdown(text)` | Convert markdown text to HTML (async). Uses `marked`. |
+| `extractText(data, contentType)` | Extract plain text from a base64 file (PDF, Excel, Word, text/*), async. Throws on unsupported types. See `server-routes.md`. |
 | `log(message, data?)` | Structured logging. Also `log.info()`/`log.warn()`/`log.error()`/`log.debug()`. Writes to `app_log`. See "Using `log()`" in `server-routes.md`. |
 | `base64Decode(encoded)` | Decode base64 to UTF-8 string (async). Handles multi-byte characters correctly. |
 | `base64Encode(string)` | Encode UTF-8 string to base64 (async). |
