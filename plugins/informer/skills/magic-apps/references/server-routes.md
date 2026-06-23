@@ -1,6 +1,6 @@
 # Server-Side Routes
 
-> **Load this reference when:** writing handler files under `server/`, working with the V8 sandbox helpers (`query`, `fetch`, `respond`, `notify`, `email`, `log`, `crypto`, the base64/markdown globals), configuring per-handler `timeout` or `roles`, or wiring frontend calls to `/api/_server/...`.
+> **Load this reference when:** writing handler files under `server/`, working with the V8 sandbox helpers (`query`, `fetch`, `respond`, `notify`, `email`, `log`, `crypto`, the base64/markdown/extractText globals), configuring per-handler `timeout` or `roles`, or wiring frontend calls to `/api/_server/...`.
 >
 > **Not in this file:** public token-gated webhook endpoints — see `webhooks.md`. Agent tool handlers — see `agents.md` (they share the same sandbox, so this file is the authoritative sandbox reference). The typed dep proxy (`context.<slot>.<method>()`) — see SKILL.md "Accessing Your Dependencies".
 
@@ -76,6 +76,7 @@ The following are available as **globals** inside the V8 isolate — not as keys
 | Global | Type | Description |
 |--------|------|-------------|
 | `markdown` | `async (text) => string` | Convert markdown text to HTML using `marked`. |
+| `extractText` | `async (data, contentType) => string` | Extract plain text from a base64 file (PDF, Excel, Word, text). Throws on unsupported types (e.g. images). See [Using `extractText()`](#using-extracttext). |
 | `base64Decode` | `async (encoded) => string` | Decode base64 to UTF-8 text (handles multi-byte; safer than `atob`). |
 | `base64Encode` | `async (string) => string` | Encode UTF-8 string to base64. |
 | `base64UrlDecode` | `async (encoded) => string` | Decode base64url to UTF-8 (Gmail API payloads, JWT segments). |
@@ -516,6 +517,23 @@ const token = await crypto.encrypt(JSON.stringify({ userId: 7 }), env.APP_SECRET
 const { userId } = JSON.parse(await crypto.decrypt(token, env.APP_SECRET));
 ```
 
+## Using `extractText()`
+
+Extract plain text from a base64-encoded file on the host, using the platform's bundled parsers. The isolate has no npm, so this is the way to read a PDF or Office document into text. Async (it crosses the isolate boundary), so `await` it.
+
+```javascript
+const text = await extractText(base64Bytes, 'application/pdf');
+```
+
+| Content type | Result |
+|--------------|--------|
+| `application/pdf` | Extracted page text (empty for a scanned, image-only PDF) |
+| Excel (`.xlsx`, `.xls`) | One CSV block per sheet, under a `### Sheet: <name>` heading |
+| Word (`.docx`) | Extracted document text |
+| `text/*`, `application/json`, `application/csv`, `application/xml` | Returned unchanged |
+
+Any other content type (including images) throws. For a PDF or image you want an agent to read **natively as a document** (layout, scanned pages) rather than as text, return it from a tool with the `$file` convention instead (see `agents.md`).
+
 ## Imports
 
 Files under `server/`, `webhooks/`, and `tools/` are bundled at deploy by an esbuild plugin that resolves imports **only against the app's own library** — the host filesystem and `node_modules` are invisible.
@@ -540,6 +558,7 @@ Server handlers run in a sandboxed V8 isolate. This means:
 - **`btoa()` and `atob()` are available** — base64 encode/decode strings (Latin-1 only, per spec)
 - **UTF-8 base64 helpers** — `base64Decode()`, `base64Encode()`, `base64UrlDecode()`, `base64UrlEncode()` are async functions that correctly handle multi-byte UTF-8 characters (e.g. smart quotes, emoji). **Prefer these over `atob()`/`btoa()` for any text that may contain non-ASCII characters.**
 - **`markdown(text)`** — async function that converts markdown text to HTML using `marked`. Useful for generating formatted email bodies.
+- **`extractText(data, contentType)`** — async function that extracts plain text from a base64 file (PDF, Excel, Word, text/*). Throws on unsupported types (e.g. images). See [Using `extractText()`](#using-extracttext).
 - **`log(message, data?)`** — structured logging with level methods (`log.info()`, `log.warn()`, `log.error()`, `log.debug()`). Writes to `app_log` in production; prints to console in dev mode.
 - **128 MB memory limit** — the isolate is killed if it exceeds this
 - **Wall-clock timeout** — defaults to 30s, configurable via `config.timeout`
