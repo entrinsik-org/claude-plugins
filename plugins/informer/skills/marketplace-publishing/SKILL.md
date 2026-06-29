@@ -1,6 +1,6 @@
 ---
 name: marketplace-publishing
-description: Publishing an Informer App to the marketplace — the tag-driven CI flow via `informer-publish`, semver release channels (stable vs beta prereleases), the CHANGELOG/release-notes convention, vendor publish keys (`lmpub_…`), the `informer` block in package.json, and the GitHub Actions setup. Use when setting up or running marketplace publishing for an Informer App repo — anything about tagging a release, changelog/release notes, CI publishing, publish keys, or channels.
+description: Publishing an Informer App to the marketplace — the tag-driven CI flow via `informer-publish`, semver release channels (stable vs beta prereleases), the CHANGELOG/release-notes convention, vendor publish keys (`lmpub_…`, self-serve from Informer GO), the `informer` block in package.json, listing screenshots (the `screenshots/` folder), and the GitHub Actions setup. Use when setting up or running marketplace publishing for an Informer App repo — anything about tagging a release, changelog/release notes, CI publishing, publish keys, listing description/screenshots, or channels.
 ---
 
 # Publishing an Informer App to the Marketplace
@@ -24,7 +24,8 @@ marketplace**. App *development* (Vite, handlers, datasets, copilot) lives in th
   publish *as the vendor account* — no Informer license or user login needed in CI.
 
 The publishing tool ships in **`@entrinsik/vite-plugin-informer` ≥ 2.5.0** as the
-`informer-publish` bin (sibling to `informer-deploy`).
+`informer-publish` bin (sibling to `informer-deploy`). Track `@latest` (or `@beta`) —
+newer capabilities like **screenshot upload** land in later releases, so pin forward, not back.
 
 ## One-time repo setup
 
@@ -38,17 +39,22 @@ Five things, once per app repo.
     "name": "SQL Scratchpad",
     "slug": "sql-scratchpad",            // ^[a-z0-9-]+$ — the pack's stable id within your vendor
     "shortDescription": "Interactive SQL editor with a results grid",
-    "description": "Longer markdown description shown on the detail page.",
+    "description": "Full **markdown** listing — rendered on the pack's Overview tab (headings, lists, etc.).",
     "categories": ["analytics"],         // see taxonomy below
-    "requires": { "informer": ">=2026.1.0" }   // optional
+    "requires": { "informer": ">=2026.1.0" },  // optional
+    "screenshots": "screenshots"         // optional — override the screenshots directory (default `screenshots/`)
   }
 }
 ```
 
-`name` + `slug` are required. The **first publish creates the listing**; later tags add
-versions to it. Valid categories: `data-connectors`, `analytics`, `automation`, `finance`,
-`hr`, `it-ops`, `compliance`. (An `informer.id` may also be present — that's for
-`informer-deploy` pushing to a live instance, unrelated to publishing.)
+`name` + `slug` are required. The **first publish creates the listing**; **every** publish then
+**refreshes the listing metadata** (name, shortDescription, **description**, categories,
+documentationUrl, icon, screenshots) from the repo *and* adds the new version — so editing the
+`description` and re-publishing updates what consumers see (it isn't frozen at first-publish).
+`description` is **markdown** and renders on the detail **Overview** tab, so make it a real
+listing (overview, highlights, getting-started). Valid categories: `data-connectors`,
+`analytics`, `automation`, `finance`, `hr`, `it-ops`, `compliance`. (An `informer.id` may also
+be present — that's for `informer-deploy` pushing to a live instance, unrelated to publishing.)
 
 ### 2. `CHANGELOG.md` (release notes — Keep a Changelog)
 
@@ -139,6 +145,18 @@ The split that works well in practice — it maps to the channel ceremony:
 Claude can draft/maintain `Unreleased` from your commits before you push — ask it to "update
 the changelog for these changes."
 
+## Screenshots
+
+Drop promotional images in a **`screenshots/`** directory at the repo root — `informer-publish`
+uploads them **ordered by filename**, and they render as a strip (with a click-to-zoom
+lightbox) at the top of the pack's **Overview** in the consumer surface. PNG / JPG / WebP / GIF.
+
+- Override the directory with `informer.screenshots` in `package.json` (e.g. `"assets/shots"`).
+- Like the description, screenshots are **listing-level** (not per-version): the latest publish
+  defines what consumers see. A publish that **uploads** screenshots **replaces** the set; a
+  publish with **none** leaves the existing set untouched (so there's no accidental wipe — and,
+  for now, no clear-all via publish).
+
 ## Publishing — the actual steps
 
 ```bash
@@ -165,9 +183,12 @@ A publish key is an **account-scoped** credential — it publishes *as the vendo
 distinct from a personal API token (`lm_…`, which authenticates as a user and is **not**
 accepted by the publish route). Keys are prefixed **`lmpub_`** and shown **once** at creation.
 
-- **Getting one:** an Entrinsik admin/staff mints it in the License Manager
-  (`POST /api/packs/publish-keys` with `{ accountId, name }`), then hands you the `lmpub_…`
-  string. Store it as the `INFORMER_PUBLISH_TOKEN` CI secret. Keys are revocable.
+- **Getting one (self-serve):** in **Informer GO → Publish → Publish keys**, click *Create key*,
+  name it, and copy the `lmpub_…` value — it's shown **once**. Store it as the
+  `INFORMER_PUBLISH_TOKEN` CI secret. List and revoke from the same place. The key is scoped to
+  *your* account (the LM derives it from your license), so no admin involvement is needed.
+- **Getting one (admin):** an Entrinsik admin/staff can also mint one for any account in the
+  License Manager (`POST /api/packs/publish-keys` with `{ accountId, name }`).
 - **Scope:** per vendor account — one key can publish any of that vendor's packs. The pack's
   `vendorId` is resolved from the key, so whatever account the key belongs to owns the listing.
 
@@ -179,10 +200,10 @@ accepted by the publish route). Keys are prefixed **`lmpub_`** and shown **once*
    published artifact is byte-identical to a normal deploy.)
 2. **Packages** them into a `.tgz` of the app's filesystem.
 3. **Reads** version (tag/arg/package.json), release notes (`CHANGELOG.md`), listing metadata
-   (`package.json` `informer` block), an icon (`favicon.svg` if present), and **provenance**
-   (`GITHUB_REPOSITORY` / `GITHUB_SHA` / `GITHUB_RUN_ID`).
-4. **POSTs** a multipart request to `${INFORMER_MARKETPLACE_URL}/packs/publish` with the
-   `lmpub_` key as a Bearer token.
+   (`package.json` `informer` block), an icon (`favicon.svg` if present), **screenshots**
+   (`screenshots/`), and **provenance** (`GITHUB_REPOSITORY` / `GITHUB_SHA` / `GITHUB_RUN_ID`).
+4. **POSTs** a multipart request to `${INFORMER_MARKETPLACE_URL}/packs/publish` (archive + icon +
+   screenshot parts + metadata fields) with the `lmpub_` key as a Bearer token.
 
 ## Gotchas
 
