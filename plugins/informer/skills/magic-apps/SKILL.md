@@ -31,7 +31,7 @@ This file is the orientation layer. Most topics have a dedicated reference under
 | Declaring `widgets:` in `informer.yaml`, building self-contained HTML cards under `public/widgets/`, iframe quirks | `references/widgets.md` |
 | Activating the in-app copilot, `openChat()` / `registerTool()`, AI completion endpoints (`_chat` / `_completion` / `_object`), `useChat` hook patterns | `references/copilot.md` |
 | Declaring `agents:` in `informer.yaml`, writing `tools/*.js`, `emit()` chaining, cron, toolkits/assistants integration, agent REST API | `references/agents.md` |
-| Deep `informer.yaml` work — `dependencies:` slot field reference, RLS via `$user.*`, modernizing a legacy `access:` block, `defaultBinding` lookup, declaring env-var keys with `env:` | `references/informer-yaml.md` |
+| Deep `informer.yaml` work — `dependencies:` slot field reference, app-sourced `integrations:` (an app declares and owns an Integration — OAuth, `$env` secrets, icons), RLS via `$user.*`, modernizing a legacy `access:` block, `defaultBinding` lookup, declaring env-var keys with `env:` | `references/informer-yaml.md` |
 | In-gallery app docs (`docs.html`), in-app `?` help button, `README.md` fallback | `references/docs-html.md` |
 | Looking up the raw API surface behind the typed-slot proxy (still useful when something fails) | `references/api-reference.md` |
 | HTML/CSS/JS starter snippets, theme-variable patterns, CSS Modules for React | `references/app-templates.md` |
@@ -116,7 +116,7 @@ The `.env` template includes both API key and basic auth blocks — uncomment th
 
 Once the project is set up, the typical next moves are:
 
-1. Ask the user what data the app needs (datasets/queries/datasources/integrations) and add `dependencies:` slots to `informer.yaml` — look up `defaultBinding` UUIDs via `GET /api/datasets-list` etc. against the configured `INFORMER_URL`.
+1. Ask the user what data the app needs (datasets/queries/datasources/integrations) and add `dependencies:` slots to `informer.yaml` — look up `defaultBinding` UUIDs via `GET /api/datasets-list` etc. against the configured `INFORMER_URL`. For an external service the app itself needs (a REST API, Salesforce, and so on), prefer declaring it in the `integrations:` block instead of binding to a pre-existing one — deploy creates the Integration and the slot for you, no UUID and no out-of-band setup. See `references/informer-yaml.md`.
 2. Replace Vite's default `index.html` + `main.js` with the app shell.
 3. If the app stores its own data, scaffold `migrations/` and add a first migration — load `references/persistence.md`.
 4. If the app exposes server-side routes, scaffold `server/` — load `references/server-routes.md`.
