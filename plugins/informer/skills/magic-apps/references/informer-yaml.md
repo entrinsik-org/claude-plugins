@@ -266,7 +266,7 @@ The four typed-slot targets and what API surface each one's bound resource expos
 | `dataset` | `_search`, `fields` | `context.<slot>.search(esQuery)` / `.fields()` |
 | `query` | `_execute` | `context.<slot>.execute(params)` |
 | `datasource` | `_query` | `context.<slot>.query(payload)` |
-| `integration` | `request` | `context.<slot>.request({ method, path, ... })` |
+| `integration` | `request` | `context.<slot>.request({ method, url, params, data })` (axios-shaped: `url` not `path`, `data` is the body) |
 
 > **`libraries` is not a typed slot.** Library access lives only in the legacy `access.libraries:` whitelist block (`contents/*`) — there is no `target: library` slot model. Use `access.libraries:` if your app needs to read files from another library; everything else goes under `dependencies:`.
 
