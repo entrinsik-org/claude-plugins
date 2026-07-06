@@ -146,6 +146,8 @@ export async function POST({ query, request }) {
 }
 ```
 
+> **How a return value becomes a response — and relaying dependency data.** The runtime reads your return as a full response descriptor (`{ status, headers?, body?, encoding? }`) **only when `typeof result.status === 'number'`**; any other value — including an object whose `status` is a string — is wrapped as a `200` JSON response with itself as the body. Two things follow when a handler relays data from a dependency. First, `context.<slot>.request(...)` already returns the **parsed upstream body** — a JSON response is the object or array itself, not a `{ status, body }` wrapper (a non-2xx throws; a binary 2xx returns a base64 envelope) — so return it directly; there is no envelope to peel off with `res.body` / `res.data`. Second, if a relayed record owns a **numeric** `status` field of its own, wrap it so it is sent as data rather than read as a descriptor: `return { status: 200, body: record }`.
+
 **No return value** — returns 204 No Content:
 ```javascript
 export async function DELETE({ query, request }) {

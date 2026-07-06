@@ -292,7 +292,7 @@ The handler receives a `context` object where each `dependencies:` slot is a pro
 | `dataset` | `search(esQuery)` / `fields()` | `POST /api/datasets/<uuid>/_search` / `GET /api/datasets/<uuid>/fields` |
 | `query` | `execute(params)` | `POST /api/queries/<uuid>/_execute` |
 | `datasource` | `query(payload)` | `POST /api/datasources/<uuid>/_query` |
-| `integration` | `request({ method, path, ... })` | `POST /api/integrations/<uuid>/request` |
+| `integration` | `request({ method, url, params, data })` | `POST /api/integrations/<uuid>/request` |
 
 A worked example covering all four target types:
 
@@ -335,10 +335,14 @@ export async function GET({ context, request }) {
         params: ['2026-05-12']
     });
 
-    // integration → request proxies to the external service
+    // integration → request proxies to the external service. The options are
+    // axios-shaped: `url` (the path — NOT `path`), `method`, `params` for the
+    // query string, `data` for the request body (POST/PUT/PATCH), `headers`.
+    // It returns the parsed upstream body DIRECTLY (not a { status, body }
+    // wrapper); a non-2xx upstream throws (see Error handling below).
     const accounts = await context.salesforce.request({
         method: 'GET',
-        path: '/services/data/v59.0/query',
+        url: '/services/data/v59.0/query',
         params: { q: "SELECT Id, Name FROM Account WHERE Industry = 'Banking'" }
     });
 
