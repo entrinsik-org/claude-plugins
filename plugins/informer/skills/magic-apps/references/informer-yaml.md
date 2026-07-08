@@ -186,6 +186,137 @@ couldn't be re-used across tenants anyway.)
 > plaintext through `GET` responses. Use the Environment tab (or declare keys
 > in `env:`) instead.
 
+## `integrations:` (app-sourced integrations)
+
+A `dependencies:` slot with `target: integration` **binds to** an Integration
+that already exists in Informer (someone created it out of band; you supply its
+UUID as `defaultBinding`). The `integrations:` block **declares one the app
+owns**: deploy creates a real Informer Integration and, in the same pass, an
+already-bound dependency slot of the same name. No admin has to pre-build a
+connection, and no Integration UUID appears in the manifest.
+
+```yaml
+integrations:
+  wake:
+    name: Wake ABC
+    apiBaseUri: https://wakeabc.com/
+```
+
+That one entry gives handler code `context.wake.request(...)` with nothing else
+to wire up. Prefer `integrations:` over a `dependencies: { target: integration }`
+slot whenever the app knows the service it needs (which is almost always) —
+it's the difference between "the installer must go create a Salesforce
+integration first" and "it just works on deploy."
+
+**Rules that hold regardless of auth type:**
+
+- The implicit slot is **deploy-managed**: it never shows as "needs binding" in
+  the install panel and can't be rebound by hand. Change the manifest and
+  redeploy to change it. (Converting an existing bound `dependencies:` slot to
+  an owned `integrations:` entry of the same name re-points it automatically.)
+- **Secrets are never literals.** The secret-bearing fields (`apiKey`,
+  `clientSecret`) accept ONLY a `$env.KEY` reference, and every referenced key
+  must be declared in [`env:`](#env-environment-variables) or the deploy fails.
+  The value lives encrypted per-tenant; the installer fills it on the
+  Admin → Environment tab.
+- Removing an entry from the manifest **deletes** the owned Integration on the
+  next deploy (its OAuth connections cascade away with it). Deploy owns the
+  definition; every declared field is rewritten each deploy, so a field you
+  stop declaring reverts to its default.
+- Owned Integrations still go through the same secure proxy as bound ones (one
+  auditable gate, host-locked base URL). They also appear in the tenant's
+  Integrations admin list, badged with the owning app.
+
+### Fields
+
+| Field | Required | Description |
+|-------|----------|-------------|
+| `apiBaseUri` | yes | Base URL requests resolve against. `http`/`https` only — or, for `oauth2`, a `$connection.<field>` reference (see OAuth below). |
+| `name` | no | Display name (default: the entry key). Also drives the auto-matched service icon. |
+| `description` | no | Author-facing copy for the install panel. |
+| `authType` | no | `none` (default), `apiKey`, `basic`, `bearer`, or `oauth2`. |
+| `apiKey` | `apiKey`/`bearer` | `$env.KEY` reference to the key. |
+| `apiKeyName` / `apiKeyLocation` | no | Key header/param name; `header` (default) or `query`. |
+| `clientId` | `basic`/`oauth2` | Client id. May itself be a `$env.KEY` reference. |
+| `clientSecret` | `basic` (opt. `oauth2`) | `$env.KEY` reference to the secret. |
+| `authUri` / `tokenUri` / `scope` / `revocationUri` / `basicTokenAuth` | `oauth2` | Provider endpoints and scopes. |
+| `mode` | no | `per-user` (default) or `shared`. `oauth2` only. |
+| `icon` | no | Absolute path/URL → used as-is; a library path (e.g. `icons/wake.svg`) → the file is copied onto the Integration; omitted → auto-matched to a well-known service by `name`. |
+| `optional` | no | `true` if the app runs without it. Keeps the slot out of the install panel's "needs binding" count; runtime still throws the typed errors so you can feature-flag. |
+
+### Auth types
+
+```yaml
+integrations:
+  # Unauthed public host — still host-locked, still a single audited gate.
+  wake:
+    apiBaseUri: https://wakeabc.com/
+
+  # API key from an $env secret (bearer/basic are the same shape).
+  stripe:
+    authType: apiKey
+    apiBaseUri: https://api.stripe.com/v1
+    apiKey: $env.STRIPE_KEY
+    apiKeyName: Authorization        # optional; defaults to X-API-Key
+    apiKeyLocation: header           # optional; header (default) | query
+
+env:
+  STRIPE_KEY:
+    description: Stripe secret key
+```
+
+Per-authType requirements (deploy rejects violations with a slot-named 400):
+`apiKey`/`bearer` need `apiKey`; `basic` needs `clientId` + `clientSecret`;
+`none` must declare neither.
+
+### OAuth 2.0
+
+```yaml
+integrations:
+  sf:
+    name: Salesforce
+    authType: oauth2
+    apiBaseUri: $connection.instance_url   # from the token response
+    clientId: $env.SF_CONSUMER_KEY
+    clientSecret: $env.SF_CONSUMER_SECRET
+    authUri: https://login.salesforce.com/services/oauth2/authorize
+    tokenUri: https://login.salesforce.com/services/oauth2/token
+    scope: api refresh_token
+
+env:
+  SF_CONSUMER_KEY:
+    description: Salesforce Connected App consumer key
+  SF_CONSUMER_SECRET:
+    description: Salesforce Connected App consumer secret
+```
+
+- **`$connection.<field>` base URLs.** Some providers return the account's own
+  host in the token response (Salesforce returns `instance_url`). Setting
+  `apiBaseUri: $connection.instance_url` makes each connection self-configure to
+  whichever org its user authenticated against — installers never type an org
+  URL. Valid only with `authType: oauth2`.
+- **`mode`.** `per-user` (default): every viewer connects their own account and
+  sees only what their provider permissions allow; the runtime slot dispatches
+  as the viewer. `shared`: one connection, established once by the app owner,
+  that every viewer rides; the slot dispatches as the owner.
+- **Consent happens in-app.** Users connect from the app's Connections surface;
+  you do not build the OAuth handshake. A handler that calls an unconnected
+  oauth2 slot gets a typed `integration_not_connected` error to branch on.
+- **Client-secret custody.** For a single institution, register your own
+  provider app and hold its secret via `$env` (as above); the callback URL to
+  register with the provider is your License Manager's `/integration/callback`.
+  A `clientId` is required; `clientSecret` may be omitted when the id is an
+  alias the License Manager holds the secret for (the marketplace path). Either
+  way a plaintext secret can never sit in the manifest.
+
+### When to use which
+
+- **`integrations:`** — the app owns the connection. Default for anything the
+  app itself needs to reach.
+- **`dependencies: { target: integration }`** — bind to a specific existing
+  Integration the installer picks (or you pre-bind by UUID). Use when the app
+  should reuse a connection the tenant already manages centrally.
+
 ## Basic Data Access Example
 
 ```yaml
