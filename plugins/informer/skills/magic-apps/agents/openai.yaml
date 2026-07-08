@@ -1,0 +1,9 @@
+# OpenAI Codex-specific skill metadata (optional).
+# Claude Code ignores this file; Codex reads it for presentation + invocation policy.
+# The skill works in Codex from SKILL.md alone — this only adds polish.
+interface:
+  display_name: "Informer Magic Apps"
+policy:
+  # Let Codex auto-trigger the skill on a description match (same as Claude Code's
+  # implicit loading). Set to false to require an explicit `$magic-apps` invocation.
+  allow_implicit_invocation: true

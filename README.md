@@ -30,6 +30,50 @@ A growing collection of Informer-development skills under one plugin. Skills are
 
 Future skills will be added under the same plugin (e.g. `/informer:datasets`, `/informer:license-manager`, `/informer:troubleshooting`).
 
+## Using these skills with OpenAI Codex
+
+`SKILL.md` (YAML frontmatter + markdown body + a `references/` library) is a shared format across coding agents, so the same skill content runs in OpenAI Codex with no edits. The only difference is discovery: Codex looks for skills under a `.agents/skills/` directory and installs bundled plugins from a `.agents/plugins/marketplace.json`, rather than a Claude `plugin.json`.
+
+This repo carries the Codex equivalents of the Claude manifests alongside them, so there are two ways to consume it: a one-command marketplace install (mirrors the Claude flow above), or a manual clone-and-sync.
+
+### Option A — install as a Codex plugin (mirrors the Claude install)
+
+> ⚠️ **Experimental — verify against your Codex version.** These manifests were authored from the [Build plugins docs](https://developers.openai.com/codex/plugins/build) and have not been validated against a live Codex install. If the command below errors, use Option B, which needs no manifest schema to be exact.
+
+```
+codex plugin marketplace add entrinsik-org/claude-plugins
+/plugins                 # in Codex CLI: browse, select "informer", install
+```
+
+The Codex marketplace lives in `.agents/plugins/marketplace.json` (repo root) and the plugin manifest in `plugins/informer/.codex-plugin/plugin.json` — the Codex analogs of `.claude-plugin/marketplace.json` and `plugins/informer/.claude-plugin/plugin.json`. Both point at the same `plugins/informer/skills/` source, so there's no content duplication.
+
+### Option B — clone and sync the skills (no manifest dependency)
+
+`SKILL.md` is a shared format, so the skill content runs in Codex unchanged. The source of truth stays under `plugins/informer/skills/<skill>/`, and a per-skill symlink under `.agents/skills/` points back to it:
+
+```
+.agents/skills/magic-apps -> ../../plugins/informer/skills/magic-apps
+```
+
+**Repo-level (zero setup):** clone the repo and run Codex from anywhere inside it — it scans `.agents/skills/` from the cwd up to the repo root and finds the skill through the committed symlink. Invoke it as `$magic-apps` (or `@magic-apps`), or just describe the task and let Codex match on the skill `description`.
+
+**User-global (available in every repo):** copy the skills into your Codex home directory:
+
+```
+bash scripts/sync-codex-skills.sh --user      # → ~/.agents/skills/
+```
+
+**Symlink-hostile environments** (Windows, or a Codex build that doesn't follow symlinked skill dirs): materialize real copies in place instead of symlinks:
+
+```
+bash scripts/sync-codex-skills.sh --copy      # → ./.agents/skills/ (real files)
+bash scripts/sync-codex-skills.sh             # re-create the symlinks (default)
+```
+
+The script auto-discovers every `plugins/*/skills/*/SKILL.md`, so new skills are picked up without editing it.
+
+Each skill also carries an optional `agents/openai.yaml` (Codex display name + implicit-invocation policy). Claude Code ignores that file; the skill works in Codex from `SKILL.md` alone.
+
 ## Migrating from `magic-reports` (v3.x)
 
 Prior versions shipped as a plugin called `magic-reports` containing two skills: `magic-apps` and a legacy `magic-reports` skill. The platform no longer distinguishes Magic Reports from Apps, so the legacy skill has been removed and the plugin has been renamed.
