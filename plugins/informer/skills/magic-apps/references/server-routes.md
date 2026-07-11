@@ -114,7 +114,7 @@ Webhook handlers use a narrower deny-list (signature headers and Bearer tokens a
 
 ## Calling Typed Dep Slots
 
-The handler's `context` object carries one property per `dependencies:` slot, with methods that proxy to the bound target. See "Accessing Your Dependencies" in SKILL.md — that's the canonical reference, with worked examples for all four target types (`dataset` / `query` / `datasource` / `integration`), the `dependency_unbound` / `dependency_broken` error pattern, and the rules for the frontend equivalents.
+The handler's `context` object carries one property per `dependencies:` slot, with methods that proxy to the bound target. See "Accessing Your Dependencies" in SKILL.md — that's the canonical reference, with worked examples for all five target types (`dataset` / `query` / `datasource` / `integration` / `app`), the `dependency_unbound` / `dependency_broken` error pattern, and the rules for the frontend equivalents.
 
 The short version: in a handler, write `context.<slotName>.<method>(args)` — never raw `fetch('/api/datasets/<uuid>/...')`. Slots survive bundle export/import and resource renames; raw paths don't.
 

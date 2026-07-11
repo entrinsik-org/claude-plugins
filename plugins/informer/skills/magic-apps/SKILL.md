@@ -260,7 +260,7 @@ Apps can include a `docs.html` page in `public/` that opens from the app gallery
 
 ## Accessing Your Dependencies
 
-This is the most important section of this skill. Read it before writing any code that touches a dataset, query, datasource, or integration. The single biggest source of broken Magic Apps is code that hardcodes resource IDs in the frontend.
+This is the most important section of this skill. Read it before writing any code that touches a dataset, query, datasource, integration, or another App's data. The single biggest source of broken Magic Apps is code that hardcodes resource IDs in the frontend.
 
 ### The runtime model
 
@@ -293,8 +293,9 @@ The handler receives a `context` object where each `dependencies:` slot is a pro
 | `query` | `execute(params)` | `POST /api/queries/<uuid>/_execute` |
 | `datasource` | `query(payload)` | `POST /api/datasources/<uuid>/_query` |
 | `integration` | `request({ method, url, params, data })` | `POST /api/integrations/<uuid>/request` |
+| `app` | `query(sql, params)` / `request({ method, url, params, data })` | read-only SQL on the target App's workspace / the target App's own `server/` routes |
 
-A worked example covering all four target types:
+A worked example covering all five target types:
 
 ```yaml
 # informer.yaml
@@ -311,6 +312,8 @@ dependencies:
   salesforce:
     target: integration
     defaultBinding: 5a6b7c8d-9e0f-1234-5678-9abcdef01234
+  kanban:
+    target: app                          # another installed App; installer binds it
 ```
 
 ```javascript
@@ -346,9 +349,20 @@ export async function GET({ context, request }) {
         params: { q: "SELECT Id, Name FROM Account WHERE Industry = 'Banking'" }
     });
 
-    return { hits, fields, summary, events, accounts };
+    // app → query runs READ-ONLY SQL against the target App's workspace
+    // (enforced by a SELECT-only DB role — writes fail no matter the SQL
+    // shape); request invokes the target App's own server/ routes.
+    const moves = await context.kanban.query(
+        `SELECT date_trunc('week', moved_at) AS week, count(*) AS n
+         FROM card_transitions GROUP BY 1 ORDER BY 1`
+    );
+    const stats = await context.kanban.request({ method: 'GET', url: '/stats/summary' });
+
+    return { hits, fields, summary, events, accounts, moves, stats };
 }
 ```
+
+**`target: app` rules.** Cross-app `request()` is limited to ONE hop (A→B ok; B cannot then call C or back into A — a second hop throws 508 `app_dependency_depth_exceeded`); the call runs through the target App's own read access, `config.roles`, and compute budget under the slot's `runAs` identity. A write attempted via `query()` surfaces as a 400 with `errorCode: 'app_dependency_query_failed'`. An App can never bind to itself (400 at deploy/bind).
 
 **Error handling.** If the installer hasn't bound a slot yet, or the bound target was deleted, the proxy throws a structured boom 422:
 
@@ -519,6 +533,7 @@ These are the endpoints **app authors** hit (via curl or Claude with `.env` conf
 | `GET /api/queries-list` | `[{ id (UUID), name, configId, ... }]` | `target: query` slots |
 | `GET /api/datasources-list` | `[{ id (UUID), name, configId, ... }]` | `target: datasource` slots |
 | `GET /api/integrations-list` | `[{ id (UUID), name, slug, ... }]` | `target: integration` slots |
+| `GET /api/apps-list` | `[{ id (UUID), name, ... }]` | `target: app` slots |
 
 Example: ask Claude to "find the UUID for the northwind-orders dataset" — Claude curls `$INFORMER_URL/api/datasets-list` against the configured `.env` credentials, finds the matching `configId`, and copies the `id` into `defaultBinding`.
 

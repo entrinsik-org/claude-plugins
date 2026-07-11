@@ -15,7 +15,7 @@ Apps are configured with an `informer.yaml` file in the project root. This singl
 # Your Dependencies" for the patterns.
 dependencies:
   sales:
-    target: dataset                                          # one of: dataset, query, datasource, integration
+    target: dataset                                          # one of: dataset, query, datasource, integration, app
     description: Sales fact table
     defaultBinding: 7d5a9b1e-0c83-4bde-9e2a-3a4b5c6d7e8f     # UUID — pre-binds on first deploy. Look up via GET /api/datasets-list.
   customers:
@@ -60,7 +60,7 @@ The legacy `access:` block for typed resources still works at runtime, but:
 
 | Field | Required | Description |
 |-------|----------|-------------|
-| `target` | yes | `dataset`, `query`, `datasource`, or `integration` |
+| `target` | yes | `dataset`, `query`, `datasource`, `integration`, or `app` |
 | `description` | no | Author-facing copy shown in the install/rebind UI |
 | `runAs` | no | `user` (default) or `owner`. `owner` bypasses the viewing user's permissions — use sparingly |
 | `options` | no | Per-target options (e.g. dataset filters), validated against the driver's schema |
@@ -390,7 +390,7 @@ dependencies:
 
 ## Resource Types
 
-The four typed-slot targets and what API surface each one's bound resource exposes:
+The five typed-slot targets and what API surface each one's bound resource exposes:
 
 | `target` | API surface | Slot methods |
 |----------|-------------|--------------|
@@ -398,6 +398,25 @@ The four typed-slot targets and what API surface each one's bound resource expos
 | `query` | `_execute` | `context.<slot>.execute(params)` |
 | `datasource` | `_query` | `context.<slot>.query(payload)` |
 | `integration` | `request` | `context.<slot>.request({ method, url, params, data })` (axios-shaped: `url` not `path`, `data` is the body) |
+| `app` | another App's workspace + `server/` routes | `context.<slot>.query(sql, params)` (read-only SQL) / `.request({ method, url, params, data })` |
+
+### `target: app` (cross-app dependencies)
+
+Binds another installed App, granting two surfaces on it:
+
+```yaml
+dependencies:
+  kanban:
+    target: app
+    description: The board whose data this dashboard analyzes
+```
+
+- **`query(sql, params)` is read-only, enforced at the database level.** Cross-app SQL authenticates as a dedicated SELECT-only Postgres role on the target's workspace schema, so writes fail regardless of SQL shape (INSERT, data-modifying CTEs, and multi-statement transaction tricks all fail). A write attempt surfaces as a 400 with `errorCode: 'app_dependency_query_failed'`.
+- **`request()` is limited to one hop.** App A may call App B, but the handler B runs on A's behalf cannot then call App C (or back into A) — a second hop throws 508 with `errorCode: 'app_dependency_depth_exceeded'`.
+- **`request()` goes through the target App's own gate.** Dispatch is identical to a direct call: the `runAs` identity must have read access to the target App, the target route's `config.roles` apply, and compute is metered against the target.
+- **Self-binding is rejected** at deploy and bind time with a 400.
+- Unbound/broken slots throw the standard 422 `dependency_unbound` / `dependency_broken` contract.
+- `defaultBinding` works like every other target (UUID from `GET /api/apps-list`), but cross-app slots are usually left for the installer to bind — the target is an *installation* choice by nature.
 
 > **`libraries` is not a typed slot.** Library access lives only in the legacy `access.libraries:` whitelist block (`contents/*`) — there is no `target: library` slot model. Use `access.libraries:` if your app needs to read files from another library; everything else goes under `dependencies:`.
 
