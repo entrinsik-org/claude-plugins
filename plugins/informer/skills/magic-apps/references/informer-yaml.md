@@ -232,6 +232,7 @@ integration first" and "it just works on deploy."
 | Field | Required | Description |
 |-------|----------|-------------|
 | `apiBaseUri` | yes | Base URL requests resolve against. `http`/`https` only — or, for `oauth2`, a `$connection.<field>` reference (see OAuth below). |
+| `altBaseUris` | no | Extra base URLs absolute request URLs may target, for multi-host APIs (see [Multi-host APIs](#multi-host-apis-altbaseuris)). Server 2026.1.1+ honors values on the Integration record; manifest declaration and `*.` host wildcards require the I5-12803 build. |
 | `name` | no | Display name (default: the entry key). Also drives the auto-matched service icon. |
 | `description` | no | Author-facing copy for the install panel. |
 | `authType` | no | `none` (default), `apiKey`, `basic`, `bearer`, or `oauth2`. |
@@ -308,6 +309,68 @@ env:
   A `clientId` is required; `clientSecret` may be omitted when the id is an
   alias the License Manager holds the secret for (the marketplace path). Either
   way a plaintext secret can never sit in the manifest.
+
+### Multi-host APIs (`altBaseUris`)
+
+The request proxy pins every absolute URL to the integration's configured
+bases — an SSRF guard that also stops a caller from steering the credential at
+sibling paths. Some providers legitimately span hosts: Slack serves its API
+from `slack.com/api` but file downloads from `files.slack.com`; Zoom serves
+its API from `api.zoom.us` but cloud-recording/transcript downloads from
+per-account hosts (`{account}.zoom.us`, `us0Xweb.zoom.us`). `altBaseUris`
+declares those extra bases:
+
+```yaml
+integrations:
+  zoom:
+    authType: oauth2
+    apiBaseUri: https://api.zoom.us/v2
+    altBaseUris:
+      - https://*.zoom.us        # `*.` host wildcard: apex + any subdomain
+    clientId: $env.ZOOM_CLIENT_ID
+    authUri: https://zoom.us/oauth/authorize
+    tokenUri: https://zoom.us/oauth/token
+```
+
+Handler code then passes the provider's absolute download URL straight through
+the same credentialed proxy:
+
+```javascript
+const rec = await context.zoom.request({
+    method: 'GET',
+    url: `/meetings/${zoomMeetingId}/recordings`,
+    params: { include_fields: 'download_access_token' },
+});
+const vtt = (rec.recording_files || []).find(f => f.file_type === 'TRANSCRIPT');
+const body = await context.zoom.request({
+    method: 'GET',
+    url: `${vtt.download_url}?access_token=${rec.download_access_token}`,  // absolute, alt host
+});
+```
+
+Matching rules (each entry is a full base, not just a host):
+
+- An **exact** entry admits only that origin (scheme + host + port), confined
+  to the entry's path at a segment boundary — same semantics as `apiBaseUri`.
+- A **leading `*.`** makes the host a wildcard: the apex and any subdomain
+  match, at a dot boundary only (`evilzoom.us` and `zoom.us.evil.com` do not).
+  Scheme and port still pin exactly; path confinement still applies. Only a
+  leading `*.` is wildcard syntax — a mid-host asterisk is a literal that
+  matches nothing.
+- The list is owner-controlled config; a caller can never widen it.
+
+**Version notes:**
+
+- Server **2026.1.1+** honors exact-host `altBaseUris` set on the Integration
+  record, but the deploy manifest doesn't accept the key yet. Interim: set it
+  directly — `PUT /api/integrations/{id}` with
+  `{ "altBaseUris": ["https://myaccount.zoom.us"] }`. Deploys don't manage the
+  field on those builds, so the value survives redeploys; it is not one of the
+  connection-invalidating columns, so existing OAuth connections survive too.
+- Builds with **I5-12803** accept `altBaseUris` in the manifest (deploy-owned:
+  dropping it revokes the extra hosts) and add the `*.` wildcard matching.
+  Declaring it in the manifest on an older server fails deploy with an
+  unknown-key error — comment it out until the server is upgraded.
 
 ### When to use which
 

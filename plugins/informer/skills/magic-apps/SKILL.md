@@ -340,6 +340,10 @@ export async function GET({ context, request }) {
     // query string, `data` for the request body (POST/PUT/PATCH), `headers`.
     // It returns the parsed upstream body DIRECTLY (not a { status, body }
     // wrapper); a non-2xx upstream throws (see Error handling below).
+    // `url` may also be ABSOLUTE, but only to the integration's configured
+    // bases (apiBaseUri + altBaseUris) — anything else is rejected as SSRF.
+    // Multi-host providers (Zoom download hosts, files.slack.com) need
+    // altBaseUris: see references/informer-yaml.md → "Multi-host APIs".
     const accounts = await context.salesforce.request({
         method: 'GET',
         url: '/services/data/v59.0/query',
