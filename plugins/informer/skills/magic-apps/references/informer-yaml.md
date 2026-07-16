@@ -411,12 +411,12 @@ dependencies:
     description: The board whose data this dashboard analyzes
 ```
 
-- **`query(sql, params)` is read-only, enforced at the database level.** Cross-app SQL authenticates as a dedicated SELECT-only Postgres role on the target's workspace schema, so writes fail regardless of SQL shape (INSERT, data-modifying CTEs, and multi-statement transaction tricks all fail). A write attempt surfaces as a 400 with `errorCode: 'app_dependency_query_failed'`.
+- **Binding requires owner/admin of the target — and there is no `defaultBinding`.** A bound App exposes its *entire* workspace through `query()`, so the person binding must be the target App's owner or an admin of the team that owns it; read access alone is rejected with a 403. App slots are bound by the installer through the app's dependency setup (`GET /api/apps-list` finds the App to bind), NOT via a manifest `defaultBinding` — declaring one fails the deploy with "does not support defaultBinding". Leave the slot bare, as above.
+- **`query(sql, params)` is read-only and not viewer-scoped.** Cross-app SQL authenticates as a dedicated SELECT-only Postgres role on the target's workspace schema, so writes fail regardless of SQL shape (INSERT, data-modifying CTEs, and multi-statement transaction tricks all fail; a write surfaces as a 400 with `errorCode: 'app_dependency_query_failed'`). It reads the whole workspace and runs identically for every viewer of the consuming App — it does NOT inherit the calling user's permissions, which is why binding is gated to the target's owner/admin.
 - **`request()` is limited to one hop.** App A may call App B, but the handler B runs on A's behalf cannot then call App C (or back into A) — a second hop throws 508 with `errorCode: 'app_dependency_depth_exceeded'`.
 - **`request()` goes through the target App's own gate.** Dispatch is identical to a direct call: the `runAs` identity must have read access to the target App, the target route's `config.roles` apply, and compute is metered against the target.
-- **Self-binding is rejected** at deploy and bind time with a 400.
+- **Self-binding is rejected** at bind time with a 400.
 - Unbound/broken slots throw the standard 422 `dependency_unbound` / `dependency_broken` contract.
-- `defaultBinding` works like every other target (UUID from `GET /api/apps-list`), but cross-app slots are usually left for the installer to bind — the target is an *installation* choice by nature.
 
 > **`libraries` is not a typed slot.** Library access lives only in the legacy `access.libraries:` whitelist block (`contents/*`) — there is no `target: library` slot model. Use `access.libraries:` if your app needs to read files from another library; everything else goes under `dependencies:`.
 

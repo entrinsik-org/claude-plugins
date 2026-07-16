@@ -362,7 +362,11 @@ export async function GET({ context, request }) {
 }
 ```
 
-**`target: app` rules.** Cross-app `request()` is limited to ONE hop (A→B ok; B cannot then call C or back into A — a second hop throws 508 `app_dependency_depth_exceeded`); the call runs through the target App's own read access, `config.roles`, and compute budget under the slot's `runAs` identity. A write attempted via `query()` surfaces as a 400 with `errorCode: 'app_dependency_query_failed'`. An App can never bind to itself (400 at deploy/bind).
+**`target: app` rules.**
+- **Binding requires owner/admin of the target, and there's no `defaultBinding`.** A bound App exposes its *entire* workspace through `query()`, so whoever binds the slot must be the target App's owner or an admin of the team that owns it — read access to the target is not enough (a 403 otherwise). App slots are therefore bound by the installer through the app's dependency setup, NOT via a manifest `defaultBinding` (declaring one fails the deploy with "does not support defaultBinding"). Leave the slot bare (`target: app`) in the manifest.
+- **`query()` is read-only and not viewer-scoped.** Cross-app SQL runs as a SELECT-only Postgres role, so writes fail no matter how the SQL is shaped (a write surfaces as a 400 with `errorCode: 'app_dependency_query_failed'`). It reads the whole workspace and runs the same for every viewer of the consuming App — it does NOT inherit the calling user's permissions, which is why binding is gated to the target's owner/admin above.
+- **`request()` is limited to ONE hop** (A→B ok; B cannot then call C or back into A — a second hop throws 508 `app_dependency_depth_exceeded`), and it runs through the target App's own read access, `config.roles`, and compute budget under the slot's `runAs` identity.
+- **An App can never bind to itself** (400 at bind time).
 
 **Error handling.** If the installer hasn't bound a slot yet, or the bound target was deleted, the proxy throws a structured boom 422:
 
@@ -533,7 +537,8 @@ These are the endpoints **app authors** hit (via curl or Claude with `.env` conf
 | `GET /api/queries-list` | `[{ id (UUID), name, configId, ... }]` | `target: query` slots |
 | `GET /api/datasources-list` | `[{ id (UUID), name, configId, ... }]` | `target: datasource` slots |
 | `GET /api/integrations-list` | `[{ id (UUID), name, slug, ... }]` | `target: integration` slots |
-| `GET /api/apps-list` | `[{ id (UUID), name, ... }]` | `target: app` slots |
+
+(`target: app` slots take no `defaultBinding` — the installer binds them through the app's dependency setup, which enforces the owner/admin check on the target. `GET /api/apps-list` is how the installer finds the App to bind, not a manifest lookup.)
 
 Example: ask Claude to "find the UUID for the northwind-orders dataset" — Claude curls `$INFORMER_URL/api/datasets-list` against the configured `.env` credentials, finds the matching `configId`, and copies the `id` into `defaultBinding`.
 
