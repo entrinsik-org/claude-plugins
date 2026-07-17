@@ -31,6 +31,7 @@ This file is the orientation layer. Most topics have a dedicated reference under
 | Declaring `widgets:` in `informer.yaml`, building self-contained HTML cards under `public/widgets/`, iframe quirks | `references/widgets.md` |
 | Activating the in-app copilot, `openChat()` / `registerTool()`, AI completion endpoints (`_chat` / `_completion` / `_object`), `useChat` hook patterns | `references/copilot.md` |
 | Declaring `agents:` in `informer.yaml`, writing `tools/*.js`, `emit()` chaining, cron, toolkits/assistants integration, agent REST API | `references/agents.md` |
+| Exposing tools to outside AI clients (Claude Code/Desktop, Cursor) — the `mcp/` folder, why the folder is the decision, writing for a caller with no context, the per-app endpoint, the OAuth connect flow, who a tool runs as | `references/mcp.md` |
 | Deep `informer.yaml` work — `dependencies:` slot field reference, app-sourced `integrations:` (an app declares and owns an Integration — OAuth, `$env` secrets, icons), RLS via `$user.*`, modernizing a legacy `access:` block, `defaultBinding` lookup, declaring env-var keys with `env:` | `references/informer-yaml.md` |
 | In-gallery app docs (`docs.html`), in-app `?` help button, `README.md` fallback | `references/docs-html.md` |
 | Looking up the raw API surface behind the typed-slot proxy (still useful when something fails) | `references/api-reference.md` |
@@ -120,6 +121,7 @@ Once the project is set up, the typical next moves are:
 2. Replace Vite's default `index.html` + `main.js` with the app shell.
 3. If the app stores its own data, scaffold `migrations/` and add a first migration — load `references/persistence.md`.
 4. If the app exposes server-side routes, scaffold `server/` — load `references/server-routes.md`.
+5. If the app should be usable from an outside AI client (Claude Code/Desktop, Cursor), scaffold `mcp/` with tools written for a context-free caller — load `references/mcp.md`.
 
 ## Local Development Workflow
 
@@ -202,10 +204,10 @@ Builds your project and uploads to Informer:
 4. Uploads all built assets from `dist/`
 5. Uploads `informer.yaml` and `data-access.yaml` from project root (if they exist)
 6. Uploads `migrations/` directory (if it exists)
-7. Uploads `tools/` directory (if it exists)
+7. Uploads `tools/` and `mcp/` directories (if they exist)
 8. Uploads `server/` directory (if it exists)
 9. Uploads `webhooks/` directory (if it exists)
-10. Runs deploy: pending SQL migrations + server-route scanning + webhook scanning + handler bundling + tool bundling + resource reference validation + agent upsert from `informer.yaml`
+10. Runs deploy: pending SQL migrations + server-route scanning + webhook scanning + handler bundling + tool bundling (`tools/` + `mcp/`) + resource reference validation + agent upsert from `informer.yaml`
     - **Resource refs are validated**: all datasets, queries, datasources, integrations, and toolkits declared in `informer.yaml` must exist — deploy fails with a clear error if any are missing
 11. App is viewable at `/api/apps/{owner}:{slug}/view`
 
@@ -934,6 +936,37 @@ Tool names mirror the file path with underscores: `tools/notifications/send_emai
 
 Load `references/agents.md` for: full `agents:` field reference (`tools` / `toolkits` / `assistants` / `on` / `cron` / `webSearch` / `onFailure` / `model`), tool file structure, event emission (server routes + agent chaining via `emit()`), the `onFailure` error-transition pattern (emit-on-terminal-failure with envelope + loop guard), toolkit integration (system-level + deploy validation), assistant prompt merging, cron lifecycle (separate `app_automation` table, bypasses event queue), agent REST API, local dev with `/api/_agent/{name}/_trigger`, full order-processing pipeline example.
 
+## MCP server — overview
+
+An app with an **`mcp/` directory** is an MCP server: outside AI clients (Claude Code, Claude Desktop, Cursor) connect to a per-app endpoint, the user signs in through Informer, and the client can call the app's exposed tools. Deploy scans `mcp/` alongside `tools/`, so `npm run deploy` is the whole setup — **the folder is the declaration**, no manifest block or flag.
+
+`mcp/` and `tools/` share the file contract (`description`, `schema`, `handler`), the sandbox, and the service bag. The only difference is who may call them, and it is load-bearing:
+
+- **`tools/`** — the app's own agents call these. An agent tool is safe *because* its `instructions` (which you wrote) decide when it fires and with what.
+- **`mcp/`** — any MCP client the app is shared with can call these, and so can the app's agents. A stranger's model picks the moment and the arguments, from your `description` and `schema` alone.
+
+So a tool goes in `mcp/` only when it was **written knowing a stranger's LLM will call it**: narrow, self-describing, no assumption of surrounding context. Don't move an agent tool into `mcp/` to reuse it without re-reading it that way. Names live in one namespace across both folders (a duplicate fails the deploy); agents may reference `mcp/` tools, never the reverse.
+
+```javascript
+// mcp/find_order.js — the description IS the API doc; the calling model
+// sees nothing else. Runs as the signed-in user (run.user / run.roles),
+// run.trigger === 'mcp'.
+export const description = 'Look up an order by customer name or number, with its shipment if it has one';
+export const schema = {
+    type: 'object',
+    properties: { customer: { type: 'string' }, id: { type: 'integer' } },
+    additionalProperties: false,
+};
+export async function handler({ args, query, run }) {
+    const orders = await query('SELECT * FROM orders WHERE customer ILIKE $1 LIMIT 20', [`%${args.customer}%`]);
+    return { found: orders.length, orders };
+}
+```
+
+Connect with `claude mcp add --transport http my-app <endpoint>` (the endpoint is the `inf:app-mcp` rel and the admin panel's **MCP** tab; never hand-build it). First tool use pops a browser: RFC 9728 discovery → self-registration → PKCE → a token bound to that one app. Self-registration needs a tenant admin to enable it (Admin → Settings → Security); while it's off, clients connect with an API-token header instead.
+
+Load `references/mcp.md` for: the `mcp/` vs `tools/` decision in depth (including the `emit()`-tool trap), writing tools for a context-free caller (descriptions as API docs, self-describing returns, no guessing), the identity model (`runAs` slots, `run.user`/`run.roles`, and why the app's own workspace is not per-caller so **the tool is the access control**), the full OAuth/discovery/DCR flow, curl-testing the endpoint, observability, and gotchas.
+
 ## PDF Export
 
 Apps can be exported to PDF via `POST /api/apps/{id}/_print`.
@@ -1022,6 +1055,7 @@ The orientation above points to each file; this is the canonical list of what's 
 | `references/widgets.md` | `widgets:` declaration, self-contained HTML template, iframe constraints, SVG charts without libraries |
 | `references/copilot.md` | `openChat()` / `showCopilot()` / `registerTool()`, AI completion endpoints (`_chat` / `_completion` / `_object`), `useChat` hook pattern, defensive `_object` parsing |
 | `references/agents.md` | `agents:` declaration, `tools/*.js`, event chaining via `emit()`, cron lifecycle, toolkits/assistants, agent REST API |
+| `references/mcp.md` | The `mcp/` folder, `mcp/` vs `tools/` split, writing tools for a context-free caller, identity (`runAs` / `run.user` / `run.roles`, workspace-not-per-caller), the per-app endpoint, OAuth discovery + DCR connect flow, curl testing, observability |
 | `references/informer-yaml.md` | Full `informer.yaml` schema deep dive — slot fields, `$user.*` variables, modernizing legacy `access:` blocks, declaring env-var keys with `env:` |
 | `references/docs-html.md` | In-gallery `docs.html` page, in-app `?` help button, `README.md` fallback |
 | `references/api-reference.md` | Raw API surface behind the typed-slot proxy (useful for diagnostics) |
