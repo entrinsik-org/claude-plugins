@@ -25,7 +25,7 @@ This file is the orientation layer. Most topics have a dedicated reference under
 
 | User intent / signal | Load this file |
 |---|---|
-| Writing handlers under `server/`, working with `query` / `fetch` / `respond` / `notify` / `email` / `log` / `crypto` / base64 / markdown / `env` / `request` / sandbox constraints | `references/server-routes.md` |
+| Writing handlers under `server/`, working with `query` / `transaction` / `fetch` / `respond` / `notify` / `email` / `log` / `crypto` / base64 / markdown / `env` / `request` / sandbox constraints | `references/server-routes.md` |
 | Receiving external callbacks (Stripe, GitHub, Slack, Gmail push) under `webhooks/`, HMAC verification, signed `?token=` URLs | `references/webhooks.md` |
 | Storing app data — `migrations/`, dev-workspace lifecycle, `workspace:init` / `:migrate` / `:reset`, CRUD example | `references/persistence.md` |
 | Declaring `widgets:` in `informer.yaml`, building self-contained HTML cards under `public/widgets/`, iframe quirks | `references/widgets.md` |
@@ -659,7 +659,7 @@ export async function POST({ query, request }) {
 }
 ```
 
-Handlers receive a single argument with the sandbox helpers (`query`, `fetch`, `context`, `respond`, `emit`, `notify`, `email`, `log`, `crypto`, `env`, `request`). Globals available without destructuring: `markdown`, `base64Encode` / `base64Decode` / `base64UrlEncode` / `base64UrlDecode`, `atob` / `btoa`.
+Handlers receive a single argument with the sandbox helpers (`query`, `transaction`, `fetch`, `context`, `respond`, `emit`, `notify`, `email`, `log`, `crypto`, `env`, `request`). Globals available without destructuring: `markdown`, `base64Encode` / `base64Decode` / `base64UrlEncode` / `base64UrlDecode`, `atob` / `btoa`.
 
 Sandbox constraints: no Node APIs, no filesystem, no direct network — all I/O is through the injected callbacks. 128 MB memory, 30s default wall-clock timeout (configurable via `config.timeout`).
 
@@ -683,7 +683,7 @@ export async function POST({ crypto, request, env, query }) {
 }
 ```
 
-Webhook handlers receive the **same bag as server routes** — `query`, `fetch`, `context`, `respond`, `emit`, `notify`, `email`, `crypto`, `markdown`, `log`, `env`, plus the base64 globals and `request.rawBody` (for HMAC verification). `notify()` and `email()` **are** available (handlers run as the app owner). The only differences are inbound identity: `request.user` is `null` (no user session) and `request.roles` is `[]` — the handler still *runs as* the app owner, so `fetch()`, `notify()`, and `email()` use owner credentials.
+Webhook handlers receive the **same bag as server routes** — `query`, `transaction`, `fetch`, `context`, `respond`, `emit`, `notify`, `email`, `crypto`, `markdown`, `log`, `env`, plus the base64 globals and `request.rawBody` (for HMAC verification). `notify()` and `email()` **are** available (handlers run as the app owner). The only differences are inbound identity: `request.user` is `null` (no user session) and `request.roles` is `[]` — the handler still *runs as* the app owner, so `fetch()`, `notify()`, and `email()` use owner credentials.
 
 Load `references/webhooks.md` for: file-convention routing, the `?token=` issuance/verification flow, full HMAC verification examples (GitHub, Stripe, shared-secret), and reading per-app secrets via the `env` bag (configured in **Admin → Environment** or declared as keys in `informer.yaml` `env:`).
 
@@ -919,7 +919,7 @@ agents:
     cron: "0 8 * * 1-5"
 ```
 
-Tools live in `tools/` and share the same V8 sandbox as server route handlers. A tool exports a named `handler` that receives a **single bag** with the same service surface as routes/webhooks — `context` (typed deps), `query`, `fetch`, `emit`, `notify`, `email`, `crypto`, `markdown`, `log`, `env` — plus `args` (the AI tool input) and `run` (`{ appId, agentId, runId, trigger }`):
+Tools live in `tools/` and share the same V8 sandbox as server route handlers. A tool exports a named `handler` that receives a **single bag** with the same service surface as routes/webhooks — `context` (typed deps), `query`, `transaction`, `fetch`, `emit`, `notify`, `email`, `crypto`, `markdown`, `log`, `env` — plus `args` (the AI tool input) and `run` (`{ appId, agentId, runId, trigger }`):
 
 ```javascript
 // tools/notifications/send_email.js
@@ -1016,7 +1016,7 @@ The orientation above points to each file; this is the canonical list of what's 
 
 | File | Covers |
 |---|---|
-| `references/server-routes.md` | `server/` handlers, full sandbox-helper reference (`query`, `fetch`, `respond`, `notify`, `email`, `log`, `crypto`, base64/markdown globals), `config.timeout` / `config.roles`, worked CRUD example |
+| `references/server-routes.md` | `server/` handlers, full sandbox-helper reference (`query`, `transaction`, `fetch`, `respond`, `notify`, `email`, `log`, `crypto`, base64/markdown globals), `config.timeout` / `config.roles`, worked CRUD example |
 | `references/webhooks.md` | `webhooks/` handlers, signed `?token=` flow, HMAC verification (`crypto.verifyHmac`), how webhooks differ from server routes (inbound identity only — same handler bag) |
 | `references/persistence.md` | `migrations/`, dev workspace lifecycle, CRUD worked example |
 | `references/widgets.md` | `widgets:` declaration, self-contained HTML template, iframe constraints, SVG charts without libraries |
