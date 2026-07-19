@@ -293,9 +293,11 @@ The handler receives a `context` object where each `dependencies:` slot is a pro
 | `query` | `execute(params)` | `POST /api/queries/<uuid>/_execute` |
 | `datasource` | `query(payload)` | `POST /api/datasources/<uuid>/_query` |
 | `integration` | `request({ method, url, params, data })` | `POST /api/integrations/<uuid>/request` |
-| `app` | `query(sql, params)` / `request({ method, url, params, data })` | read-only SQL on the target App's workspace / the target App's own `server/` routes |
+| `app` | `request({ method, url, params, data })` | `<method> /api/apps/<uuid>/view/_/<url>` |
 
-A worked example covering all five target types:
+`target: app` binds another installed App and exposes only `request()` — it invokes one of the target App's `server/` routes (one hop, no chaining), with the same axios-shaped options as `integration`. It binds like every other target (read access to the target App, optional `defaultBinding: <app-uuid>`). **To run SQL over another App's data, don't use `target: app` — bind that App's workspace datasource via a `target: datasource` slot** (see `references/informer-yaml.md`).
+
+A worked example covering the four data target types:
 
 ```yaml
 # informer.yaml
@@ -541,6 +543,7 @@ These are the endpoints **app authors** hit (via curl or Claude with `.env` conf
 | `GET /api/queries-list` | `[{ id (UUID), name, configId, ... }]` | `target: query` slots |
 | `GET /api/datasources-list` | `[{ id (UUID), name, configId, ... }]` | `target: datasource` slots |
 | `GET /api/integrations-list` | `[{ id (UUID), name, slug, ... }]` | `target: integration` slots |
+| `GET /api/apps-list` | `[{ id (UUID), name, naturalId, ... }]` | `target: app` slots |
 
 (`target: app` slots take no `defaultBinding` — the installer binds them through the app's dependency setup, which enforces the owner/admin check on the target. `GET /api/apps-list` is how the installer finds the App to bind, not a manifest lookup.)
 

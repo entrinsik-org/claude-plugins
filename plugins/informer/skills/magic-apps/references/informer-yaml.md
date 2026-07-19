@@ -68,6 +68,16 @@ The legacy `access:` block for typed resources still works at runtime, but:
 
 > **Legacy note:** You can also use a standalone `data-access.yaml` file (without the `access:` wrapper key). If both files exist, `informer.yaml` takes precedence. New apps should use `informer.yaml` with `dependencies:` since it supports typed slots, raw API allowlists, widgets, and roles in one file.
 
+## `target: app` (app-to-app dependencies)
+
+Bind another installed App to call its server routes. The slot exposes a single method:
+
+- `request({ method, url, params, data })` — invoke one of the target App's `server/` routes (the same axios-shaped options as `integration`; returns the parsed body, a non-2xx upstream throws). Limited to one hop: an App reached through a dependency can't then chain into a third.
+
+App slots bind like every other target — read access to the target App is the bar (same as datasets/queries/datasources/integrations), and a `defaultBinding: <app-uuid>` pre-binds on first deploy. An App can't bind to itself.
+
+**To run SQL over another App's data, don't use `target: app`.** Bind that App's **workspace datasource** through a `target: datasource` slot instead: every App has a first-class workspace Datasource, and binding it gives you the standard `query(payload)` surface with the datasource's own ownership and access rules.
+
 ## Migrating an old `access:` app to `dependencies:`
 
 Older apps declared their data via `access:` blocks. The runtime still extracts those, but they don't surface in the install/rebind UI — every change requires editing the YAML and redeploying. Convert them to `dependencies:` slots so the install panel can re-bind without manifest edits.
