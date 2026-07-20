@@ -1,6 +1,6 @@
 ---
 name: marketplace-publishing
-description: Publishing an Informer App to the marketplace — the tag-driven CI flow via `informer-publish`, semver release channels (stable vs beta prereleases), the CHANGELOG/release-notes convention, vendor publish keys (`lmpub_…`, self-serve from Informer GO), the `informer` block in package.json, listing screenshots (the `screenshots/` folder), and the GitHub Actions setup. Use when setting up or running marketplace publishing for an Informer App repo — anything about tagging a release, changelog/release notes, CI publishing, publish keys, listing description/screenshots, or channels.
+description: Publishing an Informer App to the marketplace — the tag-driven CI flow via `informer-publish`, semver release channels (stable vs beta prereleases), the CHANGELOG/release-notes convention, vendor publish keys (`lmpub_…`, self-serve from Informer GO), the `informer` block in package.json, listing screenshots (the `screenshots/` folder), pack-to-pack dependencies (`target: pack` — "Works with" another marketplace pack), and the GitHub Actions setup. Use when setting up or running marketplace publishing for an Informer App repo — anything about tagging a release, changelog/release notes, CI publishing, publish keys, listing description/screenshots, channels, or depending on another marketplace pack.
 ---
 
 # Publishing an Informer App to the Marketplace
@@ -158,6 +158,61 @@ lightbox) at the top of the pack's **Overview** in the consumer surface. PNG / J
   defines what consumers see. A publish that **uploads** screenshots **replaces** the set; a
   publish with **none** leaves the existing set untouched (so there's no accidental wipe — and,
   for now, no clear-all via publish).
+
+## Pack dependencies (`target: pack` — "Works with" another pack)
+
+If your app calls the server routes of **another marketplace pack** (yours or a third
+party's), don't declare a generic `target: app` slot — declare a **pack dependency** in
+`informer.yaml`. You pin the pack by slug and version range; the consumer's instance
+resolves the pin to their locally-installed copy by itself:
+
+```yaml
+dependencies:
+  kanban:
+    target: pack
+    pack: informer-kanban          # the pack's marketplace slug
+    requires: ">=1.2 <2"           # semver range your code supports
+    description: The Kanban board this dashboard drives
+```
+
+Handler code calls it like an app slot — `await context.kanban.request({ method, url,
+params, data })` — one hop deep, through the target's own routes and roles.
+
+What the pin buys you over `target: app`:
+
+- **The installer consents, they never pick.** The slot shows the pinned pack's install
+  state with a single **Connect** action (plus consent dialog) — no browsing for the right
+  app, no mis-binding. If the pack isn't installed, the panel routes them to the
+  marketplace to get it.
+- **Resolution is late and self-healing** — stable install preferred over beta; the
+  consumer uninstalling/reinstalling the target pack doesn't break the slot.
+- **The version gate fails hard.** An installed version outside `requires` makes calls
+  throw a 422 with `errorCode: 'pack_dependency_out_of_range'` (carrying
+  `installedVersion` and `requires`) instead of answering wrongly. Matching is
+  prerelease-inclusive, so a beta install like `1.4.0-beta.1` satisfies `>=1.2 <2`.
+- **The pin is author-owned.** Installers can't re-point it; only your redeploy/republish
+  changes `pack`/`requires`. (`defaultBinding` is rejected on pack slots — the pin *is*
+  the identity.)
+
+Publisher discipline for `requires`:
+
+- Treat it like any dependency range: **widen it in a release when you've verified the new
+  target major**, and ship that as your own version bump. Consumers who update the target
+  pack past your range get the clean 422 until you publish support.
+- Note the compatibility in your listing `description` and `CHANGELOG.md` ("Works with
+  Informer Kanban 1.2+") — the range in the manifest enforces; the listing communicates.
+
+**Local dev:** there's no marketplace install to resolve against in dev, so point the slot
+at your locally-installed copy via the vite plugin (≥ 2.6.0-beta.2):
+
+```javascript
+// vite.config.js
+informer({
+    devBindings: {
+        kanban: { app: 'admin:kanban' }   // your local copy of the pack's app
+    }
+})
+```
 
 ## Publishing — the actual steps
 
