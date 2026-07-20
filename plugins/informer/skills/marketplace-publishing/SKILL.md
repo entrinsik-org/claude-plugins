@@ -23,9 +23,11 @@ marketplace**. App *development* (Vite, handlers, datasets, copilot) lives in th
 - **Auth is a vendor publish key** (`lmpub_…`), stored as a CI secret. It authenticates the
   publish *as the vendor account* — no Informer license or user login needed in CI.
 
-The publishing tool ships in **`@entrinsik/vite-plugin-informer` ≥ 2.5.0** as the
+The publishing tool ships in **`@entrinsik/vite-plugin-informer` ≥ 2.6.0-beta.1** as the
 `informer-publish` bin (sibling to `informer-deploy`). Track `@latest` (or `@beta`) —
-newer capabilities like **screenshot upload** land in later releases, so pin forward, not back.
+newer capabilities land in later releases, so pin forward, not back. The 2.6.0-beta.1
+floor matters: earlier versions did not package `lib/` and `shared/` source dirs, so apps
+with shared server-side modules published incomplete archives.
 
 ## One-time repo setup
 
@@ -195,9 +197,11 @@ accepted by the publish route). Keys are prefixed **`lmpub_`** and shown **once*
 ## What `informer-publish` does (under the hood)
 
 1. **Assembles the app file set** — the same files `informer-deploy` pushes: the Vite `dist/`
-   output (at the library root), `informer.yaml` / `data-access.yaml`, and the `server/`,
-   `tools/`, `migrations/`, `webhooks/` source trees. (Shared with `informer-deploy` so a
-   published artifact is byte-identical to a normal deploy.)
+   output (at the library root), `informer.yaml` (declare host-API grants in its
+   `access.apis:` block — `data-access.yaml` is deprecated and ignored by the deploy
+   pipeline), and the `server/`, `tools/`, `migrations/`, `webhooks/`, `lib/`, `shared/`
+   source trees (dotfiles, `node_modules`, and `*.test.js` are excluded). Shared with
+   `informer-deploy` so a published artifact is byte-identical to a normal deploy.
 2. **Packages** them into a `.tgz` of the app's filesystem.
 3. **Reads** version (tag/arg/package.json), release notes (`CHANGELOG.md`), listing metadata
    (`package.json` `informer` block), an icon (`favicon.svg` if present), **screenshots**
