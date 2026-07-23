@@ -1,6 +1,6 @@
 ---
 name: magic-apps
-description: Building Informer Apps with local Vite development. Covers the dev/publish workflow, the centerpiece "Accessing Your Dependencies" model (typed slots + three patterns), and the orientation map for deeper topics (server routes, webhooks, persistence, widgets, copilot sidebar, event-driven AI agents, PDF export, informer.yaml schema) — each routes to a reference file under `references/` so the front door stays loadable on every trigger.
+description: Building Informer Apps with local Vite development. Covers the dev/publish workflow, the centerpiece "Accessing Your Dependencies" model (typed slots + three patterns), and the orientation map for deeper topics (server routes, webhooks, persistence, widgets, copilot sidebar, event-driven AI agents, PDF export, informer.yaml schema, app-to-app/pack API integration and openapi.json contracts) — each routes to a reference file under `references/` so the front door stays loadable on every trigger.
 ---
 
 # Informer App Development
@@ -33,6 +33,7 @@ This file is the orientation layer. Most topics have a dedicated reference under
 | Declaring `agents:` in `informer.yaml`, writing `tools/*.js`, `emit()` chaining, cron, toolkits/assistants integration, agent REST API | `references/agents.md` |
 | Exposing tools to outside AI clients (Claude Code/Desktop, Cursor) — the `mcp/` folder, why the folder is the decision, writing for a caller with no context, the per-app endpoint, the OAuth connect flow, who a tool runs as | `references/mcp.md` |
 | Deep `informer.yaml` work — `dependencies:` slot field reference, app-sourced `integrations:` (an app declares and owns an Integration — OAuth, `$env` secrets, icons), RLS via `$user.*`, modernizing a legacy `access:` block, `defaultBinding` lookup, declaring env-var keys with `env:` | `references/informer-yaml.md` |
+| App-to-app/pack APIs — fetching a target's contract (`openapi.json`), typed dev bindings (`.informer/app-deps.d.ts`), public-vs-internal routes, and making your own App integratable (`description`/`schema` exports, `config.api = 'public'`, root `API.md`) | `references/app-api.md` |
 | In-gallery app docs (`docs.html`), in-app `?` help button, `README.md` fallback | `references/docs-html.md` |
 | Looking up the raw API surface behind the typed-slot proxy (still useful when something fails) | `references/api-reference.md` |
 | HTML/CSS/JS starter snippets, theme-variable patterns, CSS Modules for React | `references/app-templates.md` |
@@ -295,9 +296,11 @@ The handler receives a `context` object where each `dependencies:` slot is a pro
 | `query` | `execute(params)` | `POST /api/queries/<uuid>/_execute` |
 | `datasource` | `query(payload)` | `POST /api/datasources/<uuid>/_query` |
 | `integration` | `request({ method, url, params, data })` | `POST /api/integrations/<uuid>/request` |
-| `app` | `query(sql, params)` / `request({ method, url, params, data })` | read-only SQL on the target App's workspace / the target App's own `server/` routes |
+| `app` | `request({ method, url, params, data })` | `<method> /api/apps/<uuid>/view/_/<url>` |
 
-A worked example covering all five target types:
+`target: app` binds another installed App and exposes only `request()` — it invokes one of the target App's `server/` routes (one hop, no chaining), with the same axios-shaped options as `integration`. It binds like every other target (read access to the target App, optional `defaultBinding: <app-uuid>`). **Before writing `request()` calls, fetch the target's contract** — `GET /api/apps/{owner}:{name}/openapi.json` documents its routes, params, roles, and public surface, and `devBindings` turns it into typed calls in dev (see `references/app-api.md`; a marketplace-destined consumer declares `target: pack` instead — same file). **To run SQL over another App's data, don't use `target: app` — bind that App's workspace datasource via a `target: datasource` slot** (see `references/informer-yaml.md`).
+
+A worked example covering the four data target types:
 
 ```yaml
 # informer.yaml
@@ -315,7 +318,7 @@ dependencies:
     target: integration
     defaultBinding: 5a6b7c8d-9e0f-1234-5678-9abcdef01234
   kanban:
-    target: app                          # another installed App; installer binds it
+    target: app                          # another installed App; defaultBinding optional
 ```
 
 ```javascript
@@ -355,24 +358,19 @@ export async function GET({ context, request }) {
         params: { q: "SELECT Id, Name FROM Account WHERE Industry = 'Banking'" }
     });
 
-    // app → query runs READ-ONLY SQL against the target App's workspace
-    // (enforced by a SELECT-only DB role — writes fail no matter the SQL
-    // shape); request invokes the target App's own server/ routes.
-    const moves = await context.kanban.query(
-        `SELECT date_trunc('week', moved_at) AS week, count(*) AS n
-         FROM card_transitions GROUP BY 1 ORDER BY 1`
-    );
+    // app → request invokes the target App's own server/ routes.
+    // request() is the ONLY surface — there is no cross-app SQL.
     const stats = await context.kanban.request({ method: 'GET', url: '/stats/summary' });
 
-    return { hits, fields, summary, events, accounts, moves, stats };
+    return { hits, fields, summary, events, accounts, stats };
 }
 ```
 
 **`target: app` rules.**
-- **Binding requires owner/admin of the target, and there's no `defaultBinding`.** A bound App exposes its *entire* workspace through `query()`, so whoever binds the slot must be the target App's owner or an admin of the team that owns it — read access to the target is not enough (a 403 otherwise). App slots are therefore bound by the installer through the app's dependency setup, NOT via a manifest `defaultBinding` (declaring one fails the deploy with "does not support defaultBinding"). Leave the slot bare (`target: app`) in the manifest.
-- **`query()` is read-only and not viewer-scoped.** Cross-app SQL runs as a SELECT-only Postgres role, so writes fail no matter how the SQL is shaped (a write surfaces as a 400 with `errorCode: 'app_dependency_query_failed'`). It reads the whole workspace and runs the same for every viewer of the consuming App — it does NOT inherit the calling user's permissions, which is why binding is gated to the target's owner/admin above.
+- **Binds like every other target — read access, `defaultBinding` supported.** Whoever binds the slot needs read access to the target App (the same bar as datasets/queries/datasources/integrations), and the manifest may pre-bind with `defaultBinding: <app-uuid>` (look it up via `GET /api/apps-list`). An unresolvable `defaultBinding` doesn't fail the deploy — it logs a warning, and a required slot surfaces a `default_binding_unresolved` warning telling the admin the app won't run until it's bound in Settings. Author errors (a non-UUID value, a target type that doesn't support `defaultBinding`) are still fatal.
+- **`request()` is the only surface — there is no cross-app SQL.** To run SQL over another App's data, bind that App's workspace datasource through a `target: datasource` slot.
 - **`request()` is limited to ONE hop** (A→B ok; B cannot then call C or back into A — a second hop throws 508 `app_dependency_depth_exceeded`), and it runs through the target App's own read access, `config.roles`, and compute budget under the slot's `runAs` identity.
-- **An App can never bind to itself** (400 at bind time).
+- **An App can never bind to itself** (rejected with a 400 — including a self-referencing `defaultBinding` at deploy).
 
 **Error handling.** If the installer hasn't bound a slot yet, or the bound target was deleted, the proxy throws a structured boom 422:
 
@@ -543,8 +541,10 @@ These are the endpoints **app authors** hit (via curl or Claude with `.env` conf
 | `GET /api/queries-list` | `[{ id (UUID), name, configId, ... }]` | `target: query` slots |
 | `GET /api/datasources-list` | `[{ id (UUID), name, configId, ... }]` | `target: datasource` slots |
 | `GET /api/integrations-list` | `[{ id (UUID), name, slug, ... }]` | `target: integration` slots |
+| `GET /api/apps-list` | `[{ id (UUID), name, naturalId, ... }]` | `target: app` slots |
+| `GET /api/apps/{owner}:{name}/openapi.json` | The App's API contract (routes, params, roles, public surface) | Writing `context.<slot>.request()` calls against an `app`/`pack` slot (see `references/app-api.md`) |
 
-(`target: app` slots take no `defaultBinding` — the installer binds them through the app's dependency setup, which enforces the owner/admin check on the target. `GET /api/apps-list` is how the installer finds the App to bind, not a manifest lookup.)
+(`GET /api/apps-list` is how you find the target App's UUID for a `target: app` slot's `defaultBinding`, and how the installer finds the App when binding through the app's dependency setup.)
 
 Example: ask Claude to "find the UUID for the northwind-orders dataset" — Claude curls `$INFORMER_URL/api/datasets-list` against the configured `.env` credentials, finds the matching `configId`, and copies the `id` into `defaultBinding`.
 

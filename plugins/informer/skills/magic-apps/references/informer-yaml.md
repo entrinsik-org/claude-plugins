@@ -68,6 +68,18 @@ The legacy `access:` block for typed resources still works at runtime, but:
 
 > **Legacy note:** You can also use a standalone `data-access.yaml` file (without the `access:` wrapper key). If both files exist, `informer.yaml` takes precedence. New apps should use `informer.yaml` with `dependencies:` since it supports typed slots, raw API allowlists, widgets, and roles in one file.
 
+## `target: app` (app-to-app dependencies)
+
+Bind another installed App to call its server routes. The slot exposes a single method:
+
+- `request({ method, url, params, data })` — invoke one of the target App's `server/` routes (the same axios-shaped options as `integration`; returns the parsed body, a non-2xx upstream throws). **One hop only**: an App reached through a dependency can't then chain into a third (or back into the caller) — a second hop throws 508 with `errorCode: 'app_dependency_depth_exceeded'`. Dispatch goes through the target App's own gate: the slot's `runAs` identity must have read access to the target, the target route's `config.roles` apply, and compute is metered against the target.
+
+App slots bind like every other target — read access to the target App is the bar (same as datasets/queries/datasources/integrations), and a `defaultBinding: <app-uuid>` pre-binds on first deploy (find the UUID via `GET /api/apps-list`). An App can't bind to itself (400, including a self-referencing `defaultBinding`). Unbound/broken slots throw the standard 422 `dependency_unbound` / `dependency_broken` contract.
+
+Before writing calls against the slot, fetch the target's contract (`GET /api/apps/{owner}:{name}/openapi.json`) and set up typed dev bindings — see `references/app-api.md`. A marketplace-destined consumer should declare `target: pack` (pin by marketplace slug + semver range) instead of `target: app`; the pack form is covered in the **marketplace-publishing** skill.
+
+**To run SQL over another App's data, don't use `target: app`.** Bind that App's **workspace datasource** through a `target: datasource` slot instead: every App has a first-class workspace Datasource, and binding it gives you the standard `query(payload)` surface with the datasource's own ownership and access rules.
+
 ## Migrating an old `access:` app to `dependencies:`
 
 Older apps declared their data via `access:` blocks. The runtime still extracts those, but they don't surface in the install/rebind UI — every change requires editing the YAML and redeploying. Convert them to `dependencies:` slots so the install panel can re-bind without manifest edits.
@@ -84,7 +96,7 @@ The recipe Claude follows when asked to modernize:
    - Carry `filter` / `headers` / `params` / `paths` (when present on a structured access entry) into `options:`.
 3. Remove the migrated entries from `access:`. **Keep `access.apis`** — raw paths don't have a slot model.
 4. Update any server-side handler code that referenced these resources by `naturalId` to use the slot name instead (`context.northwind_orders.search({...})` etc. — the slot name is a property of `context`, not nested under `context.dependencies`).
-5. Deploy the draft. Auto-bind runs through `defaultBinding`. Any unresolvable `defaultBinding` fails the deploy with a slot-named error so the YAML can be fixed.
+5. Deploy the draft. Auto-bind runs through `defaultBinding`. An unresolvable `defaultBinding` (target missing or unreadable on this instance) doesn't fail the deploy — it logs a warning, and a required slot surfaces a `default_binding_unresolved` warning telling the admin to bind it in Settings. Author errors (a non-UUID value like a configId, or a target type that doesn't support `defaultBinding`) are still fatal.
 6. Review via the draft diff, then commit.
 
 ```yaml
@@ -461,25 +473,7 @@ The five typed-slot targets and what API surface each one's bound resource expos
 | `query` | `_execute` | `context.<slot>.execute(params)` |
 | `datasource` | `_query` | `context.<slot>.query(payload)` |
 | `integration` | `request` | `context.<slot>.request({ method, url, params, data })` (axios-shaped: `url` not `path`, `data` is the body) |
-| `app` | another App's workspace + `server/` routes | `context.<slot>.query(sql, params)` (read-only SQL) / `.request({ method, url, params, data })` |
-
-### `target: app` (cross-app dependencies)
-
-Binds another installed App, granting two surfaces on it:
-
-```yaml
-dependencies:
-  kanban:
-    target: app
-    description: The board whose data this dashboard analyzes
-```
-
-- **Binding requires owner/admin of the target — and there is no `defaultBinding`.** A bound App exposes its *entire* workspace through `query()`, so the person binding must be the target App's owner or an admin of the team that owns it; read access alone is rejected with a 403. App slots are bound by the installer through the app's dependency setup (`GET /api/apps-list` finds the App to bind), NOT via a manifest `defaultBinding` — declaring one fails the deploy with "does not support defaultBinding". Leave the slot bare, as above.
-- **`query(sql, params)` is read-only and not viewer-scoped.** Cross-app SQL authenticates as a dedicated SELECT-only Postgres role on the target's workspace schema, so writes fail regardless of SQL shape (INSERT, data-modifying CTEs, and multi-statement transaction tricks all fail; a write surfaces as a 400 with `errorCode: 'app_dependency_query_failed'`). It reads the whole workspace and runs identically for every viewer of the consuming App — it does NOT inherit the calling user's permissions, which is why binding is gated to the target's owner/admin.
-- **`request()` is limited to one hop.** App A may call App B, but the handler B runs on A's behalf cannot then call App C (or back into A) — a second hop throws 508 with `errorCode: 'app_dependency_depth_exceeded'`.
-- **`request()` goes through the target App's own gate.** Dispatch is identical to a direct call: the `runAs` identity must have read access to the target App, the target route's `config.roles` apply, and compute is metered against the target.
-- **Self-binding is rejected** at bind time with a 400.
-- Unbound/broken slots throw the standard 422 `dependency_unbound` / `dependency_broken` contract.
+| `app` | `request` (the target's `server/` routes) | `context.<slot>.request({ method, url, params, data })` (request-only — no SQL surface; see "`target: app` (app-to-app dependencies)" above) |
 
 > **`libraries` is not a typed slot.** Library access lives only in the legacy `access.libraries:` whitelist block (`contents/*`) — there is no `target: library` slot model. Use `access.libraries:` if your app needs to read files from another library; everything else goes under `dependencies:`.
 
