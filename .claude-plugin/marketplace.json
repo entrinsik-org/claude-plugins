@@ -6,8 +6,8 @@
     {
       "name": "informer",
       "source": "./plugins/informer",
-      "description": "Skills for Informer development. Currently includes magic-apps (Informer App development with Vite). Invoked as /informer:magic-apps.",
-      "version": "4.5.0",
+      "description": "Skills for Informer development. Includes magic-apps (Informer App development with Vite, /informer:magic-apps) and marketplace-publishing (tag-driven release/publish workflow, /informer:marketplace-publishing).",
+      "version": "4.6.0",
       "author": { "name": "Entrinsik" }
     }
   ]
