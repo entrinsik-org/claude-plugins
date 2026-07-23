@@ -65,6 +65,8 @@ CREATE INDEX line_items_order_idx ON line_items (order_id);
 
 All database access goes through server-side route handlers (see `server-routes.md`). The `query()` callback in server handlers executes SQL against the app's workspace.
 
+For several writes that must all succeed or all roll back, wrap them in the handler's `transaction(fn)` helper (commit-all-or-rollback) — see `server-routes.md`.
+
 End-user code in a published app does not query the workspace directly — call your own server routes via `fetch('/api/_server/...')` and let the server handler use `query()`. A privileged `POST /api/apps/{id}/workspace/_query` endpoint exists for publishers and IDE tooling (it requires the `app:write` permission), but it's not a runtime surface for end-users.
 
 ## Local Development with Workspaces
