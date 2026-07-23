@@ -1,6 +1,6 @@
 ---
 name: marketplace-publishing
-description: Publishing an Informer App to the marketplace — the tag-driven CI flow via `informer-publish`, semver release channels (stable vs beta prereleases), the CHANGELOG/release-notes convention, vendor publish keys (`lmpub_…`, self-serve from Informer GO), the `informer` block in package.json, listing screenshots (the `screenshots/` folder), pack-to-pack dependencies (`target: pack` — "Works with" another marketplace pack), and the GitHub Actions setup. Use when setting up or running marketplace publishing for an Informer App repo — anything about tagging a release, changelog/release notes, CI publishing, publish keys, listing description/screenshots, channels, or depending on another marketplace pack.
+description: Publishing an Informer App to the marketplace — the tag-driven CI flow via `informer-publish`, semver release channels (stable vs beta prereleases), the CHANGELOG/release-notes convention, vendor publish keys (`lmpub_…`, self-serve from Informer GO), the `informer` block in package.json, listing screenshots (the `screenshots/` folder), pack-to-pack dependencies (`target: pack` — "Works with" another marketplace pack), the pack's published API contract (the frozen per-version `openapi.json`, the listing's Integrate tab, and the public-API-changed-without-a-major-bump publish warning), and the GitHub Actions setup. Use when setting up or running marketplace publishing for an Informer App repo — anything about tagging a release, changelog/release notes, CI publishing, publish keys, listing description/screenshots, channels, depending on another marketplace pack, or a pack's public API surface at publish time.
 ---
 
 # Publishing an Informer App to the Marketplace
@@ -214,6 +214,37 @@ informer({
 })
 ```
 
+## Your pack's public API (the Integrate surface + compatibility warnings)
+
+If your app marks routes public (`config.api = 'public'` on a `server/` handler — authoring
+mechanics live in the **magic-apps** skill, `references/app-api.md`), publishing gives that
+surface a life of its own:
+
+- **The contract is frozen per version.** `informer-publish` (≥ 2.6.0-beta.3) generates an
+  `openapi.json` from your handlers — routes, params, schemas, roles, your public markers,
+  and your root `API.md` guide — and ships it in the archive. The marketplace stores it
+  with the version, alongside the changelog.
+- **It renders on your listing's Integrate tab** — the author guide, the public routes, and
+  copy-paste on-ramps (`target: pack` stanza, `devBindings`, a typed handler call). Visible
+  *pre-install*: your API is a reason to install. Apps with no public routes simply have no
+  Integrate surface.
+- **Breaking the public surface without a major bump warns at publish.** The marketplace
+  diffs the new version's public operations against the most recent prior version that
+  shipped a contract. A removed public operation (or one that lost its marker), a removed
+  parameter, or a parameter that became required — without the major version increasing —
+  comes back as a `warnings` entry in the publish response, printed by `informer-publish`:
+
+  > `public API changed incompatibly since v1.2.0 without a major version bump (v1.3.0): public operation POST /issues was removed — apps built against the documented surface may break; bump the major version or restore compatibility`
+
+  It's **advisory, never a block** — prereleases of one base version (`1.2.0-beta.12` →
+  `1.2.0-beta.13`) are exempt (that's what prereleases are for), but crossing base versions
+  is checked even between betas. Internal (unmarked) routes never trigger it — that's the
+  point of marking a public surface: everything else stays refactorable.
+
+This is the enforcement half of the `requires` discipline above: consumers pin
+`requires: ">=1.2 <2"` trusting your major to mean something; the publish warning is what
+keeps that promise honest from your side.
+
 ## Publishing — the actual steps
 
 ```bash
@@ -257,11 +288,16 @@ accepted by the publish route). Keys are prefixed **`lmpub_`** and shown **once*
    pipeline), and the `server/`, `tools/`, `migrations/`, `webhooks/`, `lib/`, `shared/`
    source trees (dotfiles, `node_modules`, and `*.test.js` are excluded). Shared with
    `informer-deploy` so a published artifact is byte-identical to a normal deploy.
-2. **Packages** them into a `.tgz` of the app's filesystem.
-3. **Reads** version (tag/arg/package.json), release notes (`CHANGELOG.md`), listing metadata
+2. **Generates the API contract** (plugin ≥ 2.6.0-beta.3) — builds `openapi.json` from the
+   `server/` handlers (a root `API.md` becomes its guide text) and adds it to the file set;
+   the marketplace freezes it per version and renders the listing's **Integrate** tab from it.
+   An app with no `server/` routes skips this; a handler that can't be imported degrades to
+   skeleton routes with a console warning, never a lost publish.
+3. **Packages** them into a `.tgz` of the app's filesystem.
+4. **Reads** version (tag/arg/package.json), release notes (`CHANGELOG.md`), listing metadata
    (`package.json` `informer` block), an icon (`favicon.svg` if present), **screenshots**
    (`screenshots/`), and **provenance** (`GITHUB_REPOSITORY` / `GITHUB_SHA` / `GITHUB_RUN_ID`).
-4. **POSTs** a multipart request to `${INFORMER_MARKETPLACE_URL}/packs/publish` (archive + icon +
+5. **POSTs** a multipart request to `${INFORMER_MARKETPLACE_URL}/packs/publish` (archive + icon +
    screenshot parts + metadata fields) with the `lmpub_` key as a Bearer token.
 
 ## Gotchas
