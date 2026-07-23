@@ -1,6 +1,6 @@
 ---
 name: magic-apps
-description: Building Informer Apps with local Vite development. Covers the dev/publish workflow, the centerpiece "Accessing Your Dependencies" model (typed slots + three patterns), and the orientation map for deeper topics (server routes, webhooks, persistence, widgets, copilot sidebar, event-driven AI agents, PDF export, informer.yaml schema) — each routes to a reference file under `references/` so the front door stays loadable on every trigger.
+description: Building Informer Apps with local Vite development. Covers the dev/publish workflow, the centerpiece "Accessing Your Dependencies" model (typed slots + three patterns), and the orientation map for deeper topics (server routes, webhooks, persistence, widgets, copilot sidebar, event-driven AI agents, PDF export, informer.yaml schema, app-to-app/pack API integration and openapi.json contracts) — each routes to a reference file under `references/` so the front door stays loadable on every trigger.
 ---
 
 # Informer App Development
@@ -25,13 +25,15 @@ This file is the orientation layer. Most topics have a dedicated reference under
 
 | User intent / signal | Load this file |
 |---|---|
-| Writing handlers under `server/`, working with `query` / `fetch` / `respond` / `notify` / `email` / `log` / `crypto` / base64 / markdown / `env` / `request` / sandbox constraints | `references/server-routes.md` |
+| Writing handlers under `server/`, working with `query` / `transaction` / `fetch` / `respond` / `notify` / `email` / `log` / `crypto` / base64 / markdown / `env` / `request` / sandbox constraints | `references/server-routes.md` |
 | Receiving external callbacks (Stripe, GitHub, Slack, Gmail push) under `webhooks/`, HMAC verification, signed `?token=` URLs | `references/webhooks.md` |
 | Storing app data — `migrations/`, dev-workspace lifecycle, `workspace:init` / `:migrate` / `:reset`, CRUD example | `references/persistence.md` |
 | Declaring `widgets:` in `informer.yaml`, building self-contained HTML cards under `public/widgets/`, iframe quirks | `references/widgets.md` |
 | Activating the in-app copilot, `openChat()` / `registerTool()`, AI completion endpoints (`_chat` / `_completion` / `_object`), `useChat` hook patterns | `references/copilot.md` |
 | Declaring `agents:` in `informer.yaml`, writing `tools/*.js`, `emit()` chaining, cron, toolkits/assistants integration, agent REST API | `references/agents.md` |
+| Exposing tools to outside AI clients (Claude Code/Desktop, Cursor) — the `mcp/` folder, why the folder is the decision, writing for a caller with no context, the per-app endpoint, the OAuth connect flow, who a tool runs as | `references/mcp.md` |
 | Deep `informer.yaml` work — `dependencies:` slot field reference, app-sourced `integrations:` (an app declares and owns an Integration — OAuth, `$env` secrets, icons), RLS via `$user.*`, modernizing a legacy `access:` block, `defaultBinding` lookup, declaring env-var keys with `env:` | `references/informer-yaml.md` |
+| App-to-app/pack APIs — fetching a target's contract (`openapi.json`), typed dev bindings (`.informer/app-deps.d.ts`), public-vs-internal routes, and making your own App integratable (`description`/`schema` exports, `config.api = 'public'`, root `API.md`) | `references/app-api.md` |
 | In-gallery app docs (`docs.html`), in-app `?` help button, `README.md` fallback | `references/docs-html.md` |
 | Looking up the raw API surface behind the typed-slot proxy (still useful when something fails) | `references/api-reference.md` |
 | HTML/CSS/JS starter snippets, theme-variable patterns, CSS Modules for React | `references/app-templates.md` |
@@ -120,6 +122,7 @@ Once the project is set up, the typical next moves are:
 2. Replace Vite's default `index.html` + `main.js` with the app shell.
 3. If the app stores its own data, scaffold `migrations/` and add a first migration — load `references/persistence.md`.
 4. If the app exposes server-side routes, scaffold `server/` — load `references/server-routes.md`.
+5. If the app should be usable from an outside AI client (Claude Code/Desktop, Cursor), scaffold `mcp/` with tools written for a context-free caller — load `references/mcp.md`.
 
 ## Local Development Workflow
 
@@ -202,10 +205,10 @@ Builds your project and uploads to Informer:
 4. Uploads all built assets from `dist/`
 5. Uploads `informer.yaml` and `data-access.yaml` from project root (if they exist)
 6. Uploads `migrations/` directory (if it exists)
-7. Uploads `tools/` directory (if it exists)
+7. Uploads `tools/` and `mcp/` directories (if they exist)
 8. Uploads `server/` directory (if it exists)
 9. Uploads `webhooks/` directory (if it exists)
-10. Runs deploy: pending SQL migrations + server-route scanning + webhook scanning + handler bundling + tool bundling + resource reference validation + agent upsert from `informer.yaml`
+10. Runs deploy: pending SQL migrations + server-route scanning + webhook scanning + handler bundling + tool bundling (`tools/` + `mcp/`) + resource reference validation + agent upsert from `informer.yaml`
     - **Resource refs are validated**: all datasets, queries, datasources, integrations, and toolkits declared in `informer.yaml` must exist — deploy fails with a clear error if any are missing
 11. App is viewable at `/api/apps/{owner}:{slug}/view`
 
@@ -293,9 +296,11 @@ The handler receives a `context` object where each `dependencies:` slot is a pro
 | `query` | `execute(params)` | `POST /api/queries/<uuid>/_execute` |
 | `datasource` | `query(payload)` | `POST /api/datasources/<uuid>/_query` |
 | `integration` | `request({ method, url, params, data })` | `POST /api/integrations/<uuid>/request` |
-| `app` | `query(sql, params)` / `request({ method, url, params, data })` | read-only SQL on the target App's workspace / the target App's own `server/` routes |
+| `app` | `request({ method, url, params, data })` | `<method> /api/apps/<uuid>/view/_/<url>` |
 
-A worked example covering all five target types:
+`target: app` binds another installed App and exposes only `request()` — it invokes one of the target App's `server/` routes (one hop, no chaining), with the same axios-shaped options as `integration`. It binds like every other target (read access to the target App, optional `defaultBinding: <app-uuid>`). **Before writing `request()` calls, fetch the target's contract** — `GET /api/apps/{owner}:{name}/openapi.json` documents its routes, params, roles, and public surface, and `devBindings` turns it into typed calls in dev (see `references/app-api.md`; a marketplace-destined consumer declares `target: pack` instead — same file). **To run SQL over another App's data, don't use `target: app` — bind that App's workspace datasource via a `target: datasource` slot** (see `references/informer-yaml.md`).
+
+A worked example covering the four data target types:
 
 ```yaml
 # informer.yaml
@@ -313,7 +318,7 @@ dependencies:
     target: integration
     defaultBinding: 5a6b7c8d-9e0f-1234-5678-9abcdef01234
   kanban:
-    target: app                          # another installed App; installer binds it
+    target: app                          # another installed App; defaultBinding optional
 ```
 
 ```javascript
@@ -353,24 +358,19 @@ export async function GET({ context, request }) {
         params: { q: "SELECT Id, Name FROM Account WHERE Industry = 'Banking'" }
     });
 
-    // app → query runs READ-ONLY SQL against the target App's workspace
-    // (enforced by a SELECT-only DB role — writes fail no matter the SQL
-    // shape); request invokes the target App's own server/ routes.
-    const moves = await context.kanban.query(
-        `SELECT date_trunc('week', moved_at) AS week, count(*) AS n
-         FROM card_transitions GROUP BY 1 ORDER BY 1`
-    );
+    // app → request invokes the target App's own server/ routes.
+    // request() is the ONLY surface — there is no cross-app SQL.
     const stats = await context.kanban.request({ method: 'GET', url: '/stats/summary' });
 
-    return { hits, fields, summary, events, accounts, moves, stats };
+    return { hits, fields, summary, events, accounts, stats };
 }
 ```
 
 **`target: app` rules.**
-- **Binding requires owner/admin of the target, and there's no `defaultBinding`.** A bound App exposes its *entire* workspace through `query()`, so whoever binds the slot must be the target App's owner or an admin of the team that owns it — read access to the target is not enough (a 403 otherwise). App slots are therefore bound by the installer through the app's dependency setup, NOT via a manifest `defaultBinding` (declaring one fails the deploy with "does not support defaultBinding"). Leave the slot bare (`target: app`) in the manifest.
-- **`query()` is read-only and not viewer-scoped.** Cross-app SQL runs as a SELECT-only Postgres role, so writes fail no matter how the SQL is shaped (a write surfaces as a 400 with `errorCode: 'app_dependency_query_failed'`). It reads the whole workspace and runs the same for every viewer of the consuming App — it does NOT inherit the calling user's permissions, which is why binding is gated to the target's owner/admin above.
+- **Binds like every other target — read access, `defaultBinding` supported.** Whoever binds the slot needs read access to the target App (the same bar as datasets/queries/datasources/integrations), and the manifest may pre-bind with `defaultBinding: <app-uuid>` (look it up via `GET /api/apps-list`). An unresolvable `defaultBinding` doesn't fail the deploy — it logs a warning, and a required slot surfaces a `default_binding_unresolved` warning telling the admin the app won't run until it's bound in Settings. Author errors (a non-UUID value, a target type that doesn't support `defaultBinding`) are still fatal.
+- **`request()` is the only surface — there is no cross-app SQL.** To run SQL over another App's data, bind that App's workspace datasource through a `target: datasource` slot.
 - **`request()` is limited to ONE hop** (A→B ok; B cannot then call C or back into A — a second hop throws 508 `app_dependency_depth_exceeded`), and it runs through the target App's own read access, `config.roles`, and compute budget under the slot's `runAs` identity.
-- **An App can never bind to itself** (400 at bind time).
+- **An App can never bind to itself** (rejected with a 400 — including a self-referencing `defaultBinding` at deploy).
 
 **Error handling.** If the installer hasn't bound a slot yet, or the bound target was deleted, the proxy throws a structured boom 422:
 
@@ -541,8 +541,10 @@ These are the endpoints **app authors** hit (via curl or Claude with `.env` conf
 | `GET /api/queries-list` | `[{ id (UUID), name, configId, ... }]` | `target: query` slots |
 | `GET /api/datasources-list` | `[{ id (UUID), name, configId, ... }]` | `target: datasource` slots |
 | `GET /api/integrations-list` | `[{ id (UUID), name, slug, ... }]` | `target: integration` slots |
+| `GET /api/apps-list` | `[{ id (UUID), name, naturalId, ... }]` | `target: app` slots |
+| `GET /api/apps/{owner}:{name}/openapi.json` | The App's API contract (routes, params, roles, public surface) | Writing `context.<slot>.request()` calls against an `app`/`pack` slot (see `references/app-api.md`) |
 
-(`target: app` slots take no `defaultBinding` — the installer binds them through the app's dependency setup, which enforces the owner/admin check on the target. `GET /api/apps-list` is how the installer finds the App to bind, not a manifest lookup.)
+(`GET /api/apps-list` is how you find the target App's UUID for a `target: app` slot's `defaultBinding`, and how the installer finds the App when binding through the app's dependency setup.)
 
 Example: ask Claude to "find the UUID for the northwind-orders dataset" — Claude curls `$INFORMER_URL/api/datasets-list` against the configured `.env` credentials, finds the matching `configId`, and copies the `id` into `defaultBinding`.
 
@@ -683,7 +685,7 @@ export async function POST({ query, request }) {
 }
 ```
 
-Handlers receive a single argument with the sandbox helpers (`query`, `fetch`, `context`, `respond`, `emit`, `notify`, `email`, `log`, `crypto`, `env`, `request`). Globals available without destructuring: `markdown`, `base64Encode` / `base64Decode` / `base64UrlEncode` / `base64UrlDecode`, `atob` / `btoa`.
+Handlers receive a single argument with the sandbox helpers (`query`, `transaction`, `fetch`, `context`, `respond`, `emit`, `notify`, `email`, `log`, `crypto`, `env`, `request`). Globals available without destructuring: `markdown`, `base64Encode` / `base64Decode` / `base64UrlEncode` / `base64UrlDecode`, `atob` / `btoa`.
 
 Sandbox constraints: no Node APIs, no filesystem, no direct network — all I/O is through the injected callbacks. 128 MB memory, 30s default wall-clock timeout (configurable via `config.timeout`).
 
@@ -707,7 +709,7 @@ export async function POST({ crypto, request, env, query }) {
 }
 ```
 
-Webhook handlers receive the **same bag as server routes** — `query`, `fetch`, `context`, `respond`, `emit`, `notify`, `email`, `crypto`, `markdown`, `log`, `env`, plus the base64 globals and `request.rawBody` (for HMAC verification). `notify()` and `email()` **are** available (handlers run as the app owner). The only differences are inbound identity: `request.user` is `null` (no user session) and `request.roles` is `[]` — the handler still *runs as* the app owner, so `fetch()`, `notify()`, and `email()` use owner credentials.
+Webhook handlers receive the **same bag as server routes** — `query`, `transaction`, `fetch`, `context`, `respond`, `emit`, `notify`, `email`, `crypto`, `markdown`, `log`, `env`, plus the base64 globals and `request.rawBody` (for HMAC verification). `notify()` and `email()` **are** available (handlers run as the app owner). The only differences are inbound identity: `request.user` is `null` (no user session) and `request.roles` is `[]` — the handler still *runs as* the app owner, so `fetch()`, `notify()`, and `email()` use owner credentials.
 
 Load `references/webhooks.md` for: file-convention routing, the `?token=` issuance/verification flow, full HMAC verification examples (GitHub, Stripe, shared-secret), and reading per-app secrets via the `env` bag (configured in **Admin → Environment** or declared as keys in `informer.yaml` `env:`).
 
@@ -943,7 +945,7 @@ agents:
     cron: "0 8 * * 1-5"
 ```
 
-Tools live in `tools/` and share the same V8 sandbox as server route handlers. A tool exports a named `handler` that receives a **single bag** with the same service surface as routes/webhooks — `context` (typed deps), `query`, `fetch`, `emit`, `notify`, `email`, `crypto`, `markdown`, `log`, `env` — plus `args` (the AI tool input) and `run` (`{ appId, agentId, runId, trigger }`):
+Tools live in `tools/` and share the same V8 sandbox as server route handlers. A tool exports a named `handler` that receives a **single bag** with the same service surface as routes/webhooks — `context` (typed deps), `query`, `transaction`, `fetch`, `emit`, `notify`, `email`, `crypto`, `markdown`, `log`, `env` — plus `args` (the AI tool input) and `run` (`{ appId, agentId, runId, trigger }`):
 
 ```javascript
 // tools/notifications/send_email.js
@@ -957,6 +959,37 @@ export async function handler({ args, email }) {
 Tool names mirror the file path with underscores: `tools/notifications/send_email.js` → `notifications_send_email`.
 
 Load `references/agents.md` for: full `agents:` field reference (`tools` / `toolkits` / `assistants` / `on` / `cron` / `webSearch` / `onFailure` / `model`), tool file structure, event emission (server routes + agent chaining via `emit()`), the `onFailure` error-transition pattern (emit-on-terminal-failure with envelope + loop guard), toolkit integration (system-level + deploy validation), assistant prompt merging, cron lifecycle (separate `app_automation` table, bypasses event queue), agent REST API, local dev with `/api/_agent/{name}/_trigger`, full order-processing pipeline example.
+
+## MCP server — overview
+
+An app with an **`mcp/` directory** is an MCP server: outside AI clients (Claude Code, Claude Desktop, Cursor) connect to a per-app endpoint, the user signs in through Informer, and the client can call the app's exposed tools. Deploy scans `mcp/` alongside `tools/`, so `npm run deploy` is the whole setup — **the folder is the declaration**, no manifest block or flag.
+
+`mcp/` and `tools/` share the file contract (`description`, `schema`, `handler`), the sandbox, and the service bag. The only difference is who may call them, and it is load-bearing:
+
+- **`tools/`** — the app's own agents call these. An agent tool is safe *because* its `instructions` (which you wrote) decide when it fires and with what.
+- **`mcp/`** — any MCP client the app is shared with can call these, and so can the app's agents. A stranger's model picks the moment and the arguments, from your `description` and `schema` alone.
+
+So a tool goes in `mcp/` only when it was **written knowing a stranger's LLM will call it**: narrow, self-describing, no assumption of surrounding context. Don't move an agent tool into `mcp/` to reuse it without re-reading it that way. Names live in one namespace across both folders (a duplicate fails the deploy); agents may reference `mcp/` tools, never the reverse.
+
+```javascript
+// mcp/find_order.js — the description IS the API doc; the calling model
+// sees nothing else. Runs as the signed-in user (run.user / run.roles),
+// run.trigger === 'mcp'.
+export const description = 'Look up an order by customer name or number, with its shipment if it has one';
+export const schema = {
+    type: 'object',
+    properties: { customer: { type: 'string' }, id: { type: 'integer' } },
+    additionalProperties: false,
+};
+export async function handler({ args, query, run }) {
+    const orders = await query('SELECT * FROM orders WHERE customer ILIKE $1 LIMIT 20', [`%${args.customer}%`]);
+    return { found: orders.length, orders };
+}
+```
+
+Connect with `claude mcp add --transport http my-app <endpoint>` (the endpoint is the `inf:app-mcp` rel and the admin panel's **MCP** tab; never hand-build it). First tool use pops a browser: RFC 9728 discovery → self-registration → PKCE → a token bound to that one app. Self-registration needs a tenant admin to enable it (Admin → Settings → Security); while it's off, clients connect with an API-token header instead.
+
+Load `references/mcp.md` for: the `mcp/` vs `tools/` decision in depth (including the `emit()`-tool trap), writing tools for a context-free caller (descriptions as API docs, self-describing returns, no guessing), the identity model (`runAs` slots, `run.user`/`run.roles`, and why the app's own workspace is not per-caller so **the tool is the access control**), the full OAuth/discovery/DCR flow, curl-testing the endpoint, observability, and gotchas.
 
 ## PDF Export
 
@@ -1040,12 +1073,13 @@ The orientation above points to each file; this is the canonical list of what's 
 
 | File | Covers |
 |---|---|
-| `references/server-routes.md` | `server/` handlers, full sandbox-helper reference (`query`, `fetch`, `respond`, `notify`, `email`, `log`, `crypto`, base64/markdown globals), `config.timeout` / `config.roles`, worked CRUD example |
+| `references/server-routes.md` | `server/` handlers, full sandbox-helper reference (`query`, `transaction`, `fetch`, `respond`, `notify`, `email`, `log`, `crypto`, base64/markdown globals), `config.timeout` / `config.roles`, worked CRUD example |
 | `references/webhooks.md` | `webhooks/` handlers, signed `?token=` flow, HMAC verification (`crypto.verifyHmac`), how webhooks differ from server routes (inbound identity only — same handler bag) |
 | `references/persistence.md` | `migrations/`, dev workspace lifecycle, CRUD worked example |
 | `references/widgets.md` | `widgets:` declaration, self-contained HTML template, iframe constraints, SVG charts without libraries |
 | `references/copilot.md` | `openChat()` / `showCopilot()` / `registerTool()`, AI completion endpoints (`_chat` / `_completion` / `_object`), `useChat` hook pattern, defensive `_object` parsing |
 | `references/agents.md` | `agents:` declaration, `tools/*.js`, event chaining via `emit()`, cron lifecycle, toolkits/assistants, agent REST API |
+| `references/mcp.md` | The `mcp/` folder, `mcp/` vs `tools/` split, writing tools for a context-free caller, identity (`runAs` / `run.user` / `run.roles`, workspace-not-per-caller), the per-app endpoint, OAuth discovery + DCR connect flow, curl testing, observability |
 | `references/informer-yaml.md` | Full `informer.yaml` schema deep dive — slot fields, `$user.*` variables, modernizing legacy `access:` blocks, declaring env-var keys with `env:` |
 | `references/docs-html.md` | In-gallery `docs.html` page, in-app `?` help button, `README.md` fallback |
 | `references/api-reference.md` | Raw API surface behind the typed-slot proxy (useful for diagnostics) |

@@ -4,7 +4,7 @@
 >
 > **Not in this file:** authenticated app-internal routes — see `server-routes.md`. Agents triggered by webhooks via `emit()` — see `agents.md`.
 
-Apps can expose **webhook endpoints** that receive requests from external services (Gmail push notifications, Slack commands, Stripe events, etc.) without requiring a logged-in Informer user. Each webhook URL embeds a signed `token` query parameter that the handler verifies — the endpoint is unguessable and tamper-proof, not anonymous. Webhook handlers run as the app owner and receive the **same handler bag as server routes** — including `query()`, `fetch()`, `emit()`, `notify()`, `email()`, `crypto`, and the typed `context`. The only differences are inbound identity (no user session — see the table below).
+Apps can expose **webhook endpoints** that receive requests from external services (Gmail push notifications, Slack commands, Stripe events, etc.) without requiring a logged-in Informer user. Each webhook URL embeds a signed `token` query parameter that the handler verifies — the endpoint is unguessable and tamper-proof, not anonymous. Webhook handlers run as the app owner and receive the **same handler bag as server routes** — including `query()`, `transaction()`, `fetch()`, `emit()`, `notify()`, `email()`, `crypto`, and the typed `context`. The only differences are inbound identity (no user session — see the table below).
 
 ## How It Works
 

@@ -1,6 +1,6 @@
 # Server-Side Routes
 
-> **Load this reference when:** writing handler files under `server/`, working with the V8 sandbox helpers (`query`, `fetch`, `respond`, `notify`, `email`, `log`, `crypto`, the base64/markdown/extractText globals), configuring per-handler `timeout` or `roles`, or wiring frontend calls to `/api/_server/...`.
+> **Load this reference when:** writing handler files under `server/`, working with the V8 sandbox helpers (`query`, `transaction`, `fetch`, `respond`, `notify`, `email`, `log`, `crypto`, the base64/markdown/extractText globals), configuring per-handler `timeout` or `roles`, or wiring frontend calls to `/api/_server/...`.
 >
 > **Not in this file:** public token-gated webhook endpoints — see `webhooks.md`. Agent tool handlers — see `agents.md` (they share the same sandbox, so this file is the authoritative sandbox reference). The typed dep proxy (`context.<slot>.<method>()`) — see SKILL.md "Accessing Your Dependencies".
 
@@ -58,6 +58,7 @@ Each handler function receives a single context object with these properties:
 | Property | Type | Description |
 |----------|------|-------------|
 | `query` | `async (sql, params?) => rows` | Execute SQL against the app's workspace. Returns an array of row objects. |
+| `transaction` | `async (fn) => result` | Run `fn({ query })` in one DB transaction: commits when it resolves, rolls back if it throws. Does not nest. See [Using `transaction()`](#using-transaction). |
 | `fetch` | `async (path, options?) => { status, body }` | Make an authenticated API call through Informer (subject to the app's whitelist). |
 | `context` | `object` | Typed dep proxies keyed by slot name. Call deps as `context.<slotName>.<method>(args)`. Methods per `target`: `dataset` → `search(esQuery)` / `fields()`; `query` → `execute(params)`; `datasource` → `query(payload)`; `integration` → `request(opts)`. Throws boom 422 with `errorCode: 'dependency_unbound'` if the installer hasn't bound the slot yet, or `'dependency_broken'` if the bound target was deleted. Prefer this over raw `fetch()` — slots survive bundle export/import and resource renames; raw paths don't. |
 | `respond` | `async (response) => void` | Send an early HTTP response while the handler continues running in the background. Accepts the same shape as a synchronous return — a response object (`{ status, headers?, body?, encoding? }`) or any plain value (wrapped as 200 JSON). See [Using `respond()`](#using-respond). |
@@ -227,6 +228,31 @@ export async function GET({ query, request }) {
 ```
 
 All `query()` calls within a single request share the same database connection, which is automatically closed when the handler completes.
+
+## Using `transaction()`
+
+Because all `query()` calls in a request share one connection, `transaction(fn)` wraps several statements so they commit together or not at all. It runs `fn` inside a single `BEGIN`/`COMMIT`: it commits and returns `fn`'s value when `fn` resolves, and rolls back (re-throwing the error) if `fn` throws. The object passed to `fn` exposes `query` — the same connection — so every statement inside runs in the transaction.
+
+```javascript
+export async function POST({ transaction, request }) {
+    const { sku, customer } = request.body;
+    const order = await transaction(async ({ query }) => {
+        const [row] = await query(
+            'INSERT INTO orders (customer, sku) VALUES ($1, $2) RETURNING *',
+            [customer, sku]
+        );
+        await query('UPDATE inventory SET on_hand = on_hand - 1 WHERE sku = $1', [sku]);
+        return row; // resolve → COMMIT; throw anywhere → ROLLBACK
+    });
+    return { status: 201, body: order };
+}
+```
+
+- Do the whole unit of work inside `fn`. Calling `respond()` to flush an early response does **not** commit the transaction — only `fn` resolving does.
+- Transactions do **not** nest: calling `transaction()` while one is open throws (a guard against silently committing the outer work early). Flatten into the single outer transaction. The guard only tracks `transaction()` — hand-rolling `query('BEGIN')` / `query('COMMIT')` alongside it silently breaks atomicity, so don't.
+- Don't fire un-awaited `query()` calls during a transaction: all queries share one connection, so a statement started concurrently outside the callback can be swept between `BEGIN` and `COMMIT`.
+- A thrown error rolls the writes back, except if the connection drops exactly at `COMMIT` (ambiguous commit — the write may have landed), so don't blindly retry.
+- `transaction()` needs a workspace database, like `query()`; on a tier without one, calling it throws a clear "no workspace database" error.
 
 ## Using `fetch()`
 
@@ -421,6 +447,11 @@ export async function POST({ query, request }) {
 |--------|------|---------|-------------|
 | `timeout` | `number` | `30000` | Wall-clock timeout in ms. Handler is killed if it exceeds this. |
 | `roles` | `string[]` | `[]` (open) | If set, only viewers with at least one matching role can call this route. Returns 403 otherwise. |
+| `api` | `'public'` | (internal) | Marks this file's routes as part of the App's **public API** — advertised in its `openapi.json` contract for other Apps to build on. |
+
+### Describing your routes for consumers
+
+Two sibling exports enrich the App's `openapi.json` contract — the document other Apps (and their dev tooling) read instead of your source. `export const description = '<string literal>'` sets the operation description; `export const schema = { GET: { query, response }, POST: { body } }` declares JSON-Schema shapes per method (a flat, non-method-keyed schema applies to every exported method). Full contract semantics, the `config.api = 'public'` marker, and the root `API.md` guide: `references/app-api.md`.
 
 ## Using `notify()`
 
