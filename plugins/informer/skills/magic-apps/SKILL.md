@@ -1,6 +1,6 @@
 ---
 name: magic-apps
-description: Building Informer Apps with local Vite development. Covers the dev/publish workflow, the centerpiece "Accessing Your Dependencies" model (typed slots + three patterns), and the orientation map for deeper topics (server routes, webhooks, persistence, widgets, copilot sidebar, event-driven AI agents, PDF export, informer.yaml schema) — each routes to a reference file under `references/` so the front door stays loadable on every trigger.
+description: Building Informer Apps with local Vite development. Covers the dev/publish workflow, the centerpiece "Accessing Your Dependencies" model (typed slots + three patterns), and the orientation map for deeper topics (server routes, webhooks, persistence, widgets, copilot sidebar, event-driven AI agents, PDF export, informer.yaml schema, app-to-app/pack API integration and openapi.json contracts) — each routes to a reference file under `references/` so the front door stays loadable on every trigger.
 ---
 
 # Informer App Development
@@ -32,6 +32,7 @@ This file is the orientation layer. Most topics have a dedicated reference under
 | Activating the in-app copilot, `openChat()` / `registerTool()`, AI completion endpoints (`_chat` / `_completion` / `_object`), `useChat` hook patterns | `references/copilot.md` |
 | Declaring `agents:` in `informer.yaml`, writing `tools/*.js`, `emit()` chaining, cron, toolkits/assistants integration, agent REST API | `references/agents.md` |
 | Deep `informer.yaml` work — `dependencies:` slot field reference, app-sourced `integrations:` (an app declares and owns an Integration — OAuth, `$env` secrets, icons), RLS via `$user.*`, modernizing a legacy `access:` block, `defaultBinding` lookup, declaring env-var keys with `env:` | `references/informer-yaml.md` |
+| App-to-app/pack APIs — fetching a target's contract (`openapi.json`), typed dev bindings (`.informer/app-deps.d.ts`), public-vs-internal routes, and making your own App integratable (`description`/`schema` exports, `config.api = 'public'`, root `API.md`) | `references/app-api.md` |
 | In-gallery app docs (`docs.html`), in-app `?` help button, `README.md` fallback | `references/docs-html.md` |
 | Looking up the raw API surface behind the typed-slot proxy (still useful when something fails) | `references/api-reference.md` |
 | HTML/CSS/JS starter snippets, theme-variable patterns, CSS Modules for React | `references/app-templates.md` |
@@ -295,7 +296,7 @@ The handler receives a `context` object where each `dependencies:` slot is a pro
 | `integration` | `request({ method, url, params, data })` | `POST /api/integrations/<uuid>/request` |
 | `app` | `request({ method, url, params, data })` | `<method> /api/apps/<uuid>/view/_/<url>` |
 
-`target: app` binds another installed App and exposes only `request()` — it invokes one of the target App's `server/` routes (one hop, no chaining), with the same axios-shaped options as `integration`. It binds like every other target (read access to the target App, optional `defaultBinding: <app-uuid>`). **To run SQL over another App's data, don't use `target: app` — bind that App's workspace datasource via a `target: datasource` slot** (see `references/informer-yaml.md`).
+`target: app` binds another installed App and exposes only `request()` — it invokes one of the target App's `server/` routes (one hop, no chaining), with the same axios-shaped options as `integration`. It binds like every other target (read access to the target App, optional `defaultBinding: <app-uuid>`). **Before writing `request()` calls, fetch the target's contract** — `GET /api/apps/{owner}:{name}/openapi.json` documents its routes, params, roles, and public surface, and `devBindings` turns it into typed calls in dev (see `references/app-api.md`; a marketplace-destined consumer declares `target: pack` instead — same file). **To run SQL over another App's data, don't use `target: app` — bind that App's workspace datasource via a `target: datasource` slot** (see `references/informer-yaml.md`).
 
 A worked example covering the four data target types:
 
@@ -544,6 +545,7 @@ These are the endpoints **app authors** hit (via curl or Claude with `.env` conf
 | `GET /api/datasources-list` | `[{ id (UUID), name, configId, ... }]` | `target: datasource` slots |
 | `GET /api/integrations-list` | `[{ id (UUID), name, slug, ... }]` | `target: integration` slots |
 | `GET /api/apps-list` | `[{ id (UUID), name, naturalId, ... }]` | `target: app` slots |
+| `GET /api/apps/{owner}:{name}/openapi.json` | The App's API contract (routes, params, roles, public surface) | Writing `context.<slot>.request()` calls against an `app`/`pack` slot (see `references/app-api.md`) |
 
 (`target: app` slots take no `defaultBinding` — the installer binds them through the app's dependency setup, which enforces the owner/admin check on the target. `GET /api/apps-list` is how the installer finds the App to bind, not a manifest lookup.)
 

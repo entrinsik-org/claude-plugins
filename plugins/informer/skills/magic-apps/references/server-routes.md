@@ -421,6 +421,11 @@ export async function POST({ query, request }) {
 |--------|------|---------|-------------|
 | `timeout` | `number` | `30000` | Wall-clock timeout in ms. Handler is killed if it exceeds this. |
 | `roles` | `string[]` | `[]` (open) | If set, only viewers with at least one matching role can call this route. Returns 403 otherwise. |
+| `api` | `'public'` | (internal) | Marks this file's routes as part of the App's **public API** — advertised in its `openapi.json` contract for other Apps to build on. |
+
+### Describing your routes for consumers
+
+Two sibling exports enrich the App's `openapi.json` contract — the document other Apps (and their dev tooling) read instead of your source. `export const description = '<string literal>'` sets the operation description; `export const schema = { GET: { query, response }, POST: { body } }` declares JSON-Schema shapes per method (a flat, non-method-keyed schema applies to every exported method). Full contract semantics, the `config.api = 'public'` marker, and the root `API.md` guide: `references/app-api.md`.
 
 ## Using `notify()`
 

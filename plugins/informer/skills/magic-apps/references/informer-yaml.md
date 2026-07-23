@@ -76,6 +76,8 @@ Bind another installed App to call its server routes. The slot exposes a single 
 
 App slots bind like every other target — read access to the target App is the bar (same as datasets/queries/datasources/integrations), and a `defaultBinding: <app-uuid>` pre-binds on first deploy. An App can't bind to itself.
 
+Before writing calls against the slot, fetch the target's contract (`GET /api/apps/{owner}:{name}/openapi.json`) and set up typed dev bindings — see `references/app-api.md`. A marketplace-destined consumer should declare `target: pack` (pin by marketplace slug + semver range) instead of `target: app`; the pack form is covered in the **marketplace-publishing** skill.
+
 **To run SQL over another App's data, don't use `target: app`.** Bind that App's **workspace datasource** through a `target: datasource` slot instead: every App has a first-class workspace Datasource, and binding it gives you the standard `query(payload)` surface with the datasource's own ownership and access rules.
 
 ## Migrating an old `access:` app to `dependencies:`
