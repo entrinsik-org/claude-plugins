@@ -1,6 +1,6 @@
 ---
 name: marketplace-publishing
-description: Publishing an Informer App to the marketplace — the tag-driven CI flow via `informer-publish`, semver release channels (stable vs beta prereleases), the CHANGELOG/release-notes convention, vendor publish keys (`lmpub_…`, self-serve from Informer GO), the `informer` block in package.json, listing screenshots (the `screenshots/` folder), pack-to-pack dependencies (`target: pack` — "Works with" another marketplace pack), the pack's published API contract (the frozen per-version `openapi.json`, the listing's Integrate tab, and the public-API-changed-without-a-major-bump publish warning), and the GitHub Actions setup. Use when setting up or running marketplace publishing for an Informer App repo — anything about tagging a release, changelog/release notes, CI publishing, publish keys, listing description/screenshots, channels, depending on another marketplace pack, or a pack's public API surface at publish time.
+description: Publishing an Informer App to the marketplace — the tag-driven CI flow (`informer-ci` for keyless GitHub OIDC publishing to one or more marketplaces, `informer-publish` for key-based publishing anywhere), trusted publishers and the `INFORMER_MARKETPLACES` list, semver release channels (stable vs beta prereleases), the CHANGELOG/release-notes convention, vendor publish keys (`lmpub_…`, self-serve from Informer GO), the `informer` block in package.json, listing screenshots (the `screenshots/` folder), pack-to-pack dependencies (`target: pack` — "Works with" another marketplace pack), the pack's published API contract (the frozen per-version `openapi.json`, the listing's Integrate tab, and the public-API-changed-without-a-major-bump publish warning), and the GitHub Actions setup. Use when setting up or running marketplace publishing for an Informer App repo — anything about tagging a release, changelog/release notes, CI publishing, trusted publishing, OIDC, publishing to several License Managers, publish keys, listing description/screenshots, channels, depending on another marketplace pack, or a pack's public API surface at publish time.
 ---
 
 # Publishing an Informer App to the Marketplace
@@ -13,21 +13,34 @@ marketplace**. App *development* (Vite, handlers, datasets, copilot) lives in th
 
 - The **git tag is the source of truth for the published version.** `v1.4.0` → **stable**;
   `v1.4.0-beta.1` → **beta**. Push the tag → GitHub Actions builds the app and runs
-  **`informer-publish`**, which packages the app's filesystem and uploads it to the
+  **`informer-ci`**, which packages the app's filesystem and uploads it to each configured
   License Manager (the marketplace backend).
 - **Channel is derived from semver.** A prerelease version (`1.4.0-beta.1` — anything with a
   `-`) publishes to the **beta** channel; a clean `X.Y.Z` publishes to **stable**. Consumers
   opt into beta per-pack; stable is the default install.
 - **Release notes come from `CHANGELOG.md`** — the section matching the version, falling back
   to `## [Unreleased]`.
-- **Auth is a vendor publish key** (`lmpub_…`), stored as a CI secret. It authenticates the
-  publish *as the vendor account* — no Informer license or user login needed in CI.
+- **Two commands, two auth models. Pick by where you're running.**
 
-The publishing tool ships in **`@entrinsik/vite-plugin-informer` ≥ 2.6.0-beta.1** as the
-`informer-publish` bin (sibling to `informer-deploy`). Track `@latest` (or `@beta`) —
-newer capabilities land in later releases, so pin forward, not back. The 2.6.0-beta.1
-floor matters: earlier versions did not package `lib/` and `shared/` source dirs, so apps
-with shared server-side modules published incomplete archives.
+| | `informer-ci` | `informer-publish` |
+|---|---|---|
+| Runs in | GitHub Actions only | anywhere — locally, GitLab, Jenkins, Actions |
+| Auth | GitHub OIDC — **no stored credential** | vendor publish key (`lmpub_…`) |
+| Targets | every URL in `INFORMER_MARKETPLACES` | the one `INFORMER_MARKETPLACE_URL` |
+
+  **Prefer `informer-ci` in GitHub Actions.** It mints a short-lived OIDC token *per
+  marketplace*, so nothing long-lived sits in the repo and a token minted for one License
+  Manager can't be replayed against another. Each LM must list the repository as a
+  **trusted publisher** before it will accept one (see below).
+
+  `informer-publish` is not deprecated — it is the only option outside GitHub Actions,
+  where no OIDC endpoint exists. Keep it for local publishes and other CI.
+
+Both ship in **`@entrinsik/vite-plugin-informer`** (sibling bins to `informer-deploy`).
+Track `@latest` (or `@beta`) — newer capabilities land in later releases, so pin forward,
+not back. Two floors matter: **≥ 2.6.0-beta.1** for `informer-publish` (earlier versions
+did not package `lib/` and `shared/`, so apps with shared server-side modules published
+incomplete archives), and **≥ 2.7.0-beta.0** for `informer-ci`, which did not exist before.
 
 ## One-time repo setup
 
@@ -75,16 +88,36 @@ header matches the tag version (e.g. `## [1.4.0]`), else `## [Unreleased]`. See
 
 ### 3. The publishing dependency
 
-`informer-publish` comes from `@entrinsik/vite-plugin-informer`. For **CI it must resolve
-from the registry**, not a local `file:` path — a `file:` dep won't exist on a CI runner:
+Both `informer-ci` and `informer-publish` come from `@entrinsik/vite-plugin-informer`. For
+**CI it must resolve from the registry**, not a local `file:` path — a `file:` dep won't
+exist on a CI runner:
 
 ```bash
 npm i -D @entrinsik/vite-plugin-informer@latest   # or @beta to track prereleases
 ```
 
-### 4. The publish key + env
+### 4. Where you publish, and how the LM knows it's you
 
-Two values, supplied as env (CI secrets, or a gitignored `.env` for local testing):
+**For GitHub Actions (`informer-ci`) — one variable, no secrets.**
+
+| Var | Value |
+|---|---|
+| `INFORMER_MARKETPLACES` | The marketplaces to publish to: one cloud-api base URL per line (a JSON array or a comma-separated list also parse). Not secret — make it a repo **Variable**, not a secret. |
+
+```
+INFORMER_MARKETPLACES
+https://lm.example.com/cloud-api
+https://partner-lm.example.com/cloud-api
+```
+
+Then **register the repository as a trusted publisher on each License Manager** in that
+list. Until you do, that LM rejects the publish with a message naming the repository — a
+token proves *which repo you are*, and the trusted-publisher record is what says which
+vendor account that repo may publish as. One record per (LM, repository), so a second repo
+publishing to the same LM needs its own.
+
+**For anywhere else (`informer-publish`) — two values**, as env (CI secrets, or a
+gitignored `.env` for local testing):
 
 | Var | Value |
 |---|---|
@@ -94,31 +127,45 @@ Two values, supplied as env (CI secrets, or a gitignored `.env` for local testin
 ### 5. The GitHub Actions workflow (`.github/workflows/publish.yml`)
 
 ```yaml
-name: Publish to Marketplace
+name: Publish to Marketplaces
 on:
   push:
     tags: ['v*']            # v1.4.0 → stable, v1.4.0-beta.1 → beta (channel derived server-side)
+
+permissions:
+  contents: read
+  id-token: write           # REQUIRED — without it no OIDC token endpoint is injected
+
 jobs:
   publish:
     runs-on: ubuntu-latest
-    environment: marketplace   # holds the secret/variable; add a v* deployment-tag rule
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
-        with: { node-version: 22 }
+        with: { node-version: 22, cache: npm }
       - run: npm ci
       - run: npm run build
-      - run: npx informer-publish
+      - run: npx informer-ci
         env:
-          INFORMER_MARKETPLACE_URL: ${{ vars.INFORMER_MARKETPLACE_URL }}
-          INFORMER_PUBLISH_TOKEN: ${{ secrets.INFORMER_PUBLISH_TOKEN }}
+          INFORMER_MARKETPLACES: ${{ vars.INFORMER_MARKETPLACES }}
           # GITHUB_REF_NAME / GITHUB_SHA / GITHUB_REPOSITORY / GITHUB_RUN_ID are injected automatically
 ```
 
-Recommended GitHub config: a **`marketplace` Environment** (Settings → Environments) with a
-**deployment tag rule limiting it to `v*`** (so the publish key is only exposed on real
-release tags), the token as an **environment secret**, and the URL as an **environment
-variable**. Optionally add **required reviewers** to gate stable publishes.
+That is the whole workflow — no Environments, no secrets, no matrix. **Keep it that way.**
+Fan-out, retries, and per-target reporting live inside `informer-ci` on purpose: a workflow
+with no logic can't drift, and fixing the publish recipe becomes an npm release instead of a
+pull request into every repo that copied it. Resist moving the marketplace list into a job
+matrix — a per-target OIDC audience can't be expressed cleanly in YAML, and you'd lose the
+replay protection.
+
+`informer-ci` builds the app **once** and sends identical bytes to every marketplace. One
+target failing does not stop the others; the step exits non-zero if any failed, and writes a
+per-marketplace table to the job summary.
+
+**Still using a publish key in Actions?** Keep the old shape — `npx informer-publish` with
+`INFORMER_MARKETPLACE_URL` + `INFORMER_PUBLISH_TOKEN`, ideally behind a `marketplace`
+Environment with a `v*` deployment-tag rule so the key is only exposed on real release tags.
+Migrating is a one-line swap to `informer-ci` plus the `id-token: write` permission.
 
 ## Versioning & channels
 
@@ -130,9 +177,10 @@ The tag *is* the version and the channel:
 | `v1.4.0-beta.1` | `1.4.0-beta.1` | **beta** (prerelease) |
 | `v2.0.0-rc.1` | `2.0.0-rc.1` | **beta** (any prerelease ⇒ beta) |
 
-`informer-publish` resolves the version from the tag (`GITHUB_REF_NAME`, leading `v`
-stripped), then `--version <x>`, then `package.json`'s `version`. The **server** derives the
-channel from the version, so you never pass a channel flag.
+Both commands resolve the version the same way: **`--version <x>` first**, then the tag
+(`GITHUB_REF_NAME`, leading `v` stripped), then `package.json`'s `version`. An explicit flag
+therefore wins in CI too, which is what you want when re-publishing a specific version by
+hand. The **server** derives the channel from the version, so you never pass a channel flag.
 
 ## Release notes (the changelog flow)
 
@@ -257,15 +305,46 @@ git tag -a v1.4.0 -m "v1.4.0"
 git push origin main v1.4.0
 ```
 
-Pushing the `v*` tag triggers the workflow → build → `informer-publish` → the LM stores the
+Pushing the `v*` tag triggers the workflow → build → `informer-ci` → each LM stores the
 versioned artifact under your vendor's listing. The pushed commit must contain the workflow
 file, so push the branch before/with the tag. (The `-m` is just a tag label — notes come from
 `CHANGELOG.md`, not the tag message.)
 
-**Local dry run** (against a reachable LM, with a `.env`): `npm run build && npx
-informer-publish --version 0.1.0-beta.0`.
+**Re-publish to a subset** without editing config — `informer-ci` takes `--marketplace`
+repeatedly, and the flags replace the configured list entirely:
+
+```bash
+npx informer-ci --version 1.4.0 --marketplace https://lm.example.com/cloud-api
+```
+
+**Publishing by hand** (against a reachable LM, with a `.env` holding a publish key): `npm
+run build && npx informer-publish --version 0.1.0-beta.0`. Useful when CI is down — but it
+consumes the version number, so CI can't republish the same one afterwards (it 409s).
+
+## Trusted publishers (keyless CI auth)
+
+A trusted publisher is the authorization half of OIDC publishing: **(License Manager,
+repository) → vendor account.** Nothing is stored in the repo; the repository's identity is
+asserted by a token GitHub signs and the LM verifies against GitHub's public keys.
+
+- **What the LM checks**, in order: the token is signed by GitHub Actions and unexpired; its
+  audience matches that marketplace (when the LM is configured to know its own URL); and its
+  `repository` claim has a trusted-publisher record. Only then does it resolve the vendor
+  account and publish.
+- **The `repository` claim is matched exactly** — `owner/repo`, no `.git`, no URL. A
+  near-miss reads as "not a trusted publisher", not as a typo.
+- **Per marketplace.** Publishing to three LMs means three records, one on each. They are
+  independent: revoking on one does not touch the others.
+- **Scope is the repository, not a branch or workflow.** Anyone who can run a workflow in
+  that repo can publish as that vendor — so treat write access to the repo as equivalent to
+  holding a publish key, and protect release tags accordingly.
+- **Revoking** is deleting the record on that LM. It takes effect on the next publish; there
+  is no key to rotate or leak.
 
 ## Publish keys (vendor auth)
+
+Publish keys remain the auth for `informer-publish` — local publishing and any CI that
+isn't GitHub Actions. In GitHub Actions, prefer a trusted publisher and store no key at all.
 
 A publish key is an **account-scoped** credential — it publishes *as the vendor account*,
 distinct from a personal API token (`lm_…`, which authenticates as a user and is **not**
@@ -280,7 +359,17 @@ accepted by the publish route). Keys are prefixed **`lmpub_`** and shown **once*
 - **Scope:** per vendor account — one key can publish any of that vendor's packs. The pack's
   `vendorId` is resolved from the key, so whatever account the key belongs to owns the listing.
 
-## What `informer-publish` does (under the hood)
+## What the publish commands do (under the hood)
+
+`informer-ci` is `informer-publish` plus target resolution and token minting — they share
+one implementation of the steps below, so an artifact is identical whichever ships it.
+`informer-ci` additionally: parses `INFORMER_MARKETPLACES` (JSON, newlines, or commas;
+duplicates and trailing-slash variants collapse), assembles the payload **once**, then for
+each target mints an OIDC token with that marketplace as the `audience` and publishes,
+collecting per-target results for the job summary and the exit code.
+
+The shared steps:
+
 
 1. **Assembles the app file set** — the same files `informer-deploy` pushes: the Vite `dist/`
    output (at the library root), `informer.yaml` (declare host-API grants in its
@@ -297,11 +386,22 @@ accepted by the publish route). Keys are prefixed **`lmpub_`** and shown **once*
 4. **Reads** version (tag/arg/package.json), release notes (`CHANGELOG.md`), listing metadata
    (`package.json` `informer` block), an icon (`favicon.svg` if present), **screenshots**
    (`screenshots/`), and **provenance** (`GITHUB_REPOSITORY` / `GITHUB_SHA` / `GITHUB_RUN_ID`).
-5. **POSTs** a multipart request to `${INFORMER_MARKETPLACE_URL}/packs/publish` (archive + icon +
-   screenshot parts + metadata fields) with the `lmpub_` key as a Bearer token.
+5. **POSTs** a multipart request to `<marketplace>/packs/publish` (archive + icon + screenshot
+   parts + metadata fields), Bearer-authenticated with either the OIDC token (`informer-ci`)
+   or the `lmpub_` key (`informer-publish`).
 
 ## Gotchas
 
+- **Missing `id-token: write`.** The single most common first-setup failure. Without that
+  permission the runner injects no token endpoint and `informer-ci` stops immediately,
+  naming the missing block. It has to be on the job (or workflow) that runs the publish.
+- **"… is not a trusted publisher on this marketplace."** The token verified fine; that LM
+  just has no record for this repository. Add one there — and check the value matches the
+  `owner/repo` form exactly.
+- **`informer-ci` outside GitHub Actions** can't work — no OIDC endpoint exists. Locally, or
+  on GitLab/Jenkins, use `informer-publish` with a publish key.
+- **A repo variable, not a secret.** `INFORMER_MARKETPLACES` holds URLs, nothing sensitive.
+  Stored as a secret it still works, but it's needlessly awkward to read and edit.
 - **`INFORMER_MARKETPLACE_URL` includes the cloud-api root.** The CLI appends `/packs/publish`
   — so the value must already resolve there (`…/cloud-api` for a direct LM; the gateway root
   if one fronts it). A wrong base shows up as a 404 on publish.
