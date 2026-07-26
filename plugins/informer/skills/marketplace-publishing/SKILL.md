@@ -336,10 +336,15 @@ gh workflow run "Publish to Marketplaces" --ref v1.4.0
 `GITHUB_REF_NAME` is the tag, so the version resolves exactly as a tag push would and the
 build comes from that tag's tree — you publish the code that version actually is.
 
-**The tag has to contain the workflow file**, because a dispatch runs the workflow from the
-ref it's dispatched against. A tag cut before CI was set up can't publish itself; cut a
-fresh tag with the workflow in it rather than dispatching from a branch, which would publish
-the branch's current code under an older version's number.
+**The tag has to contain the workflow file *with its `workflow_dispatch` trigger*.** A
+dispatch runs the workflow from the ref it's dispatched against, so both have to be present
+in the tag itself — a workflow that only has `on: push` is not dispatchable, and GitHub
+answers 422 (`does not have workflow_dispatch trigger`). Adding the trigger on the branch
+today does nothing for tags already cut.
+
+So a tag from before CI was set up can't publish itself. Cut a fresh tag containing the
+workflow, or publish that exact version locally with `informer-publish`. Don't dispatch from
+a branch instead: that publishes the branch's current code under an older version's number.
 
 **Re-publish to a subset** of marketplaces — `informer-ci` takes `--marketplace` repeatedly,
 and the flags replace the configured list entirely. Pass it through the dispatch input:
@@ -427,6 +432,13 @@ The shared steps:
 - **Missing `id-token: write`.** The single most common first-setup failure. Without that
   permission the runner injects no token endpoint and `informer-ci` stops immediately,
   naming the missing block. It has to be on the job (or workflow) that runs the publish.
+- **Missing `workflow_dispatch`, discovered far too late.** Without it in `on:`, a tag can
+  only ever publish by being pushed — `gh workflow run` and Studio's Publish button both get
+  a 422 (`does not have workflow_dispatch trigger`). What makes this expensive is *when* you
+  find out: a dispatch runs the workflow from the ref it targets, so **adding the trigger
+  today does nothing for tags already cut**. Those can only be published locally with
+  `informer-publish`, or by tagging a fresh version that contains it. Put it in from the
+  start even if you never expect to dispatch.
 - **"… is not a trusted publisher on this marketplace."** The token verified fine; that LM
   just has no record for this repository. Add one there — and check the value matches the
   `owner/repo` form exactly.
