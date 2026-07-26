@@ -131,6 +131,16 @@ name: Publish to Marketplaces
 on:
   push:
     tags: ['v*']            # v1.4.0 → stable, v1.4.0-beta.1 → beta (channel derived server-side)
+  # REQUIRED for publishing a tag that never reached a marketplace — by Studio,
+  # or `gh workflow run --ref v1.4.0`. A dispatch runs the workflow FROM the ref
+  # it targets, so the trigger has to be present in the tag being published;
+  # GitHub answers 422 "does not have workflow_dispatch trigger" otherwise, and
+  # a tag cut without it can never publish itself.
+  workflow_dispatch:
+    inputs:
+      marketplaces:
+        description: 'Space-separated subset of marketplace URLs. Blank = all of INFORMER_MARKETPLACES.'
+        required: false
 
 permissions:
   contents: read
@@ -145,10 +155,15 @@ jobs:
         with: { node-version: 22, cache: npm }
       - run: npm ci
       - run: npm run build
-      - run: npx informer-ci
+      - name: Publish
         env:
           INFORMER_MARKETPLACES: ${{ vars.INFORMER_MARKETPLACES }}
+          MARKETPLACES_INPUT: ${{ github.event.inputs.marketplaces }}
           # GITHUB_REF_NAME / GITHUB_SHA / GITHUB_REPOSITORY / GITHUB_RUN_ID are injected automatically
+        run: |
+          ARGS=""
+          for m in $MARKETPLACES_INPUT; do ARGS="$ARGS --marketplace $m"; done
+          npx informer-ci $ARGS
 ```
 
 That is the whole workflow — no Environments, no secrets, no matrix. **Keep it that way.**
