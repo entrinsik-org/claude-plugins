@@ -310,11 +310,28 @@ versioned artifact under your vendor's listing. The pushed commit must contain t
 file, so push the branch before/with the tag. (The `-m` is just a tag label — notes come from
 `CHANGELOG.md`, not the tag message.)
 
-**Re-publish to a subset** without editing config — `informer-ci` takes `--marketplace`
-repeatedly, and the flags replace the configured list entirely:
+**Publishing a tag that never reached a marketplace** — say a repo published to one LM
+before a second was added, or an app onboarded after it was already tagged. Dispatch the
+workflow **against the tag**:
 
 ```bash
-npx informer-ci --version 1.4.0 --marketplace https://lm.example.com/cloud-api
+gh workflow run "Publish to Marketplaces" --ref v1.4.0
+```
+
+`GITHUB_REF_NAME` is the tag, so the version resolves exactly as a tag push would and the
+build comes from that tag's tree — you publish the code that version actually is.
+
+**The tag has to contain the workflow file**, because a dispatch runs the workflow from the
+ref it's dispatched against. A tag cut before CI was set up can't publish itself; cut a
+fresh tag with the workflow in it rather than dispatching from a branch, which would publish
+the branch's current code under an older version's number.
+
+**Re-publish to a subset** of marketplaces — `informer-ci` takes `--marketplace` repeatedly,
+and the flags replace the configured list entirely. Pass it through the dispatch input:
+
+```bash
+gh workflow run "Publish to Marketplaces" --ref v1.4.0 \
+   -f marketplaces="https://lm.example.com/cloud-api"
 ```
 
 **Publishing by hand** (against a reachable LM, with a `.env` holding a publish key): `npm
