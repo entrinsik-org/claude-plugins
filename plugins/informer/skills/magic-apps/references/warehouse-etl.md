@@ -415,7 +415,72 @@ Joins compose for free: any unqualified reference — `JOIN invoices`,
 its scoping and masks apply before the join, and a join condition on a
 masked column compares the MASKED value (NULL matches nothing).
 
-## 8. The UI — small but real
+## 8. Streaming ingest — point any HTTP sink at your webhook
+
+For continuous data (pg WAL/CDC via Debezium, Kafka via Connect's HTTP
+sink, Stripe/Segment events), the warehouse is the SINK, not the pipeline:
+the customer runs the shipper they already know, aimed at the app's
+HMAC'd webhook. At-least-once delivery is fine — the keyed merge makes
+replays converge.
+
+**Edge (thin by design)** — the webhook authenticates and appends RAW
+events to the platform's `_ingest` buffer, then returns fast:
+
+```javascript
+// webhooks/events.js — one durable insert, no transformation here
+await query(
+    'INSERT INTO "_ingest" ("payload") SELECT * FROM jsonb_array_elements($1::jsonb)',
+    [JSON.stringify(events)]
+);
+```
+
+**Drain (a load(), scheduled every minute or on demand)** — consumes
+buffered events in order through a REQUIRED mapping handler:
+
+```javascript
+return await load({
+    from: { ingest: true },              // the buffer is the source
+    into: 'invoices',
+    mode: 'upsert',                      // drains are always keyed merges
+    batch: { handler: 'etl/apply-events' }
+});
+```
+
+```javascript
+// etl/apply-events.js — raw events in, three channels out. Debezium-ish:
+export const config = { internal: true };
+export async function POST({ request }) {
+    const out = { rows: [], deletes: [], dead: [] };
+    for (const e of request.body.rows) {           // [{ seq, payload, receivedAt }]
+        const p = e.payload;
+        if (!p.op) { out.dead.push({ seq: e.seq, reason: 'no op' }); continue; }
+        if (p.op === 'd') out.deletes.push({ id: p.before.id });
+        else out.rows.push(p.after);               // c/u/r — snapshot reads
+    }                                              // flow the SAME path: backfill
+    return out;                                    // and stream are one code path
+}
+```
+
+The contract, and why it's safe:
+- **`deletes`** apply as targeted key deletes in the same atomic publish —
+  the CDC delete primitive (prune remains full-sync-only).
+- **`dead`** is for events the mapping DECIDES are trash (→ `_ingest_dead`
+  with a reason; drain continues) — never a fallback for events it failed
+  to handle.
+- **Unexpected throws STALL the drain**: no retry/skip policy exists. The
+  watermark advances only inside the committed publish, so the next drain
+  replays the same window. Skipping a CDC event silently is divergence,
+  not resilience. A schema-bearing event stalls with `schema_drift` → ship
+  the ALTER migration → the drain resumes and replays.
+- **Bring-up ritual**: let real events accumulate, run the drain with
+  `dryRun: true`, read the would-be receipts, THEN schedule it.
+- Receipts add `deleted` and `dead`; per-key ordering is the transport's
+  job (buffer seq preserves arrival). Multi-table `into` maps work — the
+  handler returns `{ table: [...] }` maps per channel.
+- The buffer tables are owner-only (raw events are pre-mask, pre-policy —
+  consumers can never read them) and applied events age out after 72h.
+
+## 9. The UI — small but real
 
 Always ship an `index.html` (headless warehouses are not a supported
 pattern — an app with no entry point renders the server's error page). The
