@@ -324,6 +324,28 @@ the owner/admins. **Fail-closed by construction**: no share variable → NULL
 OWNS the tables — Postgres never applies RLS to the table owner, so loads
 and finalize hooks always see raw data.
 
+**THE LEAK EVERY POLICY-BEARING WAREHOUSE MUST CLOSE**: your own `server/`
+routes read through the OWNER connection, which owns the tables — Postgres
+never applies RLS to the table owner, so `query()` in a handler ALWAYS
+returns raw, unfiltered rows. That is correct for ETL and finalize hooks —
+and a data leak the moment a handler feeds rows to your UI for a shared
+viewer. Once policies exist, every viewer-facing read must go through the
+workspace DATASOURCE as the signed-in user, where the policy applies per
+requester:
+
+```javascript
+// frontend — allowlist `POST /api/datasources/*/_query` in access.apis
+await fetch(`/api/datasources/${wsDsId}/_query`, {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ language: 'sql', payload: 'SELECT ...', limit: 100, options: {} })
+});
+```
+
+Audit the classic offenders: a `/rows` or `/dashboard-data` route that
+SELECTs and returns rows, KPI aggregates computed in a handler, exports.
+Either move those reads to the datasource `_query` path, or accept that
+the route serves owner-privileged data and gate it with `config.roles`.
+
 Rules of thumb:
 - Always author the `inf_unrestricted() OR …` idiom — without it the owner
   sees nothing in the Data panel.
