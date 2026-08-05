@@ -369,11 +369,51 @@ Rules of thumb:
   sees nothing in the Data panel.
 - Keep the `(SELECT inf_var('x'))` initplan form — it evaluates once per
   query, not per row.
-- Masking helpers `inf_mask_email(v)` / `inf_mask_last4(v)` exist for
-  column-level treatment in views.
 - The Data panel shows viewers their own enforcement: a shield on policy-
   bearing tables, a "Filtered view" footer listing their resolved
   variables, and each table's policies under Schema.
+
+### Column masking (CLS) — inf_mask_view
+
+To hide or transform COLUMNS (salaries, emails, SSNs), create a **masking
+view** from a migration with `inf_mask_view(name, sql)`. The view lands in
+a platform-managed masked schema that consumers resolve FIRST — so a view
+named like a table transparently replaces that table for every consumer
+read (Data panel, reports, other apps), with **no SQL changing anywhere**.
+The platform also revokes the same-named base table from the consumer
+role automatically, so a schema-qualified reach for raw data is
+permission-denied.
+
+```sql
+-- migrations/00X-mask-invoices.sql  (note: '' doubles quotes inside the arg)
+SELECT "inf_mask_view"('invoices',
+    'SELECT "id", "customer",
+            CASE WHEN "inf_unrestricted"() THEN "amount" ELSE NULL END AS "amount",
+            "inf_mask_email"("contact") AS "contact"
+     FROM "invoices"
+     WHERE "inf_unrestricted"() OR "ownerRep" = (SELECT "inf_var"(''rep_id''))');
+```
+
+TWO RULES that make masked views correct:
+
+1. **Re-apply row scoping in the view's WHERE.** Masked views run with
+   OWNER rights (that's what lets them read the revoked base), which means
+   the base table's RLS does NOT apply inside them — a masked view without
+   the `inf_unrestricted() OR …` WHERE serves every row to every consumer,
+   just with masked columns. The WHERE is the row layer; the SELECT list
+   is the column layer; author both.
+2. **Derived objects are separate exposures.** A matview or plain view
+   computed FROM a masked/policied table is its own relation with its own
+   access: matviews are owner-computed snapshots (raw, unscoped data
+   frozen at refresh), and owner-schema views are owner-rights by default.
+   Masking `invoices` does NOT protect `invoices_by_rep`. For each derived
+   object, either confirm it aggregates to genuinely non-sensitive
+   granularity, or give it its own inf_mask_view treatment.
+
+Joins compose for free: any unqualified reference — `JOIN invoices`,
+`EXISTS (SELECT … FROM invoices)`, CTEs — resolves to the masked view, so
+its scoping and masks apply before the join, and a join condition on a
+masked column compares the MASKED value (NULL matches nothing).
 
 ## 8. The UI — small but real
 
