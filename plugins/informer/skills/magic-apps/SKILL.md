@@ -29,6 +29,8 @@ This file is the orientation layer. Most topics have a dedicated reference under
 | Writing handlers under `server/`, working with `query` / `transaction` / `fetch` / `respond` / `notify` / `email` / `log` / `crypto` / base64 / markdown / `env` / `request` / sandbox constraints | `references/server-routes.md` |
 | Receiving external callbacks (Stripe, GitHub, Slack, Gmail push) under `webhooks/`, HMAC verification, signed `?token=` URLs | `references/webhooks.md` |
 | Storing app data — `migrations/`, dev-workspace lifecycle, `workspace:init` / `:migrate` / `:reset`, CRUD example | `references/persistence.md` |
+| Building a WAREHOUSE / ETL app — the sync-route pattern (one atomic entry point; per-table only when safe), the `load()` spec (replace/append/**upsert** with key + prune, multi-table `into` maps for atomic header/line publishes, scoped prune, `dryRun` validation, batch hooks, page walkers, `onComplete`/`onLoaded`/`emit`), run receipts, `automations:` schedules, the run-ledger/SSE surface, what the warehouse's own UI must cover | `references/warehouse-etl.md` |
+| Writing a walker against a SPECIFIC integration (QuickBooks, Salesforce, …) — per-connector traps: hidden inactive rows, pagination quirks, incremental watermark fields, deletion detection | `references/connector-gotchas.md` |
 | Declaring `widgets:` in `informer.yaml`, building self-contained HTML cards under `public/widgets/`, iframe quirks | `references/widgets.md` |
 | Activating the in-app copilot, `openChat()` / `registerTool()`, AI completion endpoints (`_chat` / `_completion` / `_object`), `useChat` hook patterns | `references/copilot.md` |
 | Declaring `agents:` in `informer.yaml`, writing `tools/*.js`, `emit()` chaining, cron, toolkits/assistants integration, agent REST API | `references/agents.md` |
@@ -124,6 +126,7 @@ Once the project is set up, the typical next moves are:
 1. Ask the user what data the app needs (datasets/queries/datasources/integrations) and add `dependencies:` slots to `informer.yaml` — look up `defaultBinding` UUIDs via `GET /api/datasets-list` etc. against the configured `INFORMER_URL`. For an external service the app itself needs (a REST API, Salesforce, and so on), prefer declaring it in the `integrations:` block instead of binding to a pre-existing one — deploy creates the Integration and the slot for you, no UUID and no out-of-band setup. See `references/informer-yaml.md`.
 2. Replace Vite's default `index.html` + `main.js` with the app shell.
 3. If the app stores its own data, scaffold `migrations/` and add a first migration — load `references/persistence.md`.
+   If the data is LOADED from sources on a cadence (a warehouse), load `references/warehouse-etl.md` instead — it layers sync routes, `load()`, and `automations:` schedules on top of plain persistence.
 4. If the app exposes server-side routes, scaffold `server/` — load `references/server-routes.md`.
 5. If the app should be usable from an outside AI client (Claude Code/Desktop, Cursor), scaffold `mcp/` with tools written for a context-free caller — load `references/mcp.md`.
 6. If open pages should update live when server code changes something (no polling), add a `channels:` relay block and/or `channels/` handlers — load `references/channels.md` (needs an origin-mode server; confirm before building on it).

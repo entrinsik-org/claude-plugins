@@ -2,7 +2,7 @@
 
 > **Load this reference when:** the app needs to store its own data (form submissions, workflow state, anything that isn't backed by a dataset/datasource/integration). Covers the `migrations/` directory, the dev-workspace lifecycle (`workspace:init` / `:migrate` / `:reset`), and how published apps read/write workspace data through server routes.
 >
-> **Not in this file:** raw `query()` calling shape and parameter binding — see `server-routes.md`. Datasource/dataset queries (those are deps, not workspace) — see SKILL.md "Accessing Your Dependencies".
+> **Not in this file:** raw `query()` calling shape and parameter binding — see `server-routes.md`. Datasource/dataset queries (those are deps, not workspace) — see SKILL.md "Accessing Your Dependencies". Tables LOADED from sources on a cadence (a warehouse: sync routes, `load()`, schedules) — see `warehouse-etl.md`, which layers on top of this file.
 
 Apps can opt into a **dedicated Postgres schema** for storing and querying custom data. This is ideal for apps that need CRUD operations, form submissions, workflow state, or any data that belongs to the app itself rather than coming from external datasources or datasets.
 

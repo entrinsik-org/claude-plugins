@@ -528,3 +528,13 @@ access:
   apis:
     - POST /api/custom/endpoint
 ```
+
+Matching rules:
+
+- Patterns match the **path only** — a query string never affects matching.
+  `GET /api/tasks` allows `tasks?appId=…`; you never need a `*` just to
+  admit query params.
+- `*` matches one path segment, `**` matches across segments
+  (`GET /api/apps/*/contents/**`).
+- A rejected call surfaces as a **403 naming the path** — if you see one,
+  the fix is an `access.apis` entry, not a permissions change.
