@@ -344,7 +344,25 @@ await fetch(`/api/datasources/${wsDsId}/_query`, {
 Audit the classic offenders: a `/rows` or `/dashboard-data` route that
 SELECTs and returns rows, KPI aggregates computed in a handler, exports.
 Either move those reads to the datasource `_query` path, or accept that
-the route serves owner-privileged data and gate it with `config.roles`.
+the route serves owner-privileged data and OWNER-GATE it:
+
+```yaml
+roles:
+  - id: raw_data          # declare a role you grant to nobody
+    name: Raw data access
+```
+```javascript
+export const config = { roles: ['raw_data'] };
+```
+
+Role resolution's admin override gives owning-team Publishers+ (and
+superusers) every DECLARED role implicitly — so the owner passes, shared
+viewers 403, and an explicit app-share grant of `raw_data` becomes the
+deliberate exception. TRAP: the role MUST appear in the manifest `roles:`
+block — with zero declared roles the resolver returns empty for everyone
+(before the admin override), locking out the owner too. Note this is a
+binary invocation gate, not row filtering — scoped viewing always means
+the `_query` path.
 
 Rules of thumb:
 - Always author the `inf_unrestricted() OR …` idiom — without it the owner
