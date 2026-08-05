@@ -293,7 +293,49 @@ What the platform provides (observation, not orchestration):
 Allowlist note: `access.apis` patterns match the PATH only — a query string
 never affects matching, so `GET /api/tasks` allows `tasks?appId=…`.
 
-## 7. The UI — small but real
+## 7. Row security — scope shared data by viewer
+
+A warehouse shared broadly needs row policies. Every workspace ships helper
+functions for exactly this; policies are authored in migrations like all
+structure, and the vocabulary they read is declared in the manifest:
+
+```sql
+-- migrations/00X-row-security.sql
+ALTER TABLE "invoices" ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "rep_scope" ON "invoices" FOR SELECT
+    USING ("inf_unrestricted"() OR "ownerRep" = (SELECT "inf_var"('rep_id')));
+```
+
+```yaml
+# informer.yaml — REQUIRED for every variable a policy reads:
+# deploy cross-checks pg_policies and FAILS on undeclared refs
+share:
+  variables:
+    rep_id: The rep's Salesforce user id
+```
+
+How it works at query time: consumer reads (the GO Data panel, datasource-
+share slots in other apps) run as a read-only role stamped with the
+requester's context — `inf_var('x')` returns the value their datasource
+share granted (a fixed literal, or a `$user.<attr>` binding like
+`$user.email` resolved per requester), and `inf_unrestricted()` is true for
+the owner/admins. **Fail-closed by construction**: no share variable → NULL
+→ no rows. Your own routes, hooks, and ETL run as the owner role, which
+OWNS the tables — Postgres never applies RLS to the table owner, so loads
+and finalize hooks always see raw data.
+
+Rules of thumb:
+- Always author the `inf_unrestricted() OR …` idiom — without it the owner
+  sees nothing in the Data panel.
+- Keep the `(SELECT inf_var('x'))` initplan form — it evaluates once per
+  query, not per row.
+- Masking helpers `inf_mask_email(v)` / `inf_mask_last4(v)` exist for
+  column-level treatment in views.
+- The Data panel shows viewers their own enforcement: a shield on policy-
+  bearing tables, a "Filtered view" footer listing their resolved
+  variables, and each table's policies under Schema.
+
+## 8. The UI — small but real
 
 Always ship an `index.html` (headless warehouses are not a supported
 pattern — an app with no entry point renders the server's error page). The
