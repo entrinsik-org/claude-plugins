@@ -48,3 +48,22 @@ usually one of these.
 - **Soft deletes**: `queryAll` + `IsDeleted` reveals recycle-bin rows;
   a plain query never shows deletions — same remedy as QBO (periodic full
   sync with `prune: true`).
+
+## Postgres WAL (test_decoding shippers)
+
+- **A PK-changing UPDATE is secretly a DELETE + INSERT.** `test_decoding`
+  emits it as one UPDATE line carrying two sections — `old-key: id[...]:5
+  new-tuple: id[...]:9 ...`. Parse the whole line as one column bag and the
+  delete silently vanishes: the warehouse keeps BOTH rows. Split on
+  `old-key:`/`new-tuple:` and emit a delete event for the old key plus an
+  upsert for the new tuple whenever the key changed.
+- **`old-key:` only appears when the key changes** (or when the table has
+  `REPLICA IDENTITY FULL`) — a plain UPDATE line has just the column bag.
+  Handle both shapes.
+- **Peek, ship, then advance.** `pg_logical_slot_peek_changes` + POST +
+  `pg_replication_slot_advance` only after a 2xx gives at-least-once
+  delivery; the warehouse's keyed merge makes replays converge. Never use
+  `get_changes` (consumes on read — a failed POST loses the window).
+- **Advance past noise too**: BEGIN/COMMIT lines and other tables' changes
+  still occupy the slot. Advance to the last PEEKED lsn even when no
+  mappable events were shipped, or the slot pins WAL forever.
