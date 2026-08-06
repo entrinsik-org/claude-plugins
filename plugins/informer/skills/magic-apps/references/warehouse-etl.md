@@ -269,12 +269,16 @@ and deletion-detection traps are documented per connector there.
 ## 6. Scheduling & the platform surface
 
 Schedules are plain `automations:` in informer.yaml, targeting your sync
-route — cadence lives next to the route it fires, deployed atomically:
+route — cadence lives next to the route it fires, deployed atomically.
+**Automation routes are dispatched as GUEST paths**, so a route that lives
+in `server/` MUST carry the `/_server/` prefix — without it the dispatch
+404s silently (the automation row keeps advancing `nextRunAt`, no task ever
+appears):
 
 ```yaml
 automations:
   nightly-sync:
-    route: /etl/sync
+    route: /_server/etl/sync    # server/etl/sync.js — /_server/ is REQUIRED
     interval: '0 3 * * *'
     payload: {}
 ```
@@ -423,8 +427,8 @@ the customer runs the shipper they already know, aimed at the app's
 HMAC'd webhook. At-least-once delivery is fine — the keyed merge makes
 replays converge.
 
-**Edge (thin by design)** — the webhook authenticates and appends RAW
-events to the platform's `_ingest` buffer, then returns fast:
+**Edge (thin by design)** — the webhook authenticates, appends RAW events
+to the platform's `_ingest` buffer, and kicks the drain with `schedule()`:
 
 ```javascript
 // webhooks/events.js — one durable insert, no transformation here
@@ -432,10 +436,24 @@ await query(
     'INSERT INTO "_ingest" ("payload") SELECT * FROM jsonb_array_elements($1::jsonb)',
     [JSON.stringify(events)]
 );
+// coalescing kick — seconds of latency instead of waiting for the cron
+await schedule('/_server/etl/drain', { delay: 1000 });
 ```
 
-**Drain (a load(), scheduled every minute or on demand)** — consumes
-buffered events in order through a REQUIRED mapping handler:
+`schedule(route, { delay, payload, key })` is a sandbox primitive (routes,
+webhooks, tools): it registers a deferred invocation of one of the app's
+own routes, fired as the app owner — same dialect as `automations:` routes,
+so server routes carry `/_server/`. Timers **coalesce**: while a kick for
+the same key is pending, further calls are no-ops that keep the EARLIER
+fire time — a burst of appends costs one drain, and latency stays bounded
+at `delay` under constant traffic. `delay` clamps to 0–60s (longer cadence
+belongs to an automation). Timers are in-process and lost on restart by
+design: `schedule()` buys latency, the minute-cron automation remains the
+durable sweeper. Have the drain answer a concurrent-run 409 from `load()`
+with `{ busy: true }` — the running drain's cursor advance covers the rows.
+
+**Drain (a load(), kicked by schedule() + swept by a minute cron)** —
+consumes buffered events in order through a REQUIRED mapping handler:
 
 ```javascript
 return await load({
