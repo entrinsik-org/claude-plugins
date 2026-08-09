@@ -49,6 +49,32 @@ order_tasks:
   `currency`). Use Informer datatype vocabulary — the same one `load()`'s
   `columns:` declaration uses — never raw SQL types.
 
+## Curation — category and hidden
+
+Explore's subject picker is a consumer surface: curate it. Two table-level
+keys (and one field-level) control what consumers see:
+
+```yaml
+# semantics.yaml
+order_tasks:
+  label: Escrow Tasks
+  category: Operations        # groups the subject in Explore's picker
+  fields:
+    sync_token: { hidden: true }   # plumbing — never reaches Explore
+_ingest_cursor:
+  hidden: true                # retract the whole table from Explore
+```
+
+- `category` is a display string like a label — give it an inline default
+  and translate it in locale files (`category: Operaciones`). Subjects
+  group under their resolved category; uncategorized ones pool under
+  "More".
+- `hidden: true` (structure file only — overlays can't hide) retracts a
+  table or column from CONSUMER surfaces. The builder-facing Data panel
+  always shows the whole schema; hidden is curation, not security.
+- Underscore-prefixed tables are already excluded everywhere; `hidden` is
+  for plumbing that can't wear a `_` prefix.
+
 ## Internationalizing (graduating to locale files)
 
 When a pack gets serious about i18n, lift the strings into per-locale
@@ -58,6 +84,7 @@ overlays. English becomes a peer locale, not a privileged base:
 # semantics.es-MX.yaml — strings only, SPARSE on purpose
 order_tasks:
   description: Una fila por tarea de flujo de trabajo en una orden
+  category: Operaciones
   fields:
     owner:     { label: Responsable }
     status:
