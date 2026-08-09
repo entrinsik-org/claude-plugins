@@ -25,22 +25,33 @@ The strings grammar has no structural keys and the structure grammar has no
 locale variants — mixing is unrepresentable, which is how ten locales can
 never disagree about whether a column is a duration.
 
+## The document — three sections
+
+Every semantics file has up to three top-level sections:
+
+```yaml
+categories:   # category ENTITIES — id, label, visual identity
+tables:       # per-table docs — the bulk of the file
+links:        # declared relationships between tables
+```
+
 ## Quick development (one file)
 
 Start with inline defaults in `semantics.yaml` and ship nothing else:
 
 ```yaml
 # semantics.yaml
-order_tasks:
-  description: One row per workflow task on an order
-  fields:
-    owner:        { label: Owner }
-    status:
-      values: { open: Open, hold: On hold, done: Done, overdue: Overdue }
-    due_date:     { label: Due, type: date }          # calendar date — no TZ shift
-    completed_at: { label: Completed, type: date_tz } # instant — viewer's timezone
-    days_open:    { label: Days Open, type: duration, unit: days,
-                    description: Business days from creation to completion }
+tables:
+  order_tasks:
+    description: One row per workflow task on an order
+    fields:
+      owner:        { label: Owner }
+      status:
+        values: { open: Open, hold: On hold, done: Done, overdue: Overdue }
+      due_date:     { label: Due, type: date }          # calendar date — no TZ shift
+      completed_at: { label: Completed, type: date_tz } # instant — viewer's timezone
+      days_open:    { label: Days Open, type: duration, unit: days,
+                      description: 'Business days from creation to completion' }
 ```
 
 - `values:` as a **map** declares the enum keys AND their default labels;
@@ -48,32 +59,83 @@ order_tasks:
 - `type` REFINES the pg type, never replaces it (pg says `numeric`, you say
   `currency`). Use Informer datatype vocabulary — the same one `load()`'s
   `columns:` declaration uses — never raw SQL types.
+- **Quote any flow-map string containing a comma.** In
+  `{ label: X, description: One thing, another thing }` YAML parses
+  `another thing` as a NEW KEY — your description silently truncates and
+  deploy warns `semantics_key_ignored`. Write
+  `description: 'One thing, another thing'`.
 
-## Curation — category and hidden
+## Curation — categories, category, and hidden
 
-Explore's subject picker is a consumer surface: curate it. Two table-level
-keys (and one field-level) control what consumers see:
+Explore's subject picker is a consumer surface: curate it. Categories are
+**entities** with a visual identity; a table references one by id:
 
 ```yaml
 # semantics.yaml
-order_tasks:
-  label: Escrow Tasks
-  category: Operations        # groups the subject in Explore's picker
-  fields:
-    sync_token: { hidden: true }   # plumbing — never reaches Explore
-_ingest_cursor:
-  hidden: true                # retract the whole table from Explore
+categories:
+  operations:
+    label: Operations       # inline default; localize in overlay files
+    color: teal             # an ACCENT TOKEN name — never a hex
+    icon: tasks             # one of the curated glyph names below
+
+tables:
+  order_tasks:
+    label: Escrow Tasks
+    category: operations    # an id REFERENCE into categories, not a string
+    fields:
+      sync_token: { hidden: true }   # plumbing — never reaches Explore
+  _ingest_cursor:
+    hidden: true            # retract the whole table from Explore
 ```
 
-- `category` is a display string like a label — give it an inline default
-  and translate it in locale files (`category: Operaciones`). Subjects
-  group under their resolved category; uncategorized ones pool under
-  "More".
+- `color` must name an accent token:
+  `blue cyan green indigo orange pink purple red lightGreen teal
+  lighterBlue deepPurple brightBlueGrey darkBlue`.
+- `icon` must be one of:
+  `building calendar chart database document finance globe inventory
+  operations people sales security support tasks`.
+- Unknown color/icon names degrade quietly (no accent, generic glyph) —
+  a typo is cosmetic, never a broken picker.
 - `hidden: true` (structure file only — overlays can't hide) retracts a
   table or column from CONSUMER surfaces. The builder-facing Data panel
   always shows the whole schema; hidden is curation, not security.
+- **Hiding a foreign-key column does NOT hide the relationship** — Explore
+  still offers the hop to the target table; only the raw id column
+  disappears from rails and menus. Hide FK plumbing freely.
 - Underscore-prefixed tables are already excluded everywhere; `hidden` is
   for plumbing that can't wear a `_` prefix.
+
+## Links — declared relationships
+
+Real foreign keys in your migrations are the FLOOR: Informer reads them
+live from the catalog and offers the hop automatically. Declare a link
+when the catalog can't see it, or to name it properly:
+
+```yaml
+# semantics.yaml
+links:
+  - from: order_tasks.order_id   # the link's identity — one link per from
+    to: orders.id
+    label: Order                 # what order_tasks calls the outbound hop
+    reverse: Tasks               # what orders calls the incoming set
+```
+
+- **Views need links.** A view carries no FK constraints — without a
+  declared link its columns can't reach related tables in Explore.
+- `label` names the to-one hop from the `from` side; `reverse` names the
+  to-many set seen from the target (skip the auto-pluralization guess).
+- `from`/`to` are `"table.column"` pairs. Links are key pairings —
+  richer join forms (composite keys, driver-specific joins for U2 and
+  friends) are reserved future keys, not free-form SQL.
+- `hidden: true` on a link suppresses a hop that exists but only confuses
+  (noisy self-references, audit shadows).
+- Deploy validates endpoints against the live catalog and warns on
+  unknowns (the link still deploys — pump drift can add the column
+  later); malformed and duplicate `from` entries are dropped with
+  warnings.
+- Curated multi-table shapes still belong in ordinary views
+  (`order_context AS SELECT ... JOIN ...`) — links relate subjects,
+  views compose them.
 
 ## Internationalizing (graduating to locale files)
 
@@ -82,21 +144,28 @@ overlays. English becomes a peer locale, not a privileged base:
 
 ```yaml
 # semantics.es-MX.yaml — strings only, SPARSE on purpose
-order_tasks:
-  description: Una fila por tarea de flujo de trabajo en una orden
-  category: Operaciones
-  fields:
-    owner:     { label: Responsable }
-    status:
-      label: Estado
-      values: { open: Abierta, hold: En espera, done: Completada, overdue: Vencida }
-    due_date:  { label: Vence }
-    days_open: { label: Días abiertos }
-    # anything omitted falls back: locale file → inline default → auto-title
+categories:
+  operations: { label: Operaciones }     # entity labels localize
+tables:
+  order_tasks:
+    description: Una fila por tarea de flujo de trabajo en una orden
+    fields:
+      owner:     { label: Responsable }
+      status:
+        label: Estado
+        values: { open: Abierta, hold: En espera, done: Completada, overdue: Vencida }
+      due_date:  { label: Vence }
+      days_open: { label: Días abiertos }
+      # anything omitted falls back: locale file → inline default → auto-title
+links:
+  - from: order_tasks.order_id           # addressed by from; strings only
+    label: Orden
+    reverse: Tareas
 ```
 
-Never put `type`, `unit`, or new `values` keys in a locale file — deploy
-rejects structure in overlays. Locale files translate; they never define.
+Never put `type`, `unit`, new `values` keys, `color`, `icon`, or a table's
+`category` reference in a locale file — deploy ignores structure in
+overlays with a warning. Locale files translate; they never define.
 
 Date and number FORMATTING conventions (12/08 vs 08/12) come from the
 viewer's locale at render time — never author them.
@@ -118,13 +187,6 @@ ALTER TABLE order_tasks ADD COLUMN days_open numeric;
 COMMENT ON COLUMN order_tasks.days_open IS
   'Recomputed nightly by the ingest drain; excludes hold intervals.';
 ```
-
-## Links
-
-Declare real foreign keys in your migrations — they ARE the link layer
-(Informer reads them live from the catalog). Ship curated join paths as
-ordinary views in migrations (`order_context AS SELECT ... JOIN ...`).
-There is no separate link declaration to maintain.
 
 ## Customer layering (what happens after install)
 
