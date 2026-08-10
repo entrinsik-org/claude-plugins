@@ -105,6 +105,34 @@ tables:
 - Underscore-prefixed tables are already excluded everywhere; `hidden` is
   for plumbing that can't wear a `_` prefix.
 
+## Histogram bands — bins
+
+Grouping a numeric field in Explore builds a histogram automatically: an
+unfiltered probe fits a nice-number bin width to the data's span (about
+25 bins, snapped to 1 / 2 / 2.5 / 5 × 10^k), and fields with few
+distinct values group exactly instead. Declare `bins` when the domain
+has REAL tiers only a human knows:
+
+```yaml
+tables:
+  loans:
+    fields:
+      amount:
+        label: Loan Amount
+        type: currency
+        bins: [50000, 250000, 1000000]   # ascending CUT POINTS
+```
+
+- Cut points make N+1 bands: `< 50,000`, `50,000 – 250,000`,
+  `250,000 – 1,000,000`, `1,000,000+`. Labels derive from the bounds
+  through the field's own semantics (a currency banding reads as money).
+- Declared bands OUTRANK the smart width — same doctrine as labels over
+  auto-title. Drilling a band pins its exact range as a filter.
+- `bins` is structural (never in locale overlays) and must be an
+  ascending list of numbers — anything else warns at deploy and drops.
+- Fields wearing a `values:` map never bin: an enum in a number suit is
+  a category, not a quantity.
+
 ## Links — declared relationships
 
 Real foreign keys in your migrations are the FLOOR: Informer reads them
