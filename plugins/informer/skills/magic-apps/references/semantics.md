@@ -118,12 +118,27 @@ links:
     to: orders.id
     label: Order                 # what order_tasks calls the outbound hop
     reverse: Tasks               # what orders calls the incoming set
+  - from: order_properties.order_id
+    to: orders.id
+    label: Order
+    reverse: Property
+    one: true                    # one property per order → real fields
 ```
 
 - **Views need links.** A view carries no FK constraints — without a
   declared link its columns can't reach related tables in Explore.
 - `label` names the to-one hop from the `from` side; `reverse` names the
-  to-many set seen from the target (skip the auto-pluralization guess).
+  incoming set seen from the target (skip the auto-pluralization guess).
+- **Every inbound key gives the target a hop automatically** (catalog FKs
+  are the floor). Without `one:`, the hop offers SUMMARIES — Count, Sum
+  and Average per numeric column, Earliest/Latest per date, and capped
+  Values lists for the rest — never raw child columns, so a to-many can
+  never multiply the subject's rows.
+- `one: true` asserts the `from` column is one-per-target: the reverse
+  hop then traverses as REAL fields. Explore compiles it with a row
+  limit, so even a wrong assertion shows an arbitrary satellite row —
+  never doubled totals. Index the `from` column in your migrations;
+  every reverse hop rides it.
 - `from`/`to` are `"table.column"` pairs. Links are key pairings —
   richer join forms (composite keys, driver-specific joins for U2 and
   friends) are reserved future keys, not free-form SQL.
