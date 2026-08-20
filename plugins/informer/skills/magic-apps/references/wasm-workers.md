@@ -1,14 +1,19 @@
 # WebAssembly & Web Workers in Magic Apps
 
-Running a WASM library — especially one that uses a Web Worker (DuckDB-WASM, sql.js, ffmpeg.wasm, pdf.js, ONNX Runtime Web) — works inside a Magic App, but the sandbox imposes a specific pattern. A naive `new Worker(url)` or a CDN-hosted worker/wasm **will fail**. This is the recipe that works, and why.
+Running a WASM library — especially one that uses a Web Worker (DuckDB-WASM, sql.js, ffmpeg.wasm, pdf.js, ONNX Runtime Web) — works inside a Magic App. How much ceremony it takes depends on **which serving mode** the deployment uses; the blob-worker recipe below works in BOTH, which is why it stays the recommended pattern for portable apps.
 
-## Why the obvious approaches fail
+## Two serving modes, two origins
 
-A Magic App runs in a **sandboxed iframe without `allow-same-origin`**, so its origin is opaque (`window.location.origin === 'null'`):
+**Per-app origins (App API v2 — Informer 2026.1.2+ with `appsBaseUrl` configured).** Each app serves from its own origin (`https://<label>.apps.…`). The frame has a REAL origin: plain `new Worker(bundledAssetUrl)` just works, and so do `localStorage`, IndexedDB, `BroadcastChannel`, and service workers. If your app targets only origin-mode deployments, you can skip the blob dance entirely — bundle the worker/wasm with Vite `?url` and construct directly.
+
+**Path mode (deployments without per-app origins, and all older servers).** The app runs in a **sandboxed iframe without `allow-same-origin`**, so its origin is opaque (`window.location.origin === 'null'`):
 
 - **`new Worker('https://…/worker.js')` throws** `Failed to construct 'Worker': Script at '…' cannot be accessed from origin 'null'`. An opaque-origin document can't construct a worker from an `http(s)` URL — only from a `blob:` (or `data:`) URL.
-- **CDN fetches are blocked.** `connect-src` is locked to the app's proxy, so `fetch('https://cdn…/x.wasm')` is refused. This is the data-exfiltration boundary — don't widen it for convenience (see "External fetch targets").
-- **The fetch shim rewrites `/api/*`.** The injected shim routes `/api/*` calls through the proxy. Your app's *own* bundled assets live under `/api/apps/{id}/view/-/assets/…`; that `/view/-/` path is carved out of the rewrite so you can `fetch()` your own assets — but only your own.
+- **The fetch shim rewrites `/api/*`.** Path mode injects a shim that routes `/api/*` calls through the proxy. Your app's *own* bundled assets live under `/api/apps/{id}/view/-/assets/…`; that `/view/-/` path is carved out of the rewrite so you can `fetch()` your own assets — but only your own.
+
+**In both modes: CDN fetches are blocked.** `connect-src` is locked down (`'self'` on an app origin, the proxy in path mode), so `fetch('https://cdn…/x.wasm')` is refused either way. This is the data-exfiltration boundary — don't widen it for convenience (see "External fetch targets"). Bundle locally regardless of mode.
+
+A marketplace app cannot know which mode its installer runs, so unless you control the deployment, use the portable recipe:
 
 ## The pattern: bundle locally, construct the worker from a blob
 

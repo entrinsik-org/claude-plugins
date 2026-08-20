@@ -151,7 +151,7 @@ Informer blocks outside hosts by default via CSP. A tenant admin approves extern
 
 The last row is the common gotcha: anything an app *fetches* (not script-tag-loads) — e.g. a DuckDB extension pack pulled from `extensions.duckdb.org` — needs a **`data` asset**, not a Script. A Script entry only opens `script-src` and will **not** authorize the `fetch`. Use the `https://cdn.jsdelivr.net/npm/...` format for the standard CDN.
 
-**Web Workers & WASM — bundle locally, do not point at a CDN.** Apps run in an opaque-origin sandboxed iframe, so a worker can't be constructed from an `http(s)` URL and CDN fetches are blocked by `connect-src`. The supported pattern is to bundle the worker/wasm *with your app* (Vite `?url`) and construct the worker from a **blob URL** — no Approved Resource is needed for your own assets. (Earlier guidance to point `workerSrc` at a CDN copy is superseded.) See **`references/wasm-workers.md`** for the full recipe (DuckDB-WASM, sql.js, ffmpeg.wasm, pdf.js, ONNX).
+**Web Workers & WASM — bundle locally, do not point at a CDN.** CDN fetches are blocked by `connect-src` in every serving mode, so bundle the worker/wasm *with your app* (Vite `?url`). On deployments with **per-app origins** (App API v2, Informer 2026.1.2+) the app has a real origin and plain `new Worker(bundledUrl)` works — as do `localStorage`, IndexedDB, and service workers. On path-mode deployments the iframe's origin is opaque and the worker must be constructed from a **blob URL**; that blob recipe works in BOTH modes, making it the portable choice for marketplace apps. (Earlier guidance to point `workerSrc` at a CDN copy is superseded.) See **`references/wasm-workers.md`** for the full recipe (DuckDB-WASM, sql.js, ffmpeg.wasm, pdf.js, ONNX).
 
 ### Development Mode (`npm run dev`)
 
@@ -404,7 +404,7 @@ export async function GET({ context }) {
 function Dashboard() {
     const [data, setData] = useState(null);
     useEffect(() => {
-        fetch('/api/_server/dashboard')
+        fetch('/api/dashboard')
             .then(r => r.json())
             .then(setData);
     }, []);
@@ -666,7 +666,11 @@ Load `references/persistence.md` for: migration file rules (append-only, alphabe
 
 ## Server-Side Routes — overview
 
-Apps can include **server-side handler files** under `server/` that run in sandboxed V8 isolates on the Informer server. File-convention routing (Next.js-style) maps `server/orders/[id].js` to `/api/_server/orders/:id`.
+Apps can include **server-side handler files** under `server/` that run in sandboxed V8 isolates on the Informer server. File-convention routing (Next.js-style) maps `server/orders/[id].js` to `/api/orders/:id`.
+
+`/api/{path}` is one namespace with manifest-driven precedence: an Informer platform API declared on your `access:`/`dependencies:` surface **occupies** its path (that method+path always proxies to the platform); every other path dispatches your app's own routes. Occupation is per-method — a `GET /api/tags` declaration leaves `POST /api/tags` to your routes. Don't name a route after a declared platform API: the declaration wins and the route becomes unreachable at that spelling (deploy warns about the collision).
+
+> **Older servers (before Informer 2026.1.2):** app routes answer only at `/api/_server/{path}`. That legacy spelling remains routable on every version, but new apps should write the bare form.
 
 ```javascript
 // server/orders/index.js
