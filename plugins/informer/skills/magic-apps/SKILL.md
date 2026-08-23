@@ -37,6 +37,7 @@ This file is the orientation layer. Most topics have a dedicated reference under
 | In-gallery app docs (`docs.html`), in-app `?` help button, `README.md` fallback | `references/docs-html.md` |
 | Looking up the raw API surface behind the typed-slot proxy (still useful when something fails) | `references/api-reference.md` |
 | HTML/CSS/JS starter snippets, theme-variable patterns, CSS Modules for React | `references/app-templates.md` |
+| Public pages & anonymous API routes (`public: true`, `server/public/**`), the app's OWN sign-up/login (`accounts.issuers.local`, `/_auth/*`), password reset, OIDC/SSO (`/_auth/oidc/{name}`), "Sign in with Informer" (`/_auth/informer`), accepting other apps' users (`accounts.accept`), the unified `request.user` | `references/accounts-and-login.md` |
 | Running a WASM library or Web Worker in the sandbox (DuckDB-WASM, sql.js, ffmpeg.wasm, pdf.js, ONNX) — the blob-worker pattern, bundling wasm locally, `new Worker` failing with origin `'null'`, external extension fetches | `references/wasm-workers.md` |
 
 The sections that **stay in this file** are the ones nearly every project touches: bootstrapping, local-dev essentials, the dep-access centerpiece, the small surfaces (App Context, HTML5 routing, App Roles, PDF Export). Everything else is one click away in `references/`.
@@ -906,6 +907,24 @@ export default {
     plugins: [informer({ mock: { roles: ['approver', 'manager'] } })]
 };
 ```
+
+## App Accounts & Public Serving — overview
+
+On deployments with per-app origins, an app can face the WORLD, not just
+Informer users: `public: true` serves the page + assets anonymously,
+`server/public/**` handlers dispatch with no session (`/api/public/...`,
+`request.user = null`), and `accounts.issuers` gives the app its OWN
+sign-up/login (`/_auth/signup|login|logout|reset`) with platform-held
+credentials — plus OIDC (`/_auth/oidc/{name}`), a ready-made
+"Sign in with Informer" link (`/_auth/informer`), and acceptance of other
+apps' users (`accounts.accept`). Every door yields one unified
+`request.user` (`{ id, issuer, subject, email, name, claims }`; Informer
+viewers also keep `username`/`displayName`), and `request.roles` combines
+the issuer's default with Users-tab grants. Account sessions can never call
+platform APIs — the app's own routes are their surface.
+
+Load `references/accounts-and-login.md` for the full route table, manifest
+shapes, and limits before building any of this.
 
 ## Built-in App Copilot — overview
 
