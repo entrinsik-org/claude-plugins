@@ -8,7 +8,7 @@ All endpoints are relative to `/api`. The Vite plugin handles authentication in 
 >
 > **For app code, use the patterns in SKILL.md → Accessing Your Dependencies:**
 > - **Server handler**: `await context.orders.search(esQuery)` — no UUIDs in code, slot survives rebinds
-> - **Frontend Pattern A (preferred)**: frontend calls `/api/_server/<route>` which uses `context.<slot>` server-side
+> - **Frontend Pattern A (preferred)**: frontend calls `/api/<route>` which uses `context.<slot>` server-side
 > - **Frontend Pattern B (acceptable for SPAs)**: discover bindings via `GET /api/apps/{appId}/dependencies` at startup, then use resolved UUIDs in subsequent calls
 > - **Forbidden**: hardcoding UUIDs or configIds in URLs anywhere in app code
 >
@@ -196,29 +196,36 @@ const created = await response.json();
 
 ## Server Routes
 
-### /api/_server/{path}
+### /api/{path}
 
 Call server-side route handlers defined in the app's `server/` directory. All HTTP methods are supported — the method is dispatched to the matching exported function in the handler file.
 
 ```javascript
 // GET request
-const orders = await fetch('/api/_server/orders').then(r => r.json());
+const orders = await fetch('/api/orders').then(r => r.json());
 
 // POST with body
-const order = await fetch('/api/_server/orders', {
+const order = await fetch('/api/orders', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ customer: 'Acme Corp', total: 1500 })
 }).then(r => r.json());
 
 // Dynamic route parameter
-const order = await fetch('/api/_server/orders/abc123').then(r => r.json());
+const order = await fetch('/api/orders/abc123').then(r => r.json());
 
 // POST to nested route
-await fetch('/api/_server/orders/abc123/approve', { method: 'POST' });
+await fetch('/api/orders/abc123/approve', { method: 'POST' });
 ```
 
 Server routes use the same authentication as the rest of the app's API proxy. They have direct access to the app's Postgres workspace via `query()` and can make authenticated API calls via `fetch()`.
+
+**Dispatch precedence:** `/api/{path}` is one namespace, resolved from the manifest. A platform API declared on your `access:`/`dependencies:` surface **occupies** its method+path (always the platform, never an app route); every unclaimed path dispatches your app's own routes. Occupation is per-method: `GET /api/tags` declared leaves `POST /api/tags` to your routes. A route named after a declared API is unreachable at the bare spelling — deploy warns about the collision; rename the route.
+
+| Prefix | Serves |
+|---|---|
+| `/api/{path}` | Declared platform APIs at their exact method+paths; every other path dispatches your app's routes |
+| `/api/_server/{path}` | Legacy spelling for your app's routes — still routable everywhere; the only form on servers before Informer 2026.1.2 |
 
 See `server-routes.md` for full handler structure, the sandbox-helper reference, and worked examples.
 

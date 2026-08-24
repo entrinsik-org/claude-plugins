@@ -406,7 +406,7 @@ async function streamChat(messages, options = {}) {
 // See Accessing Your Dependencies in SKILL.md for why this matters.
 const toolHandlers = {
     searchSchema: async ({ query }) => {
-        const resp = await fetch('/api/_server/tools/search-schema', {
+        const resp = await fetch('/api/tools/search-schema', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ query })
@@ -414,7 +414,7 @@ const toolHandlers = {
         return resp.json();
     },
     runQuery: async ({ sql }) => {
-        const resp = await fetch('/api/_server/tools/run-query', {
+        const resp = await fetch('/api/tools/run-query', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ sql })

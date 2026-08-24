@@ -1,6 +1,6 @@
 # Server-Side Routes
 
-> **Load this reference when:** writing handler files under `server/`, working with the V8 sandbox helpers (`query`, `transaction`, `fetch`, `respond`, `notify`, `email`, `log`, `crypto`, the base64/markdown/extractText globals), configuring per-handler `timeout` or `roles`, or wiring frontend calls to `/api/_server/...`.
+> **Load this reference when:** writing handler files under `server/`, working with the V8 sandbox helpers (`query`, `transaction`, `fetch`, `respond`, `notify`, `email`, `log`, `crypto`, the base64/markdown/extractText globals), configuring per-handler `timeout` or `roles`, or wiring frontend calls to `/api/...`.
 >
 > **Not in this file:** public token-gated webhook endpoints — see `webhooks.md`. Agent tool handlers — see `agents.md` (they share the same sandbox, so this file is the authoritative sandbox reference). The typed dep proxy (`context.<slot>.<method>()`) — see SKILL.md "Accessing Your Dependencies".
 
@@ -11,7 +11,7 @@ Apps can include **server-side JavaScript handlers** that run on the Informer se
 1. Create a `server/` directory in your project root
 2. Add `.js` handler files using file-convention routing (like Next.js)
 3. Run `npm run deploy` — Informer scans, bundles, and registers routes automatically
-4. Your app calls server routes via `fetch('/api/_server/...')`
+4. Your app calls server routes via `fetch('/api/...')`
 
 Handler code runs in an **isolated-vm V8 isolate** — a separate V8 heap with no access to Node.js APIs, the filesystem, or the network. All I/O goes through injected callbacks (`query` and `fetch`).
 
@@ -21,10 +21,10 @@ File paths under `server/` map to URL routes:
 
 | File | Route | Example URL |
 |------|-------|-------------|
-| `server/index.js` | `/` | `/api/_server/` |
-| `server/orders/index.js` | `/orders` | `/api/_server/orders` |
-| `server/orders/[id].js` | `/orders/:id` | `/api/_server/orders/abc123` |
-| `server/orders/[id]/approve.js` | `/orders/:id/approve` | `/api/_server/orders/abc123/approve` |
+| `server/index.js` | `/` | `/api/` |
+| `server/orders/index.js` | `/orders` | `/api/orders` |
+| `server/orders/[id].js` | `/orders/:id` | `/api/orders/abc123` |
+| `server/orders/[id]/approve.js` | `/orders/:id/approve` | `/api/orders/abc123/approve` |
 
 - `[param]` segments become dynamic route parameters (available as `request.params.param`)
 - `index.js` files map to the parent directory path
@@ -599,27 +599,27 @@ Server handlers run in a sandboxed V8 isolate. This means:
 
 ## Calling Server Routes from App Code
 
-Server routes are accessed through the app's view API proxy at `/api/_server/`:
+Server routes are accessed through the app's view API proxy at `/api/`:
 
 ```javascript
-// GET /api/_server/orders
-const response = await fetch('/api/_server/orders');
+// GET /api/orders
+const response = await fetch('/api/orders');
 const orders = await response.json();
 
-// POST /api/_server/orders
-const response = await fetch('/api/_server/orders', {
+// POST /api/orders
+const response = await fetch('/api/orders', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ customer: 'Acme Corp', total: 1500 })
 });
 const newOrder = await response.json();
 
-// GET /api/_server/orders/abc123
-const response = await fetch('/api/_server/orders/abc123');
+// GET /api/orders/abc123
+const response = await fetch('/api/orders/abc123');
 const order = await response.json();
 
-// POST /api/_server/orders/abc123/approve
-const response = await fetch('/api/_server/orders/abc123/approve', {
+// POST /api/orders/abc123/approve
+const response = await fetch('/api/orders/abc123/approve', {
     method: 'POST'
 });
 ```
@@ -720,13 +720,13 @@ export async function DELETE({ query, request }) {
 // src/main.js
 
 async function loadOrders() {
-    const response = await fetch('/api/_server/orders');
+    const response = await fetch('/api/orders');
     const orders = await response.json();
     renderTable(orders);
 }
 
 async function createOrder(customer, total) {
-    const response = await fetch('/api/_server/orders', {
+    const response = await fetch('/api/orders', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ customer, total })
@@ -744,7 +744,7 @@ async function createOrder(customer, total) {
 
 Server routes run locally during `npm run dev` via Vite's `ssrLoadModule()`. The Vite plugin:
 1. Detects a `server/` directory in your project
-2. Mounts middleware at `/api/_server` that loads and executes your handler files
+2. Mounts middleware at `/api` that loads and executes your handler files
 3. Passes the dev workspace connection to `query()` and proxies `fetch()` to the Informer server
 4. Supports HMR — editing a server handler file takes effect immediately without restarting
 
