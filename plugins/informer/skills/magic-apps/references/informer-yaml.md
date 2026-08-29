@@ -2,9 +2,9 @@
 
 > **Load this reference when:** writing or modernizing `informer.yaml` — declaring `dependencies:` slot fields (`target`, `runAs`, `options`, `defaultBinding`), wiring row-level security via `$user.*` variables, migrating a legacy `access:` block to typed slots, or deciding when `access.apis:` / `access.libraries:` still apply.
 >
-> **Not in this file:** how handler code calls the slots (`context.<slot>.method()`) — see SKILL.md "Accessing Your Dependencies". Widget declarations (`widgets:` block) — see `widgets.md`. Agent declarations (`agents:` / `events:` blocks) — see `agents.md`. Custom role definitions (`roles:` block) — see SKILL.md "App Roles".
+> **Not in this file:** how handler code calls the slots (`context.<slot>.method()`) — see SKILL.md "Accessing Your Dependencies". Widget declarations (`widgets:` block) — see `widgets.md`. Agent declarations (`agents:` / `events:` blocks) — see `agents.md`. Custom role definitions (`roles:` block) — see SKILL.md "App Roles". The `channels:` relay block's shape is below; its runtime semantics (`broadcast()`, `channels/` handlers, the page API) — see `channels.md`.
 
-Apps are configured with an `informer.yaml` file in the project root. This single file declares the app's **data dependencies** (typed slots that get bound at install time), any **raw API allowlist** the app needs, **widgets**, **agents**, and **custom roles**. It's uploaded automatically on deploy.
+Apps are configured with an `informer.yaml` file in the project root. This single file declares the app's **data dependencies** (typed slots that get bound at install time), any **raw API allowlist** the app needs, **widgets**, **agents**, **live channel relays** (`channels:`), and **custom roles**. It's uploaded automatically on deploy.
 
 ```yaml
 # informer.yaml
@@ -197,6 +197,49 @@ couldn't be re-used across tenants anyway.)
 > with `{ defn: { env: { … } } }`. That path is gone — it leaked secrets in
 > plaintext through `GET` responses. Use the Environment tab (or declare keys
 > in `env:`) instead.
+
+## `channels:` (live channel relays)
+
+Maps a live channel to the app events it should carry. Every `emit()` of a
+listed event still creates the durable app event (agents trigger as before)
+**and** is also broadcast to the channel with the same event name and payload,
+so open pages subscribed via `__INFORMER__.channel(name)` update with no
+handler changes. Requires an origin-mode server; see `channels.md` for the
+runtime side (`broadcast()`, `channels/` handlers, the page API, limits).
+
+```yaml
+channels:
+  orders:
+    description: Live order activity for the Order Desk dashboard
+    on: [order_created, order_shipped]
+  payments:
+    on: payment_received          # a single string is fine
+  presence: {}                    # named only — broadcast() to it from handlers
+```
+
+| Field | Required | Description |
+|-------|----------|-------------|
+| `description` | no | Author-facing note, ≤ 500 chars |
+| `on` | no | Event name or list of event names to relay into this channel. Persisted as an array on `app.defn.channels` |
+
+**Names.** Channel keys: segments of letters, digits, `_`, `.`, `-` joined by
+`/` (`orders`, `orders/east`), ≤ 128 chars; a leading `@user/<username>`
+segment is also legal. Event names: letters, digits, `_`, `.`, `-`, ≤ 64
+chars. Anything else **fails the deploy** with
+`400 Invalid channels: block in informer.yaml: …`.
+
+**Rules.**
+
+- A channel listed here has no gate: every viewer of the App can subscribe.
+  Add a `channels/` handler file (`config.roles` / `join`) to restrict one.
+- A relay the server cannot deliver (frame over 64 KiB, App over its
+  broadcast rate) is logged and dropped; the `emit()` still succeeds.
+- Only the App's own `emit()` calls are relayed — the platform's agent
+  `onFailure` event is not.
+- Removing the block and redeploying removes the relay.
+- A path-mode server accepts the block but records a non-fatal
+  `channels_require_origin_mode` deploy warning; a Magic Report (`type:
+  report`) deploy that carries it is refused with `apps_license_required`.
 
 ## `integrations:` (app-sourced integrations)
 

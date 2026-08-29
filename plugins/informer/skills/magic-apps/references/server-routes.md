@@ -2,7 +2,7 @@
 
 > **Load this reference when:** writing handler files under `server/`, working with the V8 sandbox helpers (`query`, `transaction`, `fetch`, `respond`, `notify`, `email`, `log`, `crypto`, the base64/markdown/extractText globals), configuring per-handler `timeout` or `roles`, or wiring frontend calls to `/api/...`.
 >
-> **Not in this file:** public token-gated webhook endpoints — see `webhooks.md`. Agent tool handlers — see `agents.md` (they share the same sandbox, so this file is the authoritative sandbox reference). The typed dep proxy (`context.<slot>.<method>()`) — see SKILL.md "Accessing Your Dependencies".
+> **Not in this file:** public token-gated webhook endpoints — see `webhooks.md`. Agent tool handlers — see `agents.md` (they share the same sandbox, so this file is the authoritative sandbox reference). Live broadcast to open pages (`broadcast()`, `channels/` handlers, the page-side `channel()` API) — see `channels.md`. The typed dep proxy (`context.<slot>.<method>()`) — see SKILL.md "Accessing Your Dependencies".
 
 Apps can include **server-side JavaScript handlers** that run on the Informer server in sandboxed V8 isolates. These handlers have direct access to the app's Postgres workspace and can make authenticated API calls — ideal for business logic, data transformations, webhooks, or anything that shouldn't run in the browser.
 
@@ -63,6 +63,7 @@ Each handler function receives a single context object with these properties:
 | `context` | `object` | Typed dep proxies keyed by slot name. Call deps as `context.<slotName>.<method>(args)`. Methods per `target`: `dataset` → `search(esQuery)` / `fields()`; `query` → `execute(params)`; `datasource` → `query(payload)`; `integration` → `request(opts)`. Throws boom 422 with `errorCode: 'dependency_unbound'` if the installer hasn't bound the slot yet, or `'dependency_broken'` if the bound target was deleted. Prefer this over raw `fetch()` — slots survive bundle export/import and resource renames; raw paths don't. |
 | `respond` | `async (response) => void` | Send an early HTTP response while the handler continues running in the background. Accepts the same shape as a synchronous return — a response object (`{ status, headers?, body?, encoding? }`) or any plain value (wrapped as 200 JSON). See [Using `respond()`](#using-respond). |
 | `emit` | `async (event, payload) => void` | Emit an app event to trigger agents. Creates an `AppEvent` record and notifies the event dispatcher. |
+| `broadcast` | `async (channel, event, payload?) => { ok: true }` | Push a fire-and-forget, at-most-once frame to every open page subscribed to `channel` (origin-mode servers only). No DB row, no delivery report; rejects on a bad channel/event name, a payload over 64 KiB, or the App's rate limit. The live counterpart of `emit()` — see `channels.md`. |
 | `notify` | `async (username, message) => { id }` | Enqueue a push notification for delivery to a user's Informer GO devices. See [Using `notify()`](#using-notify). |
 | `email` | `async (to, message) => { id }` | Enqueue an email for delivery via the tenant's mail transport. See [Using `email()`](#using-email). |
 | `crypto` | `object` | Cryptographic helpers (all async): `hmac`, `hash`, `randomUUID`, `randomBytes`, `timingSafeEqual`, `verifyHmac`, `encrypt`/`decrypt` (AES-256-GCM), `verify`. See [Using `crypto`](#using-crypto). |
@@ -418,7 +419,7 @@ export async function POST({ query, log, request }) {
 - Logging is **fire-and-forget** — it never blocks or throws. If the log write fails, it's silently dropped.
 - The `source` field is set automatically based on where the handler runs: `'server'` for server routes, `'webhook'` for webhook handlers, `'tool'` for agent tool handlers.
 - Correlation fields are set automatically based on context: `invocationId` for server routes and webhooks; `agentId` and `runId` for agent tool handlers. You don't need to pass them.
-- Available in **server routes**, **webhook handlers**, and **agent tool handlers**.
+- Available in **server routes**, **webhook handlers**, **agent tool handlers**, and **channel handlers** (`channels/` `join` / `leave` — logged with `source: 'server'`).
 
 ## Handler Config
 
@@ -569,7 +570,7 @@ Any other content type (including images) throws. For a PDF or image you want an
 
 ## Imports
 
-Files under `server/`, `webhooks/`, and `tools/` are bundled at deploy by an esbuild plugin that resolves imports **only against the app's own library** — the host filesystem and `node_modules` are invisible.
+Files under `server/`, `webhooks/`, `tools/`, `mcp/`, and `channels/` are bundled at deploy by an esbuild plugin that resolves imports **only against the app's own library** — the host filesystem and `node_modules` are invisible.
 
 **Use relative imports only** (`./foo`, `../shared/util.js`); implicit `.js` / `.json` / `/index.js` resolution works. The bundler rejects (and `npm run deploy` fails on):
 

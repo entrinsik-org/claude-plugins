@@ -1,6 +1,6 @@
 ---
 name: magic-apps
-description: Building Informer Apps with local Vite development. Covers the dev/publish workflow, the centerpiece "Accessing Your Dependencies" model (typed slots + three patterns), and the orientation map for deeper topics (server routes, webhooks, persistence, widgets, copilot sidebar, event-driven AI agents, PDF export, informer.yaml schema, app-to-app/pack API integration and openapi.json contracts) — each routes to a reference file under `references/` so the front door stays loadable on every trigger.
+description: Building Informer Apps with local Vite development. Covers the dev/publish workflow, the centerpiece "Accessing Your Dependencies" model (typed slots + three patterns), and the orientation map for deeper topics (server routes, webhooks, persistence, widgets, copilot sidebar, event-driven AI agents, live broadcast channels over WebSockets, PDF export, informer.yaml schema, app-to-app/pack API integration and openapi.json contracts) — each routes to a reference file under `references/` so the front door stays loadable on every trigger.
 ---
 
 # Informer App Development
@@ -16,6 +16,7 @@ An Informer App is a custom HTML/JS/CSS application that runs inside Informer. I
 - Render charts, tables, and interactive visualizations
 - Include a **built-in AI copilot** sidebar that can query your data and answer questions in context
 - Define **AI agents** that react to events, execute tools, and chain together for automated workflows
+- Push **live updates** to every open page over a WebSocket Informer owns for it (channels — origin-mode servers)
 
 Apps are stored in Informer libraries and served through the Informer UI. (You may see the term "Magic Report" in older documentation — Apps are the current name for the same concept.)
 
@@ -31,6 +32,7 @@ This file is the orientation layer. Most topics have a dedicated reference under
 | Declaring `widgets:` in `informer.yaml`, building self-contained HTML cards under `public/widgets/`, iframe quirks | `references/widgets.md` |
 | Activating the in-app copilot, `openChat()` / `registerTool()`, AI completion endpoints (`_chat` / `_completion` / `_object`), `useChat` hook patterns | `references/copilot.md` |
 | Declaring `agents:` in `informer.yaml`, writing `tools/*.js`, `emit()` chaining, cron, toolkits/assistants integration, agent REST API | `references/agents.md` |
+| Live updates to open pages — "real-time" / "push" / "stop polling" / presence / typing; `broadcast(channel, event, payload)` from a handler, the `channels:` relay block, gated channels under `channels/` (`join` / `leave` / `config.roles`), `@user/<username>`, `__INFORMER__.channel(name).on(event, fn)`, `origin_mode_required` | `references/channels.md` |
 | Exposing tools to outside AI clients (Claude Code/Desktop, Cursor) — the `mcp/` folder, why the folder is the decision, writing for a caller with no context, the per-app endpoint, the OAuth connect flow, who a tool runs as | `references/mcp.md` |
 | Deep `informer.yaml` work — `dependencies:` slot field reference, app-sourced `integrations:` (an app declares and owns an Integration — OAuth, `$env` secrets, icons), RLS via `$user.*`, modernizing a legacy `access:` block, `defaultBinding` lookup, declaring env-var keys with `env:` | `references/informer-yaml.md` |
 | App-to-app/pack APIs — fetching a target's contract (`openapi.json`), typed dev bindings (`.informer/app-deps.d.ts`), public-vs-internal routes, and making your own App integratable (`description`/`schema` exports, `config.api = 'public'`, root `API.md`) | `references/app-api.md` |
@@ -124,6 +126,7 @@ Once the project is set up, the typical next moves are:
 3. If the app stores its own data, scaffold `migrations/` and add a first migration — load `references/persistence.md`.
 4. If the app exposes server-side routes, scaffold `server/` — load `references/server-routes.md`.
 5. If the app should be usable from an outside AI client (Claude Code/Desktop, Cursor), scaffold `mcp/` with tools written for a context-free caller — load `references/mcp.md`.
+6. If open pages should update live when server code changes something (no polling), add a `channels:` relay block and/or `channels/` handlers — load `references/channels.md` (needs an origin-mode server; confirm before building on it).
 
 ## Local Development Workflow
 
@@ -209,9 +212,11 @@ Builds your project and uploads to Informer:
 7. Uploads `tools/` and `mcp/` directories (if they exist)
 8. Uploads `server/` directory (if it exists)
 9. Uploads `webhooks/` directory (if it exists)
-10. Runs deploy: pending SQL migrations + server-route scanning + webhook scanning + handler bundling + tool bundling (`tools/` + `mcp/`) + resource reference validation + agent upsert from `informer.yaml`
+10. Uploads `channels/` directory (if it exists)
+11. Runs deploy: pending SQL migrations + server-route scanning + webhook scanning + channel scanning (`channels/` handlers + the `channels:` relay block) + handler bundling + tool bundling (`tools/` + `mcp/`) + resource reference validation + agent upsert from `informer.yaml`
     - **Resource refs are validated**: all datasets, queries, datasources, integrations, and toolkits declared in `informer.yaml` must exist — deploy fails with a clear error if any are missing
-11. App is viewable at `/api/apps/{owner}:{slug}/view`
+    - **Channels need origin mode**: a `channels:` block or `channels/` directory on a path-mode server still deploys, with a non-fatal `channels_require_origin_mode` warning — see `references/channels.md`
+12. App is viewable at `/api/apps/{owner}:{slug}/view`
 
 ### Package.json Configuration
 
@@ -272,7 +277,7 @@ An Informer App has **two** JavaScript runtimes, and they access dependencies di
 
 | Runtime | Where it runs | How it talks to deps |
 |---|---|---|
-| **Server handler** | V8 isolate inside the Informer server (files in `server/`, `tools/`, `webhooks/`, or `agents:`) | `context.<slot>.<method>(args)` — typed proxy, no UUIDs in code |
+| **Server handler** | V8 isolate inside the Informer server (files in `server/`, `tools/`, `webhooks/`, `channels/`, or `agents:`) | `context.<slot>.<method>(args)` — typed proxy, no UUIDs in code |
 | **Frontend** | Browser (your `main.js` / React components / etc.) | Has to make HTTP calls. **Does NOT have `context`.** |
 
 `context` is a property the V8 isolate runtime injects into the handler argument. It does not exist in the browser. Trying to use `context.<slot>` in a React component will throw `ReferenceError: context is not defined`.
@@ -599,7 +604,7 @@ Returned shape:
 
 ## App Configuration (`informer.yaml`) — rule of thumb
 
-Apps are configured with an `informer.yaml` file in the project root. It declares the app's **data dependencies** (typed slots bound at install time), any **raw API allowlist**, **widgets**, **agents**, and **custom roles**. It's uploaded automatically on deploy.
+Apps are configured with an `informer.yaml` file in the project root. It declares the app's **data dependencies** (typed slots bound at install time), any **raw API allowlist**, **widgets**, **agents**, **live channel relays** (`channels:`), and **custom roles**. It's uploaded automatically on deploy.
 
 **Rule of thumb — read this before writing to informer.yaml:**
 
@@ -690,7 +695,7 @@ export async function POST({ query, request }) {
 }
 ```
 
-Handlers receive a single argument with the sandbox helpers (`query`, `transaction`, `fetch`, `context`, `respond`, `emit`, `notify`, `email`, `log`, `crypto`, `env`, `request`). Globals available without destructuring: `markdown`, `base64Encode` / `base64Decode` / `base64UrlEncode` / `base64UrlDecode`, `atob` / `btoa`.
+Handlers receive a single argument with the sandbox helpers (`query`, `transaction`, `fetch`, `context`, `respond`, `emit`, `broadcast`, `notify`, `email`, `log`, `crypto`, `env`, `request`). Globals available without destructuring: `markdown`, `base64Encode` / `base64Decode` / `base64UrlEncode` / `base64UrlDecode`, `atob` / `btoa`.
 
 Sandbox constraints: no Node APIs, no filesystem, no direct network — all I/O is through the injected callbacks. 128 MB memory, 30s default wall-clock timeout (configurable via `config.timeout`).
 
@@ -714,9 +719,39 @@ export async function POST({ crypto, request, env, query }) {
 }
 ```
 
-Webhook handlers receive the **same bag as server routes** — `query`, `transaction`, `fetch`, `context`, `respond`, `emit`, `notify`, `email`, `crypto`, `markdown`, `log`, `env`, plus the base64 globals and `request.rawBody` (for HMAC verification). `notify()` and `email()` **are** available (handlers run as the app owner). The only differences are inbound identity: `request.user` is `null` (no user session) and `request.roles` is `[]` — the handler still *runs as* the app owner, so `fetch()`, `notify()`, and `email()` use owner credentials.
+Webhook handlers receive the **same bag as server routes** — `query`, `transaction`, `fetch`, `context`, `respond`, `emit`, `broadcast`, `notify`, `email`, `crypto`, `markdown`, `log`, `env`, plus the base64 globals and `request.rawBody` (for HMAC verification). `notify()` and `email()` **are** available (handlers run as the app owner). The only differences are inbound identity: `request.user` is `null` (no user session) and `request.roles` is `[]` — the handler still *runs as* the app owner, so `fetch()`, `notify()`, and `email()` use owner credentials.
 
 Load `references/webhooks.md` for: file-convention routing, the `?token=` issuance/verification flow, full HMAC verification examples (GitHub, Stripe, shared-secret), and reading per-app secrets via the `env` bag (configured in **Admin → Environment** or declared as keys in `informer.yaml` `env:`).
+
+## Channels — overview
+
+Apps can push **live updates to every open page** over a WebSocket Informer owns for them. Name a channel (a relay of events you already `emit()`, or a gated one under `channels/`), subscribe on the page, and `broadcast()` from any server-side handler — no socket code, no credentials, no Redis in the App. **Requires an origin-mode server** (`app.appsBaseUrl`); on a path-mode server the deploy warns (`channels_require_origin_mode`) and `__INFORMER__.channel()` throws `origin_mode_required`.
+
+```yaml
+# informer.yaml — every emit('order_created') is also broadcast to `orders`
+channels:
+  orders:
+    description: Live order activity
+    on: [order_created, order_shipped]
+```
+
+```javascript
+// server/orders/[id]/approve.js — broadcast is in every handler bag (routes, webhooks, tools, channel handlers)
+export async function POST({ query, request, broadcast }) {
+    const [order] = await query(`UPDATE orders SET status = 'approved' WHERE id = $1 RETURNING *`, [request.params.id]);
+    await broadcast(`orders/${order.region}`, 'approved', order);   // fire-and-forget, at-most-once, no DB row
+    return order;
+}
+```
+
+```javascript
+// on the page — lazy: nothing connects until the first on()
+__INFORMER__.channel('orders/east').on('approved', (order, frame) => refreshRow(order));
+```
+
+Rule of thumb: **if you'd be upset it was lost, `emit`; if it'd be stale in a second anyway, `broadcast`.** A channel with no `channels/` file is open to every viewer of the App; `@user/<username>` is private to that user with no file needed.
+
+Load `references/channels.md` for: the harness/App ownership model and the origin-mode requirement, the `channels:` field reference and relay rules, `channels/` handlers (`config.roles`, `join` must return exactly `true`, `leave` never throws, the bag carries `channel` + `payload` + `request` and no `respond`), the `broadcast()` error table, the full client API (error codes `join_refused` / `rate_limited` / `disconnected` / `origin_mode_required` / `not_supported`, auto-reconnect with backoff), the React hook, limits, what dev mode does and doesn't enforce, and the phase-2 `send()` note.
 
 ## App Context
 
@@ -727,7 +762,10 @@ const appId = window.__INFORMER__?.report?.id;
 const appName = window.__INFORMER__?.report?.name;
 const theme = window.__INFORMER__?.theme; // 'light' or 'dark'
 const roles = window.__INFORMER__?.roles; // string[] of assigned role IDs
+const user = window.__INFORMER__?.user;   // { username, displayName } of the signed-in viewer
 ```
+
+`user` is present on every render (main app and widgets). Its main job is naming the viewer's private channel — `` `@user/${__INFORMER__.user.username}` `` — see `references/channels.md`.
 
 When the page is rendering a **widget entry** (not the main app), the context object also carries widget metadata:
 
@@ -737,7 +775,7 @@ const widget = window.__INFORMER__?.widget; // { id, label } when rendering a wi
 
 Use this to branch behavior between the main app surface and a widget render (different fetch URLs, different DOM layout, etc.).
 
-In dev mode, the Vite plugin mocks this with placeholder values (theme defaults to `'light'`, roles defaults to `[]`, no widget context).
+In dev mode, the Vite plugin mocks this with placeholder values (theme defaults to `'light'`, roles defaults to `[]`, user defaults to `{ username: 'dev', displayName: 'Local Developer' }` — override with `mock.user` — no widget context).
 
 ### Responding to theme
 
@@ -968,7 +1006,7 @@ agents:
     cron: "0 8 * * 1-5"
 ```
 
-Tools live in `tools/` and share the same V8 sandbox as server route handlers. A tool exports a named `handler` that receives a **single bag** with the same service surface as routes/webhooks — `context` (typed deps), `query`, `transaction`, `fetch`, `emit`, `notify`, `email`, `crypto`, `markdown`, `log`, `env` — plus `args` (the AI tool input) and `run` (`{ appId, agentId, runId, trigger }`):
+Tools live in `tools/` and share the same V8 sandbox as server route handlers. A tool exports a named `handler` that receives a **single bag** with the same service surface as routes/webhooks — `context` (typed deps), `query`, `transaction`, `fetch`, `emit`, `broadcast`, `notify`, `email`, `crypto`, `markdown`, `log`, `env` — plus `args` (the AI tool input) and `run` (`{ appId, agentId, runId, trigger }`):
 
 ```javascript
 // tools/notifications/send_email.js
@@ -1102,6 +1140,7 @@ The orientation above points to each file; this is the canonical list of what's 
 | `references/widgets.md` | `widgets:` declaration, self-contained HTML template, iframe constraints, SVG charts without libraries |
 | `references/copilot.md` | `openChat()` / `showCopilot()` / `registerTool()`, AI completion endpoints (`_chat` / `_completion` / `_object`), `useChat` hook pattern, defensive `_object` parsing |
 | `references/agents.md` | `agents:` declaration, `tools/*.js`, event chaining via `emit()`, cron lifecycle, toolkits/assistants, agent REST API |
+| `references/channels.md` | Live broadcast to open pages — origin-mode requirement, `channels:` relay block, `channels/` handlers (`config` / `join` / `leave`, the channel bag), `broadcast()` + error table, `@user/<username>`, the `__INFORMER__.channel()` client API (error codes, reconnect), `broadcast()` vs `emit()`, limits, dev-mode coverage, phase-2 `send()` |
 | `references/mcp.md` | The `mcp/` folder, `mcp/` vs `tools/` split, writing tools for a context-free caller, identity (`runAs` / `run.user` / `run.roles`, workspace-not-per-caller), the per-app endpoint, OAuth discovery + DCR connect flow, curl testing, observability |
 | `references/informer-yaml.md` | Full `informer.yaml` schema deep dive — slot fields, `$user.*` variables, modernizing legacy `access:` blocks, declaring env-var keys with `env:` |
 | `references/docs-html.md` | In-gallery `docs.html` page, in-app `?` help button, `README.md` fallback |
