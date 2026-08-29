@@ -151,7 +151,7 @@ export async function leave({ channel, request }) {
 | `payload` | `null` | Always `null` for `join` and `leave` (reserved for phase-2 inbound events) |
 | `request` | `object` | `request.user` — `{ username, displayName, email, timezone }` of the subscriber; `request.roles` — their role IDs. **No `body`, `headers`, `params`, or `query`** — a subscription is not an HTTP request; the route params are on `channel.params` |
 
-`leave` gets the same `channel.params` object that matched at join time. `log()` calls land in the App's Logs tab with `source: 'server'`.
+`leave` gets the same `channel.params` object that matched at join time. `log()` calls land in the App's Logs tab with `source: 'channel'` (filterable there), alongside the operator warnings the server writes for refused joins, rate-limited broadcasts, and dropped relays.
 
 ### What `join` sees (order of checks)
 
@@ -390,7 +390,7 @@ Server defaults under `app.channels` (`config-factory.js`). An admin can change 
 | Setting | Default | Enforced when |
 |---|---|---|
 | `enabled` | `true` | `false` → every `broadcast()` rejects with `app_channels_disabled` |
-| `maxSubscribersPerApp` | 500 | Subscriptions per App, **counted per server process** (not cluster-wide). Next subscribe → `rate_limited` |
+| `maxSubscribersPerApp` | 500 | Subscriptions per App, counted **cluster-wide** (redis, per-node heartbeat; a dead node's sockets drop out within 30 s). Next subscribe → `rate_limited` |
 | `maxChannelsPerSocket` | 20 | Subscriptions one page's socket may hold. Next `on()` on a new channel → `rate_limited` |
 | `maxFrameBytes` | 65536 (64 KiB) | Serialized **payload** size per broadcast; larger → `app_channel_frame_too_large` |
 | `broadcastRate` | `{ perSecond: 50, burst: 200 }` | Per-App token bucket shared across the cluster (Redis); exceeding → `app_channel_rate_limited` |
@@ -433,7 +433,7 @@ Page → server over the channel is **not in this release**: `send()` rejects wi
 - **Frames during a reconnect are lost.** Re-fetch on `disconnected` if exactness matters; `emit()` + relay if the fact must survive.
 - **`channel.params`, not `request.params`.** A channel handler's `request` is `{ user, roles }` only; route params live on `channel.params`, and there is no `respond`.
 - **Older skill/docs examples use `/api/_server/...`** for route calls; the bare `/api/...` spelling is current (see `server-routes.md`). Both reach the same route.
-- **`maxSubscribersPerApp` is per process.** On a multi-node cluster the effective cap is roughly `500 × nodes`. Don't read it as a global seat count.
+- **`maxSubscribersPerApp` fails open.** The cluster-wide count lives in redis; if redis is unreachable the cap admits everyone (with a server warning) rather than refusing all subscribes.
 
 ## Project structure with channels
 
