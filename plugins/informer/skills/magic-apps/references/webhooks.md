@@ -2,9 +2,9 @@
 
 > **Load this reference when:** receiving callbacks from external services (Stripe, GitHub, Shopify, Slack, Gmail push, etc.) — anything that doesn't come with an Informer user session. Covers the `webhooks/` directory, the signed `?token=` URL gate, HMAC body-signature verification with `crypto.verifyHmac()`, and how webhooks differ from `server/` routes (inbound identity only).
 >
-> **Not in this file:** authenticated app-internal routes — see `server-routes.md`. Agents triggered by webhooks via `emit()` — see `agents.md`.
+> **Not in this file:** authenticated app-internal routes — see `server-routes.md`. Agents triggered by webhooks via `emit()` — see `agents.md`. Pushing a webhook's result live to open pages via `broadcast()` — see `channels.md`.
 
-Apps can expose **webhook endpoints** that receive requests from external services (Gmail push notifications, Slack commands, Stripe events, etc.) without requiring a logged-in Informer user. Each webhook URL embeds a signed `token` query parameter that the handler verifies — the endpoint is unguessable and tamper-proof, not anonymous. Webhook handlers run as the app owner and receive the **same handler bag as server routes** — including `query()`, `transaction()`, `fetch()`, `emit()`, `notify()`, `email()`, `crypto`, and the typed `context`. The only differences are inbound identity (no user session — see the table below).
+Apps can expose **webhook endpoints** that receive requests from external services (Gmail push notifications, Slack commands, Stripe events, etc.) without requiring a logged-in Informer user. Each webhook URL embeds a signed `token` query parameter that the handler verifies — the endpoint is unguessable and tamper-proof, not anonymous. Webhook handlers run as the app owner and receive the **same handler bag as server routes** — including `query()`, `transaction()`, `fetch()`, `emit()`, `broadcast()`, `notify()`, `email()`, `crypto`, and the typed `context`. The only differences are inbound identity (no user session — see the table below).
 
 ## How It Works
 
@@ -78,6 +78,7 @@ Webhook handlers receive the **same bag as server routes** (see `server-routes.m
 | `fetch(path, options?)` | Make authenticated API calls (runs as app owner) |
 | `context.<slot>.<method>()` | Typed bound dependencies (see `informer-yaml.md`) |
 | `emit(event, payload?)` | Fire app events (trigger agents) |
+| `broadcast(channel, event, payload?)` | Push a fire-and-forget, at-most-once frame to every open page subscribed to `channel` — the natural way to tell dashboards a webhook landed (origin-mode servers only). See `channels.md`. |
 | `notify(user, message)` / `email(to, message)` | Enqueue a push notification / email |
 | `respond(response)` | Send early response while handler continues in background. Same shape as handler return: plain value (wrapped as 200 JSON), `{ status, body }`, or `{ status, headers, body, encoding: 'base64' }` for binary. |
 | `crypto` | `hmac`, `hash`, `randomUUID`, `randomBytes`, `timingSafeEqual`, `verifyHmac`, `encrypt`/`decrypt` (AES-256-GCM), `verify` — all async. Use `verifyHmac` for signature checks. See `server-routes.md`. |
