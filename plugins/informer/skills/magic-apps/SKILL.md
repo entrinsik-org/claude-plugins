@@ -1,6 +1,6 @@
 ---
 name: magic-apps
-description: Building Informer Apps with local Vite development. Covers the dev/publish workflow, the centerpiece "Accessing Your Dependencies" model (typed slots + three patterns), and the orientation map for deeper topics (server routes, webhooks, persistence, widgets, copilot sidebar, event-driven AI agents, PDF export, informer.yaml schema, app-to-app/pack API integration and openapi.json contracts) — each routes to a reference file under `references/` so the front door stays loadable on every trigger.
+description: Building Informer Apps with local Vite development. Covers the dev/publish workflow, the centerpiece "Accessing Your Dependencies" model (typed slots + three patterns), and the orientation map for deeper topics (server routes, webhooks, persistence, declarative vector embeddings, widgets, copilot sidebar, event-driven AI agents, PDF export, informer.yaml schema, app-to-app/pack API integration and openapi.json contracts) — each routes to a reference file under `references/` so the front door stays loadable on every trigger.
 ---
 
 # Informer App Development
@@ -13,6 +13,7 @@ An Informer App is a custom HTML/JS/CSS application that runs inside Informer. I
 - Make authenticated requests to external APIs via integrations (Salesforce, etc.)
 - **Store and query its own data** in a dedicated Postgres workspace (with SQL migrations)
 - **Run server-side JavaScript handlers** in sandboxed V8 isolates (with direct DB access)
+- **Maintain vector embeddings** over its own data declaratively (platform embedding pump + pgvector) for semantic search
 - Render charts, tables, and interactive visualizations
 - Include a **built-in AI copilot** sidebar that can query your data and answer questions in context
 - Define **AI agents** that react to events, execute tools, and chain together for automated workflows
@@ -28,6 +29,7 @@ This file is the orientation layer. Most topics have a dedicated reference under
 | Writing handlers under `server/`, working with `query` / `transaction` / `fetch` / `respond` / `notify` / `email` / `log` / `crypto` / base64 / markdown / `env` / `request` / sandbox constraints | `references/server-routes.md` |
 | Receiving external callbacks (Stripe, GitHub, Slack, Gmail push) under `webhooks/`, HMAC verification, signed `?token=` URLs | `references/webhooks.md` |
 | Storing app data — `migrations/`, dev-workspace lifecycle, `workspace:init` / `:migrate` / `:reset`, CRUD example | `references/persistence.md` |
+| Declaring embedding use cases under `embeddings/`, vector search over workspace data, `embed(name, text)`, chunking profiles, pgvector columns in app migrations | `references/embeddings.md` |
 | Declaring `widgets:` in `informer.yaml`, building self-contained HTML cards under `public/widgets/`, iframe quirks | `references/widgets.md` |
 | Activating the in-app copilot, `openChat()` / `registerTool()`, AI completion endpoints (`_chat` / `_completion` / `_object`), `useChat` hook patterns | `references/copilot.md` |
 | Declaring `agents:` in `informer.yaml`, writing `tools/*.js`, `emit()` chaining, cron, toolkits/assistants integration, agent REST API | `references/agents.md` |
@@ -122,7 +124,8 @@ Once the project is set up, the typical next moves are:
 2. Replace Vite's default `index.html` + `main.js` with the app shell.
 3. If the app stores its own data, scaffold `migrations/` and add a first migration — load `references/persistence.md`.
 4. If the app exposes server-side routes, scaffold `server/` — load `references/server-routes.md`.
-5. If the app should be usable from an outside AI client (Claude Code/Desktop, Cursor), scaffold `mcp/` with tools written for a context-free caller — load `references/mcp.md`.
+5. If the app needs semantic/vector search over its own data, scaffold `embeddings/` use cases (vector tables live in `migrations/`) — load `references/embeddings.md`.
+6. If the app should be usable from an outside AI client (Claude Code/Desktop, Cursor), scaffold `mcp/` with tools written for a context-free caller — load `references/mcp.md`.
 
 ## Local Development Workflow
 
@@ -208,9 +211,10 @@ Builds your project and uploads to Informer:
 7. Uploads `tools/` and `mcp/` directories (if they exist)
 8. Uploads `server/` directory (if it exists)
 9. Uploads `webhooks/` directory (if it exists)
-10. Runs deploy: pending SQL migrations + server-route scanning + webhook scanning + handler bundling + tool bundling (`tools/` + `mcp/`) + resource reference validation + agent upsert from `informer.yaml`
+10. Uploads `embeddings/` directory (if it exists)
+11. Runs deploy: pending SQL migrations + server-route scanning + webhook scanning + embedding use-case scanning + handler bundling + tool bundling (`tools/` + `mcp/`) + resource reference validation + agent upsert from `informer.yaml`
     - **Resource refs are validated**: all datasets, queries, datasources, integrations, and toolkits declared in `informer.yaml` must exist — deploy fails with a clear error if any are missing
-11. App is viewable at `/api/apps/{owner}:{slug}/view`
+12. App is viewable at `/api/apps/{owner}:{slug}/view`
 
 ### Package.json Configuration
 
@@ -713,6 +717,21 @@ Webhook handlers receive the **same bag as server routes** — `query`, `transac
 
 Load `references/webhooks.md` for: file-convention routing, the `?token=` issuance/verification flow, full HMAC verification examples (GitHub, Stripe, shared-secret), and reading per-app secrets via the `env` bag (configured in **Admin → Environment** or declared as keys in `informer.yaml` `env:`).
 
+## Embeddings — overview
+
+Apps can maintain **vector embeddings over their own data** declaratively (ships in an upcoming Informer release). Ship an `embeddings/` folder with one file per use case — a `config` export plus `GET` and `POST` handlers — and the platform runs an **embedding pump**: it asks your `GET` what's pending, chunks and embeds the content in billed batches, and hands the vectors to your `POST` to store in your own workspace tables. The platform holds no copy of the corpus and no progress ledger — your `GET`'s anti-join against your own vector table is the watermark.
+
+```javascript
+// embeddings/tickets.js — both halves required; deploy scans the folder like server/
+export const config = { chunking: 'none', on: ['ticket.created'], revision: 1 };
+export async function GET({ query, batch })  { /* SELECT pending rows → [{ id, content }] */ }
+export async function POST({ query, batch }) { /* store batch.docs[].chunks[].embedding */ }
+```
+
+pgvector is provisioned in the workspace, so migrations can declare `vector(1536)` columns and search is plain SQL in `server/` handlers — the sandbox bag gains `embed(name, text)` for query-time vectors from the same model as the stored corpus. Triggers (deploy backfill, `on:` events, cron, manual `_run` route) coalesce under a single-flight lease. Pump handlers are never reachable through the app's own API or webhooks and never appear in `openapi.json`. Full `app` type only, not legacy Magic Reports.
+
+Load `references/embeddings.md` for: the use-case file contract (`config` strictness, `GET`/`POST` batch shapes), revision semantics (author bump + platform model repoint both surface as re-embed work), failure tombstones (`skipped: true` re-reporting), chunking profiles, pgvector migration + search examples, the status and `_run` routes, deploy behavior and gotchas.
+
 ## App Context
 
 When running inside Informer (not dev mode), the app receives context:
@@ -1076,6 +1095,7 @@ The orientation above points to each file; this is the canonical list of what's 
 | `references/server-routes.md` | `server/` handlers, full sandbox-helper reference (`query`, `transaction`, `fetch`, `respond`, `notify`, `email`, `log`, `crypto`, base64/markdown globals), `config.timeout` / `config.roles`, worked CRUD example |
 | `references/webhooks.md` | `webhooks/` handlers, signed `?token=` flow, HMAC verification (`crypto.verifyHmac`), how webhooks differ from server routes (inbound identity only — same handler bag) |
 | `references/persistence.md` | `migrations/`, dev workspace lifecycle, CRUD worked example |
+| `references/embeddings.md` | The `embeddings/` folder — declarative vector embeddings via the platform pump (`config` + `GET`/`POST` contract), revision/re-embed semantics, tombstoned failures, pgvector columns + `embed(name, text)` search, status/`_run` routes |
 | `references/widgets.md` | `widgets:` declaration, self-contained HTML template, iframe constraints, SVG charts without libraries |
 | `references/copilot.md` | `openChat()` / `showCopilot()` / `registerTool()`, AI completion endpoints (`_chat` / `_completion` / `_object`), `useChat` hook pattern, defensive `_object` parsing |
 | `references/agents.md` | `agents:` declaration, `tools/*.js`, event chaining via `emit()`, cron lifecycle, toolkits/assistants, agent REST API |
