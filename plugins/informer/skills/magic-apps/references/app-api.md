@@ -2,7 +2,7 @@
 
 > **Load this reference when:** integrating with another App or pack (writing `context.<slot>.request()` calls against a `target: app` / `target: pack` slot), fetching an App's API contract (`openapi.json`), setting up typed dev bindings (`.informer/app-deps.d.ts`), or making your own App integratable (`export const description` / `export const schema`, `config.api = 'public'`, a root `API.md`).
 
-**Version floors:** the `openapi.json` endpoint requires Informer **≥ 2026.1.1** (older servers 404 it). Typed `.d.ts` generation requires `@entrinsik/vite-plugin-informer` **≥ 2.6.0-beta.2**.
+**Version floors:** the `openapi.json` endpoint requires Informer **≥ 2026.1.1** (older servers 404 it). Typed `.d.ts` generation requires `@entrinsik/vite-plugin-informer` **≥ 2.6.0-beta.2**. For feature detection at runtime prefer `platform.capabilities` (handler bag) / `window.__INFORMER__.platform` (browser) over version checks; `GET /api/about` (open) returns the build version when a version is genuinely needed, and `requires: { informer: '>=…' }` in informer.yaml states a hard floor (see `informer-yaml.md`).
 
 ## Every deployed App publishes a contract
 

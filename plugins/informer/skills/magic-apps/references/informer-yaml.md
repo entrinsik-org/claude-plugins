@@ -132,6 +132,22 @@ access:
     - POST /api/models/go_everyday/_object   # raw API — stays in access
 ```
 
+## `requires:` (platform floor; Informer ≥ the release carrying I5-12984)
+
+```yaml
+requires:
+  informer: '>=2026.1.3'   # semver range against the Informer build version
+```
+
+Refuses the deploy on a server that does not satisfy the range, before
+anything runs and from every entry point (CLI, builder, draft commit,
+marketplace install), with a message naming both versions (`code:
+apps_requirement_unmet`). Hotfix/RC builds count as their base version.
+Unknown keys and non-semver ranges are refused. Use it only for an app that
+cannot work without a newer platform feature: **older releases never read
+this key**, so an app that should still install on them leaves it out and
+feature-detects at runtime (`platform.capabilities`, see `server-routes.md`).
+
 ## `env:` (environment variables)
 
 Apps declare environment variable **keys** their handlers read at runtime.
