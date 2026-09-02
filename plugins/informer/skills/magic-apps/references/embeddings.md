@@ -4,7 +4,7 @@
 >
 > **Not in this file:** migration mechanics and the dev-workspace lifecycle — see `persistence.md`. `query()` calling shape and parameter binding — see `server-routes.md`. `emit()` event plumbing — see `server-routes.md` / `agents.md`.
 >
-> **Availability:** ships in an upcoming Informer release (I5-12984). Don't scaffold `embeddings/` for a server that doesn't support it yet — the folder (and the status/`_run` routes) will simply not exist there.
+> **Availability:** ships in an upcoming Informer release (I5-12984). The folder, `embed()`, and the status/`_run` routes simply do not exist on older servers, and the CLI ships `embeddings/` only from `@entrinsik/vite-plugin-informer` versions that list it. An app that must also run on older servers **feature-detects** (`platform.capabilities.embeddings` on the handler bag, `window.__INFORMER__.platform.capabilities.embeddings` in the browser, `typeof embed === 'function'`), keeps its vector DDL out of numbered migrations or gates it with `-- requires: embeddings` (see `persistence.md`), and only states a floor (`requires: { informer: '>=…' }` in informer.yaml, see `informer-yaml.md`) when it cannot work without the feature.
 
 Apps can maintain vector embeddings over their own data **declaratively**. You ship an `embeddings/` folder with one file per use case; the platform acts as an **embedding pump** that asks your app what's pending, chunks and embeds the content in billed batches, and hands the vectors back for your app to store in its own workspace tables. You never call an embedding provider yourself, and the platform never holds a copy of your corpus.
 
