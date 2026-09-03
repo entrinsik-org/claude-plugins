@@ -728,7 +728,7 @@ export async function GET({ query, batch })  { /* SELECT pending rows → [{ id,
 export async function POST({ query, batch }) { /* store batch.docs[].chunks[].embedding */ }
 ```
 
-pgvector is provisioned in the workspace, so migrations can declare `vector(1536)` columns and search is plain SQL in `server/` handlers — the sandbox bag gains `embed(name, text)` for query-time vectors from the same model as the stored corpus. Triggers (deploy backfill, `on:` events, cron, manual `_run` route) coalesce under a single-flight lease. Pump handlers are never reachable through the app's own API or webhooks and never appear in `openapi.json`. Full `app` type only, not legacy Magic Reports.
+pgvector is provisioned in the workspace, so migrations can declare `vector(1536)` columns and search is plain SQL in `server/` handlers — the sandbox bag gains `embed(name, text)` for query-time vectors from the same model as the stored corpus. Triggers (deploy backfill, `on:` events, cron, manual `_run` route) coalesce under a single-flight lease. The App admin panel's **Embeddings** tab shows per-use-case pump status (queued/running/failed/up to date, last run, last error, skipped docs) with a **Run now** action — the usual dev loop. Pump handlers are never reachable through the app's own API or webhooks and never appear in `openapi.json`. Full `app` type only, not legacy Magic Reports.
 
 Load `references/embeddings.md` for: the use-case file contract (`config` strictness, `GET`/`POST` batch shapes), revision semantics (author bump + platform model repoint both surface as re-embed work), failure tombstones (`skipped: true` re-reporting), chunking profiles, pgvector migration + search examples, the status and `_run` routes, deploy behavior and gotchas.
 

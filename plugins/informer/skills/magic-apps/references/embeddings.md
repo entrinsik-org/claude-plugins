@@ -165,6 +165,10 @@ export async function POST({ query, embed, request }) {
 
 Embedding calls are billed to the app — batched, one usage entry per provider batch, not per value. Pump compute is metered per handler invocation against the app's compute budget. `embed()` at query time is billed to the app too.
 
+## Watching the pump
+
+The App admin panel has an **Embeddings** tab (Data group): one row per use case with pump status (up to date / queued / running / failed / stopped), chunking, schedule and event triggers, last run, the effective revision, a skipped-docs count, the last error inline, and a **Run now** action. During development this is usually faster than curling the routes below, which expose the same data.
+
 ## Routes
 
 ### `GET /apps/{id}/embeddings`
@@ -179,7 +183,7 @@ Drains one use case immediately: claims the single-flight lease and executes the
 
 **Permission:** `permission.app.write`. Running the pump triggers billed provider calls, so the gate is a spend control, not just a data guard.
 
-This is your debugging loop during development: deploy, `_run`, check `lastError` in the status listing, fix, repeat.
+This is your debugging loop during development: deploy, **Run now** in the admin panel's Embeddings tab (or `_run` here), read `lastError`, fix, repeat.
 
 ## Deploy behavior & gotchas
 
