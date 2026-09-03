@@ -61,6 +61,33 @@ CREATE INDEX line_items_order_idx ON line_items (order_id);
 - Migrations are **append-only** — never modify a migration that has already been deployed. Add a new file instead.
 - Each migration runs in its own transaction
 
+## Capability-gated migrations (Informer ≥ the release carrying I5-12984)
+
+A migration whose DDL needs something not every install has (today: the
+`vector` type from pgvector) opens with a directive on its leading comment
+lines:
+
+```sql
+-- requires: embeddings
+CREATE TABLE ticket_embeddings (ticket_id INTEGER NOT NULL, embedding vector(1536) NOT NULL);
+```
+
+Where every listed capability is available the file runs normally. Where one
+is missing it is **skipped without being recorded** (the deploy continues and
+lists it under `skippedMigrations`), stays pending, and applies on the first
+deploy after the capability arrives. So a gated migration must be
+self-contained: its own tables/indexes, nothing later assuming it ran.
+Capability names are `platform.capabilities` flags; `embeddings` also needs
+pgvector present in the workspace database. An unknown name fails the deploy
+(422) naming the known ones. Only the leading comment block is read.
+
+**Older Informer releases ignore the directive and run the file as plain
+SQL** (a `vector(1536)` column then fails the deploy, and a failed app
+migration aborts the whole install/update). An app that must also install on
+them keeps such DDL out of numbered migrations and creates it idempotently
+from the code path that needs it (for embeddings: the pump's `GET`, which
+only ever runs where the feature exists).
+
 ## Querying the Workspace
 
 All database access goes through server-side route handlers (see `server-routes.md`). The `query()` callback in server handlers executes SQL against the app's workspace.

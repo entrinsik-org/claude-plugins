@@ -68,6 +68,7 @@ Each handler function receives a single context object with these properties:
 | `crypto` | `object` | Cryptographic helpers (all async): `hmac`, `hash`, `randomUUID`, `randomBytes`, `timingSafeEqual`, `verifyHmac`, `encrypt`/`decrypt` (AES-256-GCM), `verify`. See [Using `crypto`](#using-crypto). |
 | `log` | `function` | Structured logging. `log(message, data?)` or `log.info()`/`log.warn()`/`log.error()`/`log.debug()`. Writes to `app_log`. See [Using `log()`](#using-log). |
 | `env` | `object` | App environment variables — decrypted values from the app's Environment. Set in **Admin → Environment**; declared keys in `informer.yaml` `env:` arrive as unset placeholders for the installer to fill per tenant. Encrypted at rest; never returned by any API. |
+| `platform` | `{ version, capabilities }` | What the platform offers: the Informer build version and the app type's capability flags (`serverRoutes`, `webhooks`, `mcp`, `storage`, `embeddings`, …). Feature-detect with `platform.capabilities.<name>` instead of probing for a helper or comparing versions; the same object is `window.__INFORMER__.platform` in the browser. Informer ≥ the release carrying I5-12984; absent on older servers (treat a missing `platform` as "unknown"). |
 | `request` | `object` | The incoming request (see below). |
 
 **Sandbox globals (available without destructuring):**
