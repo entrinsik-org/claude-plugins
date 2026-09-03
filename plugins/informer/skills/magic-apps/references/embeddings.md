@@ -4,7 +4,7 @@
 >
 > **Not in this file:** migration mechanics and the dev-workspace lifecycle — see `persistence.md`. `query()` calling shape and parameter binding — see `server-routes.md`. `emit()` event plumbing — see `server-routes.md` / `agents.md`.
 >
-> **Availability:** ships in an upcoming Informer release (I5-12984). The folder, `embed()`, and the status/`_run` routes simply do not exist on older servers, and the CLI ships `embeddings/` only from `@entrinsik/vite-plugin-informer` versions that list it. An app that must also run on older servers **feature-detects** (`platform.capabilities.embeddings` on the handler bag, `window.__INFORMER__.platform.capabilities.embeddings` in the browser, `typeof embed === 'function'`), keeps its vector DDL out of numbered migrations or gates it with `-- requires: embeddings` (see `persistence.md`), and only states a floor (`requires: { informer: '>=…' }` in informer.yaml, see `informer-yaml.md`) when it cannot work without the feature.
+> **Availability:** ships in an upcoming Informer release (I5-12984). The folder, `embed()`, and the status/`_run` routes simply do not exist on older servers, and the CLI ships `embeddings/` only from `@entrinsik/vite-plugin-informer` **≥ 2.8.0** (2.7.0 and earlier never upload the folder, so the use case silently does not exist on the server, and any `server/` file importing from it fails the deploy at bundle time with `import not found in app library`). An app that must also run on older servers **feature-detects** (`platform.capabilities.embeddings` on the handler bag, `window.__INFORMER__.platform.capabilities.embeddings` in the browser, `typeof embed === 'function'`), keeps its vector DDL out of numbered migrations or gates it with `-- requires: embeddings` (see `persistence.md`), and only states a floor (`requires: { informer: '>=…' }` in informer.yaml, see `informer-yaml.md`) when it cannot work without the feature.
 
 Apps can maintain vector embeddings over their own data **declaratively**. You ship an `embeddings/` folder with one file per use case; the platform acts as an **embedding pump** that asks your app what's pending, chunks and embeds the content in billed batches, and hands the vectors back for your app to store in its own workspace tables. You never call an embedding provider yourself, and the platform never holds a copy of your corpus.
 
@@ -61,7 +61,7 @@ The three clauses in the `GET` `WHERE` are the whole freshness model: *never emb
 
 ## The pump contract
 
-Each run drains the pending set in a loop: `GET` the next batch, chunk each row's `content` by the configured profile, embed all chunks in batched provider calls, then `POST` the results. The loop stops when `GET` returns `[]`, or after 20 batches (the run then re-pokes itself so the next sweep continues).
+Each run drains the pending set in a loop: `GET` the next batch, chunk each row's `content` by the configured profile, embed all chunks in batched provider calls, then `POST` the results. The loop stops when `GET` returns `[]` or fewer rows than `batchSize` (return a full page while work remains), when a batch yields no embeddable rows, or after 20 batches (`drained: false` in the result: the run re-poked itself so the next sweep continues). A batch whose rows were all tombstoned stops, and the app has to exclude them.
 
 ### `GET({ query, batch })`
 
@@ -74,7 +74,7 @@ Each run drains the pending set in a loop: `GET` the next batch, chunk each row'
 `batch: { revision, docs, failures }`:
 
 - `docs`: `[{ id, metadata, chunks: [{ seq, content, metadata, embedding }] }]` — grouped per document, so delete-and-replace per doc (as in the example above) is the natural idiom.
-- `failures`: `[{ id, error, permanent, skipped? }]` — see below.
+- `failures`: `[{ id, error, code, permanent, skipped? }]` — see below. `chunks[].metadata` is always an object; `headingPath` (the `prose` profile) is its only key today.
 
 Store `batch.revision` beside each vector and include `<> $revision` in your `GET` query.
 
@@ -90,7 +90,7 @@ No manual invalidation — the `revision <> $revision` clause in your `GET` find
 
 ### Failures and tombstones
 
-Deterministic failures (content over the model's input cap, chunker errors) are reported in `failures` and **tombstoned platform-side by content hash** — an unembeddable document is attempted exactly once per content-and-config even if you ignore the array. Tombstoned rows are re-reported on **every** run with `skipped: true`, so stamp them in your own table and exclude them from your `GET` query, or they'll ride along in every batch report forever:
+Deterministic failures (content over the model's input cap, chunker errors) are reported in `failures` and **tombstoned platform-side by content hash** — an unembeddable document is attempted once per content-and-config even if you ignore the array (the platform keeps the most recent 1,000 tombstones per use case; older ones are retried). Tombstoned rows are re-reported on **every** run with `skipped: true`, so stamp them in your own table and exclude them from your `GET` query, or they'll ride along in every batch report forever:
 
 ```javascript
 for (const f of batch.failures) {
@@ -104,16 +104,17 @@ for (const f of batch.failures) {
 
 | Key | Meaning |
 |---|---|
-| `description` | Shown in the embeddings status listing |
+| `description` | Shown in the admin Embeddings tab and the status listing |
 | `chunking` | `none` (row = one embedding, the default), `prose` (markdown-aware recursive splitting with heading breadcrumbs), or `code` |
-| `maxTokens` / `overlapTokens` | Splitter budgets for `prose`/`code`; `overlapTokens` must be less than `maxTokens` |
-| `on` | Event names (from `emit()`) that trigger a run |
-| `cron` | A cron schedule; desugars into an automation that triggers runs |
+| `maxTokens` | Chunk budget for `prose`/`code`: 16–8191, default 512. Not allowed under `none` |
+| `overlapTokens` | Tokens carried from each chunk into the next for `prose`/`code`: default `min(64, maxTokens / 8)`, must be less than `maxTokens` (checked at deploy). Not allowed under `none` |
+| `on` | Event names (from `emit()`) that trigger a run; a single string is accepted |
+| `cron` | A five-field cron schedule; desugars into an automation that triggers runs |
 | `batchSize` | Rows requested per `GET` (1–1000, default 100) |
-| `timeout` | Sandbox wall-clock per handler invocation, in milliseconds |
+| `timeout` | Sandbox wall-clock per handler invocation: 1000–300000 ms, default 30000 |
 | `revision` | Author-bumped value that forces a corpus-wide re-embed |
 
-**The schema is strict — unknown keys fail the deploy.** Don't park extra metadata in `config`.
+`config` itself is optional: a file exporting only `GET` and `POST` deploys with every default and no triggers, so it runs only on deploy and on a manual run. **The schema is strict — unknown keys fail the deploy.** Don't park extra metadata in `config`. And write it as a self-contained literal on the `export const`: the scanner evaluates it with none of the file's imports in scope, so an imported constant, a spread of an imported object, or an `export { config }` re-export fails the deploy (see Handler Config in `server-routes.md`). Other modules may import the literal from the use-case file; the reverse is what's forbidden.
 
 ## Triggers
 
@@ -163,23 +164,27 @@ export async function POST({ query, embed, request }) {
 
 ### Billing
 
-Embedding calls are billed to the app — batched, one usage entry per provider batch, not per value. Pump compute is metered per handler invocation against the app's compute budget. `embed()` at query time is billed to the app too.
+Embedding calls are billed to the app — one usage entry per batch of up to 128 chunks, regardless of how many provider requests run underneath. Pump compute is metered per handler invocation against the app's compute budget. `embed()` at query time is billed to the app too.
+
+### Failed runs
+
+A failed run is retried or parked by cause. A provider error the SDK marks retryable, a handler timeout, a host-side sandbox failure, or an unknown error re-pokes the use case with a doubling delay (10 s, 20 s, … up to 30 minutes) and parks it after five consecutive failures. A non-retryable provider error (bad key, deleted model, rejected input), an exhausted compute budget, missing handlers, or a contract violation parks it at once. A parked use case keeps its error as `lastError`; the next trigger (event, cron, deploy, or **Run now**) gives it one more attempt, and a successful run resets the attempt count. So a use case that shows **Retry scheduled** is healing on its own; one that shows **Last run failed** with no retry needs you.
 
 ## Watching the pump
 
-The App admin panel has an **Embeddings** tab (Data group): one row per use case with pump status (up to date / queued / running / failed / stopped), chunking, schedule and event triggers, last run, the effective revision, a skipped-docs count, the last error inline, and a **Run now** action. During development this is usually faster than curling the routes below, which expose the same data.
+The App admin panel has an **Embeddings** tab (Data group): one row per use case with pump status (up to date / queued / retry scheduled / running / failed), chunking, schedule and event triggers, last run and next run, the effective revision, the last run's failed-docs count, a skipped-docs (tombstoned) count, the failed-runs count while a retry is backing off, the last error inline, and a **Run now** action. During development this is usually faster than curling the routes below, which expose the same data.
 
 ## Routes
 
 ### `GET /apps/{id}/embeddings`
 
-Lists the app's embedding use cases with pump status: declared config (description, chunking, triggers, batch size), `revision`, `running`, `pending` (a poke is queued), `tombstoned` (count of permanently failed documents), `lastRunAt`, and `lastError`. Tombstone content hashes stay server-side.
+Returns `{ items: [...] }`: per use case the declared config (`description`, `chunking`, `on`, `cron`, `batchSize`), `revision` (config + resolved model; `null` when no embedding model resolves) and `configRevision`, `running`, `pending` (a poke is queued) with `nextRunAt` and `attempts` (consecutive failed runs), `tombstoned` (count of permanently failed documents), `lastRunAt`, `lastError`, and the last run's `lastFailed` / `lastSkipped` counts. Tombstone content hashes stay server-side.
 
 **Permission:** read access to the App — it's status metadata, like the dependencies listing.
 
 ### `POST /apps/{id}/embeddings/{name}/_run`
 
-Drains one use case immediately: claims the single-flight lease and executes the pump loop, returning `{ status, processed, failed, skipped, batches, drained }`. Returns `{ status: 'already_running' }` when a fresh lease is held; a lease older than 30 minutes (a crashed run) is reclaimed.
+Drains one use case immediately: claims the single-flight lease and executes the pump loop, returning `{ status: 'ok', useCase, processed, failed, skipped, batches, drained }`. Returns `{ status: 'already_running', useCase }` when a fresh lease is held; a lease older than 30 minutes (a crashed run) is reclaimed. Errors: 402 (compute budget exhausted), 404 (handlers not deployed), 422 (`GET`/`POST` broke the contract, including an error status the handler returned) park the use case with the reason as `lastError`; a 5xx (502 handler timed out or threw, 503 no embedding model resolves, 500 provider error) means a retryable failure that re-poked itself with backoff.
 
 **Permission:** `permission.app.write`. Running the pump triggers billed provider calls, so the gate is a spend control, not just a data guard.
 
@@ -187,7 +192,8 @@ This is your debugging loop during development: deploy, **Run now** in the admin
 
 ## Deploy behavior & gotchas
 
-- `embeddings/` is uploaded and scanned like `server/` — `npm run deploy` is the whole setup, no manifest block.
+- `embeddings/` is uploaded and scanned like `server/` — `npm run deploy` is the whole setup, no manifest block (plugin ≥ 2.8.0; see Availability above).
+- `npm run dev` never runs the pump and its handler bag has no `embed()`. The search route works only against a deployed app; feature-detect (`typeof embed === 'function'`) if the file must also load in dev.
 - Projection rows reconcile per deploy: config and revision rebuilt, run state on surviving rows preserved, removed files drop their row. **Your vector tables are never touched** — dropping a use case file leaves its data for your migrations to clean up.
 - A path collision between folders (`embeddings/x.js` next to `server/x.js`) fails the deploy with an error naming both files.
 - **Pump handlers are never reachable through the app's own API surface or webhooks, and never appear in the app's `openapi.json`.** Only the pump invokes them. Don't try to call `GET`/`POST` from the frontend — put shared logic in a module both can import if you need it.

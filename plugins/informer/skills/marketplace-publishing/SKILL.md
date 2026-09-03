@@ -37,10 +37,11 @@ marketplace**. App *development* (Vite, handlers, datasets, copilot) lives in th
   where no OIDC endpoint exists. Keep it for local publishes and other CI.
 
 Both ship in **`@entrinsik/vite-plugin-informer`** (sibling bins to `informer-deploy`).
-Track `@latest` — newer capabilities land in later releases, so pin forward, not back. Two
+Track `@latest` — newer capabilities land in later releases, so pin forward, not back. Three
 floors matter: **≥ 2.6.0-beta.1** for `informer-publish` (earlier versions did not package
 `lib/` and `shared/`, so apps with shared server-side modules published incomplete
-archives), and **≥ 2.7.0** for `informer-ci`, which did not exist before.
+archives), **≥ 2.7.0** for `informer-ci`, which did not exist before, and **≥ 2.8.0** for `embeddings/` (2.7.0 and earlier never package the folder, so an app's
+embedding use cases were silently absent from deploys and archives alike).
 
 ## One-time repo setup
 
@@ -527,8 +528,8 @@ The shared steps:
 1. **Assembles the app file set** — the same files `informer-deploy` pushes: the Vite `dist/`
    output (at the library root), `informer.yaml` (declare host-API grants in its
    `access.apis:` block — `data-access.yaml` is deprecated and ignored by the deploy
-   pipeline), and the `server/`, `tools/`, `migrations/`, `webhooks/`, `lib/`, `shared/`
-   source trees (dotfiles, `node_modules`, and `*.test.js` are excluded). Shared with
+   pipeline), and the `server/`, `tools/`, `mcp/`, `migrations/`, `webhooks/`, `embeddings/`,
+   `lib/`, `shared/` source trees (dotfiles, `node_modules`, and `*.test.js` are excluded). Shared with
    `informer-deploy` so a published artifact carries the same files as a normal deploy.
 2. **Generates the API contract** (plugin ≥ 2.6.0-beta.3) — builds `openapi.json` from the
    `server/` handlers (a root `API.md` becomes its guide text) and adds it to the file set;
