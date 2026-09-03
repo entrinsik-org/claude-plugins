@@ -1,6 +1,6 @@
 ---
 name: magic-apps
-description: Building Informer Apps with local Vite development. Covers the dev/publish workflow, the centerpiece "Accessing Your Dependencies" model (typed slots + three patterns), and the orientation map for deeper topics (server routes, webhooks, persistence, declarative vector embeddings, widgets, copilot sidebar, event-driven AI agents, PDF export, informer.yaml schema, app-to-app/pack API integration and openapi.json contracts) — each routes to a reference file under `references/` so the front door stays loadable on every trigger.
+description: Building Informer Apps with local Vite development. Covers the dev/publish workflow, the centerpiece "Accessing Your Dependencies" model (typed slots + three patterns), and the orientation map for deeper topics (server routes, webhooks, persistence, declarative vector embeddings, widgets, copilot sidebar, event-driven AI agents, PDF export, informer.yaml schema, app-to-app/pack API integration and openapi.json contracts, and the UI quality bar every screen must meet: mobile-first responsive layout, no layout shift, TanStack Query freshness after every action, sortable table headers, vertical rhythm, bright distinct icons with the full icon asset set) — each routes to a reference file under `references/` so the front door stays loadable on every trigger.
 ---
 
 # Informer App Development
@@ -30,6 +30,7 @@ This file is the orientation layer. Most topics have a dedicated reference under
 | Receiving external callbacks (Stripe, GitHub, Slack, Gmail push) under `webhooks/`, HMAC verification, signed `?token=` URLs | `references/webhooks.md` |
 | Storing app data — `migrations/`, dev-workspace lifecycle, `workspace:init` / `:migrate` / `:reset`, CRUD example | `references/persistence.md` |
 | Declaring embedding use cases under `embeddings/`, vector search over workspace data, `embed(name, text)`, chunking profiles, pgvector columns in app migrations | `references/embeddings.md` |
+| Building or polishing any screen — the mobile modes (inside Informer GO, home-screen tile, browser tab, widget card) and the screen-by-screen phone layout pass, dialogs that shift, skeletons, stale UI after an action (empty states, dropdowns, counts), TanStack Query, sortable tables / AG Grid, spacing and vertical rhythm, icon brightness and the home-screen/PWA icon set; also when to load the `frontend-design` plugin | `references/ui-quality.md` |
 | Declaring `widgets:` in `informer.yaml`, building self-contained HTML cards under `public/widgets/`, iframe quirks | `references/widgets.md` |
 | Activating the in-app copilot, `openChat()` / `registerTool()`, AI completion endpoints (`_chat` / `_completion` / `_object`), `useChat` hook patterns | `references/copilot.md` |
 | Declaring `agents:` in `informer.yaml`, writing `tools/*.js`, `emit()` chaining, cron, toolkits/assistants integration, agent REST API | `references/agents.md` |
@@ -76,7 +77,7 @@ npm create vite@latest . -- --template react
 
 # 2. Install dependencies including the Informer plugin.
 npm install
-npm install -D @entrinsik/vite-plugin-informer@2.4.0
+npm install -D @entrinsik/vite-plugin-informer@latest
 
 # 3. Run the Informer init — creates informer.yaml, .env, .env.example,
 #    updates vite.config.js to include informer(), updates .gitignore,
@@ -121,7 +122,7 @@ The `.env` template includes both API key and basic auth blocks — uncomment th
 Once the project is set up, the typical next moves are:
 
 1. Ask the user what data the app needs (datasets/queries/datasources/integrations) and add `dependencies:` slots to `informer.yaml` — look up `defaultBinding` UUIDs via `GET /api/datasets-list` etc. against the configured `INFORMER_URL`. For an external service the app itself needs (a REST API, Salesforce, and so on), prefer declaring it in the `integrations:` block instead of binding to a pre-existing one — deploy creates the Integration and the slot for you, no UUID and no out-of-band setup. See `references/informer-yaml.md`.
-2. Replace Vite's default `index.html` + `main.js` with the app shell.
+2. Replace Vite's default `index.html` + `main.js` with the app shell — mobile-first, and with TanStack Query wired at the root for a React app (see the UI Quality Bar below).
 3. If the app stores its own data, scaffold `migrations/` and add a first migration — load `references/persistence.md`.
 4. If the app exposes server-side routes, scaffold `server/` — load `references/server-routes.md`.
 5. If the app needs semantic/vector search over its own data, scaffold `embeddings/` use cases (vector tables live in `migrations/`) — load `references/embeddings.md`.
@@ -134,7 +135,7 @@ Once the project is set up, the typical next moves are:
 Install the Informer Vite plugin as a dev dependency (skip if `npx informer-init` was used — it's already there):
 
 ```bash
-npm install -D @entrinsik/vite-plugin-informer@2.4.0
+npm install -D @entrinsik/vite-plugin-informer@latest
 ```
 
 ### Code Splitting
@@ -206,15 +207,16 @@ Builds your project and uploads to Informer:
 2. Snapshots the library for rollback
 3. Clears existing files
 4. Uploads all built assets from `dist/`
-5. Uploads `informer.yaml` and `data-access.yaml` from project root (if they exist)
+5. Uploads `informer.yaml`, `data-access.yaml`, `API.md`, and `README.md` from project root (whichever exist)
 6. Uploads `migrations/` directory (if it exists)
 7. Uploads `tools/` and `mcp/` directories (if they exist)
 8. Uploads `server/` directory (if it exists)
 9. Uploads `webhooks/` directory (if it exists)
-10. Uploads `embeddings/` directory (if it exists)
-11. Runs deploy: pending SQL migrations + server-route scanning + webhook scanning + embedding use-case scanning + handler bundling + tool bundling (`tools/` + `mcp/`) + resource reference validation + agent upsert from `informer.yaml`
+10. Uploads `embeddings/` directory (if it exists) — plugin ≥ 2.8.0; 2.7.0 and earlier never upload the folder
+11. Uploads `lib/` and `shared/` directories (if they exist). Every source tree drops dotfiles, `node_modules`, and `*.test.js`
+12. Runs deploy: pending SQL migrations + server-route scanning + webhook scanning + embedding use-case scanning + handler bundling + tool bundling (`tools/` + `mcp/`) + resource reference validation + agent upsert from `informer.yaml`
     - **Resource refs are validated**: all datasets, queries, datasources, integrations, and toolkits declared in `informer.yaml` must exist — deploy fails with a clear error if any are missing
-12. App is viewable at `/api/apps/{owner}:{slug}/view`
+13. App is viewable at `/api/apps/{owner}:{slug}/view`
 
 ### Package.json Configuration
 
@@ -237,33 +239,47 @@ The `informer` section in `package.json` controls deploy metadata:
 
 ### App Icon (favicon.svg)
 
-Place a `favicon.svg` in your `public/` directory. It will be deployed to the app's library root and used as:
-- **App gallery icon** — shown as the app's tile in the desktop and mobile app galleries
-- **Browser tab favicon** — shown when the app is viewed in a browser tab
+Place a `favicon.svg` in your `public/` directory. It is deployed to the app's library root and the platform derives every surface from it:
+- **App gallery icon** — the app's tile in the desktop and Informer GO mobile galleries
+- **Browser tab favicon** — injected when the app is viewed in a tab
+- **Home-screen tile** — rasterized by the platform to a 180 px PNG for the standalone `/launch` page's `apple-touch-icon`
+- **Marketplace listing icon** — read by `informer-publish` / `informer-ci`
 
-**Recommended style: duotone** — one hue, two opacity levels.
+**Style: bright and distinct.** A saturated mid-tone tile (or a two-stop gradient within one hue) with a white mark, or a light tile with a saturated mark. Not a deep, dark background with a muted mark — that reads as a placeholder, and every app ends up looking the same in the gallery.
 
 ```svg
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
-  <!-- Background with rounded corners -->
-  <rect width="512" height="512" rx="96" fill="#064e3b"/>
-  <!-- Secondary elements at 35% opacity -->
-  <rect x="96" y="240" width="64" height="152" rx="10" fill="#6ee7b7" opacity="0.35"/>
-  <!-- Primary elements at full opacity -->
-  <rect x="176" y="160" width="64" height="232" rx="10" fill="#6ee7b7"/>
+  <!-- Bright tile with rounded corners -->
+  <rect width="512" height="512" rx="96" fill="#14b8a6"/>
+  <!-- Secondary shapes: white at reduced opacity -->
+  <rect x="96" y="240" width="64" height="152" rx="10" fill="#ffffff" opacity="0.55"/>
+  <!-- Primary shapes: solid white -->
+  <rect x="176" y="160" width="64" height="232" rx="10" fill="#ffffff"/>
 </svg>
 ```
 
 Guidelines:
 - **512x512 viewBox**, square (1:1 aspect ratio)
-- **Self-contained background** — bake the background color into the SVG with rounded corners (`rx="96"`)
-- **Single hue** with full opacity for primary shapes, ~35% for secondary
-- **Bold, simple shapes** that are recognizable at 70px (mobile icon size)
+- **Self-contained background** — bake the tile color into the SVG with rounded corners (`rx="96"`); the home-screen rasterizer flattens onto an opaque background, so a transparent SVG gets whatever it is given
+- **One saturated hue** the sibling apps on the install don't already use, white or near-white marks; one accent pop allowed. Dark navy/forest tiles only for security and admin apps
+- **Bold, simple shapes** that are recognizable at 16 px (tab) and 70 px (mobile tile); no thin strokes, no text beyond a single-letter monogram
 - Design should visually represent the app's content (bars for dashboards, document for invoices, etc.)
+- Apps that run on their own origin and want a real PWA install also ship a PNG set and `manifest.webmanifest` — the list is in `references/ui-quality.md`
 
 ## App Documentation (`docs.html`)
 
 Apps can include a `docs.html` page in `public/` that opens from the app gallery's book-icon badge — and a `?` help button inside the app can iframe-open the same file. Full guidance — gallery integration, structure template, in-app help button code, the `README.md` fallback — lives in `references/docs-html.md`. Load that reference when adding or restyling docs.
+
+## UI Quality Bar — six non-negotiables
+
+Every screen in every app meets these. A screen that breaks one is not done; treat it as a bug, not a polish item. Details, techniques, and the test for each are in `references/ui-quality.md` — load it before building or reshaping any page. Before the first screen, also load the **`frontend-design` skill** (Anthropic's plugin from the official Claude Code marketplace, `/frontend-design:frontend-design`) for the aesthetic direction — palette, type, layout that fit the app's subject instead of a templated default; the quality bar below is the engineering floor under that direction.
+
+1. **Every page works on a phone, designed screen by screen.** Apps run inside Informer GO on phones and tablets (an iframe under GO's bars, frame shrunk when the keyboard opens), as chrome-less home-screen tiles (`/launch`, where `window.__INFORMER__.standalone` is true and safe areas are yours), as half-width widget cards, and in a browser tab. Walk every screen in each mode it will be seen in and choose its phone layout deliberately: list → cards, table → cards or pinned-column scroll, form → full-screen sheet, board → one column at a time. Design at 360 px first; wide content scrolls in its own box, dialogs go full-screen on narrow viewports, touch targets are 44 px.
+2. **No pop-in.** Reserve space before content arrives: skeletons in the content's exact shape, `min-height` on dialogs and cards, fixed dimensions on images and charts. A dialog never changes size after the user starts interacting with it.
+3. **Every action shows up immediately, everywhere.** The first create must clear the empty state; dropdowns, counts, and other panels that list the same things must refresh. React apps use TanStack Query for all server state, with every mutation invalidating every key that can show its result — consistently, never mixed with ad-hoc `fetch` + `useState`.
+4. **Table headers sort.** Every column, with an indicator and `aria-sort`. Data grids use AG Grid Community (`ag-grid-community` + `ag-grid-react`, pinned), where sorting is on by default.
+5. **Vertical rhythm and breathing room.** One 4 px spacing scale, groups tighter inside than between (about 2:1), headings attach downward, nothing flush against an edge, and no padding-everything either.
+6. **Icons are bright, distinct, and present on every surface** — see App Icon above and the asset list in the reference.
 
 ## Accessing Your Dependencies
 
@@ -1096,6 +1112,7 @@ The orientation above points to each file; this is the canonical list of what's 
 | `references/webhooks.md` | `webhooks/` handlers, signed `?token=` flow, HMAC verification (`crypto.verifyHmac`), how webhooks differ from server routes (inbound identity only — same handler bag) |
 | `references/persistence.md` | `migrations/`, dev workspace lifecycle, CRUD worked example |
 | `references/embeddings.md` | The `embeddings/` folder — declarative vector embeddings via the platform pump (`config` + `GET`/`POST` contract), revision/re-embed semantics, tombstoned failures, pgvector columns + `embed(name, text)` search, status/`_run` routes |
+| `references/ui-quality.md` | The six UI non-negotiables in depth — mobile-first layout, layout-shift prevention (skeletons, reserved dimensions, stable dialogs), TanStack Query freshness rules, sortable tables / AG Grid Community, spacing and vertical rhythm, icon brightness and where each icon surface comes from (gallery, tab, home-screen tile, marketplace, PWA manifest) |
 | `references/widgets.md` | `widgets:` declaration, self-contained HTML template, iframe constraints, SVG charts without libraries |
 | `references/copilot.md` | `openChat()` / `showCopilot()` / `registerTool()`, AI completion endpoints (`_chat` / `_completion` / `_object`), `useChat` hook pattern, defensive `_object` parsing |
 | `references/agents.md` | `agents:` declaration, `tools/*.js`, event chaining via `emit()`, cron lifecycle, toolkits/assistants, agent REST API |

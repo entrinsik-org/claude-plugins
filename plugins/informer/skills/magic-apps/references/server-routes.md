@@ -450,6 +450,8 @@ export async function POST({ query, request }) {
 | `roles` | `string[]` | `[]` (open) | If set, only viewers with at least one matching role can call this route. Returns 403 otherwise. |
 | `api` | `'public'` | (internal) | Marks this file's routes as part of the App's **public API** — advertised in its `openapi.json` contract for other Apps to build on. |
 
+**`config`, `schema`, and `description` are read as literals.** The deploy scanner lifts `export const config = { … }` (and `export const schema = { … }`, `export const description = '…'`) out of the source text and evaluates each on its own, with none of the file's imports in scope. Write them as self-contained literals directly on the `export const`: no identifiers from imports (`enum: STATUS_OPTIONS`), no spreads of imported objects, no `export { config }` re-export. A `config` that can't be evaluated **fails the deploy** (it may carry the role gate); a `schema` or `description` that can't be evaluated is **dropped with a deploy warning** and the route publishes with no contract. Need the same values at runtime? Keep the literal in the handler and import it from there, or mirror it in a `lib/` module with a test pinning the copy.
+
 ### Describing your routes for consumers
 
 Two sibling exports enrich the App's `openapi.json` contract — the document other Apps (and their dev tooling) read instead of your source. `export const description = '<string literal>'` sets the operation description; `export const schema = { GET: { query, response }, POST: { body } }` declares JSON-Schema shapes per method (a flat, non-method-keyed schema applies to every exported method). Full contract semantics, the `config.api = 'public'` marker, and the root `API.md` guide: `references/app-api.md`.
@@ -570,7 +572,7 @@ Any other content type (including images) throws. For a PDF or image you want an
 
 ## Imports
 
-Files under `server/`, `webhooks/`, and `tools/` are bundled at deploy by an esbuild plugin that resolves imports **only against the app's own library** — the host filesystem and `node_modules` are invisible.
+Files under `server/`, `webhooks/`, `tools/`, `mcp/`, and `embeddings/` are bundled at deploy by an esbuild plugin that resolves imports **only against the app's own library** — the host filesystem and `node_modules` are invisible.
 
 **Use relative imports only** (`./foo`, `../shared/util.js`); implicit `.js` / `.json` / `/index.js` resolution works. The bundler rejects (and `npm run deploy` fails on):
 
@@ -750,3 +752,5 @@ Server routes run locally during `npm run dev` via Vite's `ssrLoadModule()`. The
 4. Supports HMR — editing a server handler file takes effect immediately without restarting
 
 No extra configuration is needed beyond having `.env` set up with `INFORMER_URL` and credentials. If your handlers use `query()`, ensure `migrations/` exists so the workspace is auto-provisioned (see `persistence.md`).
+
+**Not emulated in dev.** The dev handler bag carries `request`, `context`, `query`, `fetch`, `respond`, `emit`, `notify`, `email`, `crypto`, `markdown`, `log`, and `env` — but not `transaction()`, `extractText()`, the `base64*` helpers, or `embed()`, and the embedding pump never runs locally. A handler that uses one of those runs only against a deployed app; feature-detect (`typeof embed === 'function'`) if the same file must also load in dev.
