@@ -39,10 +39,10 @@ Channels are an **App** capability: a Magic Report (`type: report`) deploy that 
 
 | | Grammar | Max | Examples |
 |---|---|---|---|
-| Channel | Segments of `[A-Za-z0-9_.-]` joined by `/`. A leading `@user/<username>` segment may hold anything except `/` and whitespace | 128 | `orders`, `orders/east`, `tickets/42/typing`, `@user/jane@acme.com` |
+| Channel | Segments of `[A-Za-z0-9_.-]` joined by `/`. A name beginning `@user/` is the exception: everything after the prefix is ONE username and may hold anything except whitespace | 128 | `orders`, `orders/east`, `tickets/42/typing`, `@user/jane@acme.com` |
 | Event | `[A-Za-z0-9_.-]+` | 64 | `created`, `order_created`, `presence` |
 
-Regexes (server and dev plugin share them): channel `^(@user\/[^\s/]+|[\w.-]+)(\/[\w.-]+)*$`, event `^[\w.-]+$`. The same grammar applies in `informer.yaml`, in `broadcast()`, in `channels/` export names, and in `channel()` on the page. A `default` export is never a valid event export.
+Regexes (server and dev plugin share them): channel `^(@user\/\S+|[\w.-]+(\/[\w.-]+)*)$`, event `^[\w.-]+$`. The same grammar applies in `informer.yaml`, in `broadcast()`, in `channels/` export names, and in `channel()` on the page. A `default` export is never a valid event export.
 
 ## Relaying events with `channels:`
 
@@ -158,7 +158,7 @@ export async function leave({ channel, request }) {
 Socket-layer checks run first, before any App code:
 
 1. The socket is an App socket for **this** App (mismatch → 403).
-2. The name matches the grammar (→ 400) and, for `@user/<name>`, `<name>` is the socket's own username (→ 403). No file needed for this check.
+2. The name matches the grammar (→ 400) and, for `@user/<name>`, the **whole** remainder `<name>` equals the socket's own username (→ 403). No file needed for this check.
 3. `maxChannelsPerSocket` and `maxSubscribersPerApp` (→ 429, `rate_limited` on the page).
 
 Then the handler layer:
@@ -223,12 +223,13 @@ export async function POST({ query, request, broadcast }) {
 | `app_channel_rate_limited` | 429 | App over its cluster-wide broadcast token bucket (50/s, burst 200) |
 | `app_channels_unavailable` | 503 / thrown | The App's type has no channels capability (Magic Report), or the server's pub/sub layer is not up |
 | `app_channels_disabled` | 403 | An admin set `app.channels.enabled: false` |
+| `app_channel_broadcast_failed` | 503 | The pub/sub layer refused the frame, so it never left the server and nobody received it |
 
 **Wrap `broadcast()` in `try`/`catch` when a lost frame must not fail the request.** A broadcast is a courtesy to open pages, not the record of what happened — the write that preceded it already succeeded. If the App also relays via `channels:`, prefer one `emit()` over `emit()` + a hand `broadcast()` of the same thing (double frames).
 
 ## The `@user/<username>` channel
 
-Names beginning with `@user/` are private to one user: a socket may subscribe to `@user/jane` (or `@user/jane/anything`) **only** when the App session belongs to `jane`. Anyone else is refused at the socket layer (`join_refused`) before any handler runs. Use it to deliver something to exactly one person's open pages — a long-running job they kicked off, a personal notification.
+Names beginning with `@user/` are private to one user: a socket may subscribe to `@user/jane` **only** when the App session belongs to `jane`. Everything after `@user/` is the username, **all of it**: `@user/jane/typing` belongs to a user named `jane/typing`, not to `jane`. Anyone else is refused at the socket layer (`join_refused`) before any handler runs. Use it to deliver something to exactly one person's open pages — a long-running job they kicked off, a personal notification.
 
 ```javascript
 // server/reports/[id]/run.js — ack now, broadcast the result to the caller's own pages when done
@@ -256,7 +257,7 @@ await fetch(`/api/reports/${reportId}/run`, { method: 'POST' });
 informer({ mock: { user: { username: 'jane', displayName: 'Jane Doe' } } })
 ```
 
-The username segment admits anything but `/` and whitespace, so email-style and domain-qualified usernames work. A `channels/` file can still cover `@user/...` names when `join`/`leave` logic is needed on top of the ownership check.
+The username admits anything but whitespace (email-style and domain-qualified usernames work) and runs to the end of the name. For a second axis (per person **and** per topic), use a plain channel gated by a `channels/` file rather than a name under `@user/`. A `channels/` file can still cover `@user/...` names when `join`/`leave` logic is needed on top of the ownership check.
 
 ## Subscribing on the page
 
@@ -398,6 +399,27 @@ Server defaults under `app.channels` (`config-factory.js`). An admin can change 
 | `joinTimeoutMs` | 5000 | Hard ceiling for `join` / `leave`, whatever `config.timeout` says |
 
 The socket credential from `/_socket` lives 5 minutes; the shim re-mints it on every reconnect, so the App never handles it.
+
+## What the operator sees (App **Logs** tab, `channel` source)
+
+Channel activity is too chatty to log per event, so every refusal and drop is counted per `(code, channel)` and flushed to the App's own log stream once a minute: one warn row per code, naming the three busiest channels (`14 relays dropped on "orders" in the last minute`). **This is the only trace of a `broadcast()` that failed after the call returned** — point the author at the App Admin panel's **Logs** tab filtered to `channel`, not at the server log.
+
+| Code | Means |
+|---|---|
+| `join_refused` | `join` returned something other than `true` |
+| `join_role_required` | Subscriber holds none of `config.roles` |
+| `join_timeout` | `join` ran past `joinTimeoutMs` |
+| `join_failed` | `join` threw |
+| `join_invalid_name` | Name could not be decoded, so no handler or role gate could match it (fails closed) |
+| `subscriber_limit` | App at `maxSubscribersPerApp` cluster-wide |
+| `socket_limit` | One page over `maxChannelsPerSocket` |
+| `broadcast_rate_limited` | App over `broadcastRate` |
+| `broadcast_failed` | Pub/sub refused the frame; nobody received it |
+| `budget_exhausted` | App compute budget spent |
+| `budget_check_failed` | Budget unreadable, so the frame was let through rather than lost |
+| `relay_dropped` | An `emit()` could not be relayed to its channel |
+
+The **Channels** tab of the same panel carries the live counters (subscribers now; broadcasts / deliveries / rate-limited over 60m; joins / refusals / leaves over 30d) and the server's limits.
 
 ## Local development
 
