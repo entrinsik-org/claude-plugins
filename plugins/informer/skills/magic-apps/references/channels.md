@@ -106,12 +106,13 @@ Deploy stores each file as an app_route row with the synthetic method `CHANNEL`,
 
 All three are optional. **A file with no `join` export admits everyone** the socket-level checks let through (still subject to `config.roles`). No `leave` → nothing runs on leave.
 
-Any other export name must be a valid event name (`typing`, `cursor`) — reserved for phase-2 inbound messages and **never called today**. Scanner outcomes:
+No other export is accepted: event-named exports (`typing`, `cursor`) are reserved for phase-2 inbound messages and are **refused at deploy** until they can run, and `default` is never valid. Every scanner problem fails the deploy — a file skipped with a warning would leave its channel with no handler row, and a channel with no row is open, so a typo on redeploy could silently drop the gate the channel had before:
 
 | File state | Result |
 |---|---|
-| No exports at all | Skipped with a deploy warning |
-| An export that is neither reserved nor a valid event name (including `default`) | Skipped with a deploy warning |
+| No exports at all | **Deploy fails** |
+| An export other than `config`, `join`, `leave` (event names and `default` included) | **Deploy fails** |
+| A path no page could subscribe to (`channels/my orders.js`; `channels/index.js`, which names no channel) | **Deploy fails** |
 | Not valid JavaScript | **Deploy fails** |
 | Two files mapping to the same channel pattern | **Deploy fails** |
 | Unparseable `config` | **Deploy fails** |
@@ -441,7 +442,7 @@ What dev does **not** do:
 
 ## Inbound messages (phase 2)
 
-Page → server over the channel is **not in this release**: `send()` rejects with `not_supported`, `inboundRate` is unenforced, and event-named exports in `channels/` files are accepted at deploy but never invoked. Until then, send user input through a server route and let the route `broadcast()` the result back. Don't design a feature around `send()` landing.
+Page → server over the channel is **not in this release**: `send()` rejects with `not_supported`, `inboundRate` is unenforced, and event-named exports in `channels/` files are refused at deploy. Until then, send user input through a server route and let the route `broadcast()` the result back. Don't design a feature around `send()` landing.
 
 ## Gotchas
 
