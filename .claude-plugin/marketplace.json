@@ -1,14 +1,31 @@
 {
   "name": "entrinsik-plugins",
   "description": "Claude Code plugins for Informer development",
-  "owner": { "name": "Entrinsik" },
+  "owner": {
+    "name": "Entrinsik"
+  },
   "plugins": [
     {
       "name": "informer",
       "source": "./plugins/informer",
       "description": "Skills for Informer development. Includes magic-apps (Informer App development with Vite, /informer:magic-apps) and marketplace-publishing (tag-driven release/publish workflow, /informer:marketplace-publishing).",
       "version": "5.1.0",
-      "author": { "name": "Entrinsik" }
+      "author": {
+        "name": "Entrinsik"
+      }
+    },
+    {
+      "name": "informer-beta",
+      "source": {
+        "source": "git-subdir",
+        "url": "https://github.com/entrinsik-org/claude-plugins.git",
+        "path": "plugins/informer",
+        "ref": "beta"
+      },
+      "description": "Beta channel of the informer plugin: docs for Informer features that have not shipped yet (see README, Beta channel). Skills are addressed as /informer-beta:<skill>. Version comes from the beta branch's plugin manifest.",
+      "author": {
+        "name": "Entrinsik"
+      }
     }
   ]
 }
