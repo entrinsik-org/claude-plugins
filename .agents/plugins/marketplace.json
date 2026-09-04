@@ -13,6 +13,20 @@
         "installation": "AVAILABLE"
       },
       "category": "Development"
+    },
+    {
+      "name": "informer-beta",
+      "description": "Beta channel of the informer plugin: docs for Informer features that have not shipped yet, sourced from the beta branch (see README, Beta channel). Mirrors the Claude Code marketplace entry.",
+      "source": {
+        "source": "git-subdir",
+        "url": "https://github.com/entrinsik-org/claude-plugins.git",
+        "path": "./plugins/informer",
+        "ref": "beta"
+      },
+      "policy": {
+        "installation": "AVAILABLE"
+      },
+      "category": "Development"
     }
   ]
 }
