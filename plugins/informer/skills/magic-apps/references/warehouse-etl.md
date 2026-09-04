@@ -4,15 +4,17 @@ An Informer App can be a **warehouse**: a Postgres workspace filled from the
 app's dependency slots (datasources, integrations) on a schedule, queried by
 people and other apps.
 
+**Version floor:** the run ledger, `load()`, streaming ingest, and
+`schedule()` require Informer **2026.2.0+**. On older servers the handler bag
+has no `load` — calling it throws.
+
 **A warehouse ships a small, deliberate UI.** Not a dashboard for its own
 sake — a grounding surface: what this warehouse is, when each table was last
 synced, a Sync button with live progress, reconciliation checks against the
 source, and a pointer to docs. The platform deliberately provides **no
-refresh buttons**: Informer GO's Data panel (available on every app with a
-workspace) covers schema exploration, ad-hoc SQL, per-table data/pipeline/
-history views, and live run progress — observation and query, never
-orchestration. Refresh orchestration is yours, because only the app knows
-its sequencing.
+refresh buttons**: what it provides is the run ledger — history, receipts,
+and live progress over SSE — observation, never orchestration. Refresh
+orchestration is yours, because only the app knows its sequencing.
 
 The authoring model is **migrations + routes + informer.yaml**:
 
@@ -51,7 +53,7 @@ Two kinds of routes, split by who calls them:
 ## 2. ETL routes
 
 A sync route calls the `load()` bag helper and **returns its run
-descriptor** — `{ id, status }`, the task your UI then watches.
+descriptor** — `{ id, status }`, the run your UI then watches.
 
 ```javascript
 // server/etl/sync.js — THE sync entry point (one atomic multi-table load)
@@ -80,7 +82,7 @@ The frontend triggers it against its own server surface and watches SSE:
 ```javascript
 const res = await fetch('/api/_server/etl/sync', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
 const { id } = await res.json();
-const events = new EventSource(`/api/tasks/${id}/events`);   // progress.records / total / stage → your progress bar
+const events = new EventSource(`/api/runs/${id}/events`);   // progress.records / progress.total → your progress bar
 ```
 
 ## 3. The `load()` spec
@@ -109,12 +111,17 @@ await load({
     columns: { CreatedDate: 'date' },  // declared types refining inference (drift gate + receipt)
     description: 'Refresh leads'
 });
-// → { id, status: 'queued' }  — the task; RETURN THIS from your route
+// → { id, status: 'queued' }  — the run; RETURN THIS from your route
 ```
 
-Teaching errors (surface on the task): `table_missing` (write a migration),
-`schema_drift` (`{ newColumns, typeChanges }` — write an ALTER migration),
-`upsert_key_missing` (declare a PK or pass `key`).
+Teaching errors land on the run's `error` (`GET /api/runs/{id}`):
+`table_missing` (write a migration), `schema_drift` (`{ newColumns,
+typeChanges }` — write an ALTER migration), `upsert_key_missing` (declare a
+PK or pass `key`), `upsert_key_unindexed` (dry runs, §4c),
+`prune_scope_missing`, and `dependency_unbound` / `dependency_broken` (the
+source slot). One error comes from `load()` itself instead: a 409
+`load_already_running` whose `data.runId` names the run already touching
+those tables.
 
 ## 4. Publish semantics — pick the right mode
 
@@ -129,8 +136,8 @@ matviews, policies, and grants never detach.
   skipped entirely (no UPDATE triggers, no WAL), and `prune: true` deletes
   rows that left the source. Row identity is preserved, so FK `ON DELETE`
   actions fire only for rows that genuinely departed. Run receipts report
-  `inserted / updated / unchanged / pruned` — **on the task's `progress`**
-  (`GET /api/tasks/{id}`), NOT on the 202 dispatch body, which is only
+  `inserted / updated / unchanged / pruned` — **on the run's `progress`**
+  (`GET /api/runs/{id}`), NOT on the 202 dispatch body, which is only
   `{ id, status }`.
 - **`replace`** — full refill (DELETE + INSERT cutover) for keyless tables.
   Note it rewrites every row each run — with FK children or audit triggers,
@@ -217,7 +224,7 @@ What it validates, in order:
    Transforms run; finalize/onLoaded/emit/prune are skipped.
 3. **Would-be receipts** — read-only comparison against live reports
    `inserted / updated / unchanged / pruned` for what a real run WOULD do
-   (`progress.dryRun: true` marks the task). A surprising `pruned` count
+   (`progress.dryRun: true` marks the run). A surprising `pruned` count
    here is the "hidden inactive rows" class of bug caught before it deletes
    anything.
 
@@ -272,7 +279,7 @@ Schedules are plain `automations:` in informer.yaml, targeting your sync
 route — cadence lives next to the route it fires, deployed atomically.
 **Automation routes are dispatched as GUEST paths**, so a route that lives
 in `server/` MUST carry the `/_server/` prefix — without it the dispatch
-404s silently (the automation row keeps advancing `nextRunAt`, no task ever
+404s silently (the automation row keeps advancing `nextRunAt`, no run ever
 appears):
 
 ```yaml
@@ -285,141 +292,18 @@ automations:
 
 What the platform provides (observation, not orchestration):
 
-- `GET  /api/apps/{id}/tasks` — the app's run ledger (progress, receipts,
-  timings, recorded spec). Allowlist as `GET /api/apps/*/tasks`. (The flat
-  `GET /api/tasks?appId={id}` form also works on current servers.)
-- `GET  /api/tasks/{taskId}/events` — live SSE for one run.
-- **Informer GO's Data panel** — schema rail with live run %, SQL
-  scratchpad, per-table Data/Schema/Pipeline/History views. It discovers
-  in-flight runs from the ledger, so a sync your UI (or a cron) kicks shows
-  live there with no wiring on your part.
+- `GET  /api/apps/{id}/runs` — the app's run ledger (progress, receipts,
+  timings, recorded spec). Allowlist as `GET /api/apps/*/runs`. (The flat
+  `GET /api/runs?appId={id}` form works too.)
+- `GET  /api/runs/{runId}` — one run. `GET /api/runs/{runId}/events` — its
+  live SSE feed: the current row first, then every change.
+  `POST /api/runs/{runId}/_cancel` — cooperative cancel, honored at the next
+  batch boundary.
 
 Allowlist note: `access.apis` patterns match the PATH only — a query string
-never affects matching, so `GET /api/tasks` allows `tasks?appId=…`.
+never affects matching, so `GET /api/runs` allows `runs?appId=…`.
 
-## 7. Row security — scope shared data by viewer
-
-A warehouse shared broadly needs row policies. Every workspace ships helper
-functions for exactly this; policies are authored in migrations like all
-structure, and the vocabulary they read is declared in the manifest:
-
-```sql
--- migrations/00X-row-security.sql
-ALTER TABLE "invoices" ENABLE ROW LEVEL SECURITY;
-CREATE POLICY "rep_scope" ON "invoices" FOR SELECT
-    USING ("inf_unrestricted"() OR "ownerRep" = (SELECT "inf_var"('rep_id')));
-```
-
-```yaml
-# informer.yaml — REQUIRED for every variable a policy reads:
-# deploy cross-checks pg_policies and FAILS on undeclared refs
-share:
-  variables:
-    rep_id: The rep's Salesforce user id
-```
-
-How it works at query time: consumer reads (the GO Data panel, datasource-
-share slots in other apps) run as a read-only role stamped with the
-requester's context — `inf_var('x')` returns the value their datasource
-share granted (a fixed literal, or a `$user.<attr>` binding like
-`$user.email` resolved per requester), and `inf_unrestricted()` is true for
-the owner/admins. **Fail-closed by construction**: no share variable → NULL
-→ no rows. Your own routes, hooks, and ETL run as the owner role, which
-OWNS the tables — Postgres never applies RLS to the table owner, so loads
-and finalize hooks always see raw data.
-
-**THE LEAK EVERY POLICY-BEARING WAREHOUSE MUST CLOSE**: your own `server/`
-routes read through the OWNER connection, which owns the tables — Postgres
-never applies RLS to the table owner, so `query()` in a handler ALWAYS
-returns raw, unfiltered rows. That is correct for ETL and finalize hooks —
-and a data leak the moment a handler feeds rows to your UI for a shared
-viewer. Once policies exist, every viewer-facing read must go through the
-workspace DATASOURCE as the signed-in user, where the policy applies per
-requester:
-
-```javascript
-// frontend — allowlist `POST /api/datasources/*/_query` in access.apis
-await fetch(`/api/datasources/${wsDsId}/_query`, {
-    method: 'POST', headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ language: 'sql', payload: 'SELECT ...', limit: 100, options: {} })
-});
-```
-
-Audit the classic offenders: a `/rows` or `/dashboard-data` route that
-SELECTs and returns rows, KPI aggregates computed in a handler, exports.
-Either move those reads to the datasource `_query` path, or accept that
-the route serves owner-privileged data and OWNER-GATE it:
-
-```yaml
-roles:
-  - id: raw_data          # declare a role you grant to nobody
-    name: Raw data access
-```
-```javascript
-export const config = { roles: ['raw_data'] };
-```
-
-Role resolution's admin override gives owning-team Publishers+ (and
-superusers) every DECLARED role implicitly — so the owner passes, shared
-viewers 403, and an explicit app-share grant of `raw_data` becomes the
-deliberate exception. TRAP: the role MUST appear in the manifest `roles:`
-block — with zero declared roles the resolver returns empty for everyone
-(before the admin override), locking out the owner too. Note this is a
-binary invocation gate, not row filtering — scoped viewing always means
-the `_query` path.
-
-Rules of thumb:
-- Always author the `inf_unrestricted() OR …` idiom — without it the owner
-  sees nothing in the Data panel.
-- Keep the `(SELECT inf_var('x'))` initplan form — it evaluates once per
-  query, not per row.
-- The Data panel shows viewers their own enforcement: a shield on policy-
-  bearing tables, a "Filtered view" footer listing their resolved
-  variables, and each table's policies under Schema.
-
-### Column masking (CLS) — inf_mask_view
-
-To hide or transform COLUMNS (salaries, emails, SSNs), create a **masking
-view** from a migration with `inf_mask_view(name, sql)`. The view lands in
-a platform-managed masked schema that consumers resolve FIRST — so a view
-named like a table transparently replaces that table for every consumer
-read (Data panel, reports, other apps), with **no SQL changing anywhere**.
-The platform also revokes the same-named base table from the consumer
-role automatically, so a schema-qualified reach for raw data is
-permission-denied.
-
-```sql
--- migrations/00X-mask-invoices.sql  (note: '' doubles quotes inside the arg)
-SELECT "inf_mask_view"('invoices',
-    'SELECT "id", "customer",
-            CASE WHEN "inf_unrestricted"() THEN "amount" ELSE NULL END AS "amount",
-            "inf_mask_email"("contact") AS "contact"
-     FROM "invoices"
-     WHERE "inf_unrestricted"() OR "ownerRep" = (SELECT "inf_var"(''rep_id''))');
-```
-
-TWO RULES that make masked views correct:
-
-1. **Re-apply row scoping in the view's WHERE.** Masked views run with
-   OWNER rights (that's what lets them read the revoked base), which means
-   the base table's RLS does NOT apply inside them — a masked view without
-   the `inf_unrestricted() OR …` WHERE serves every row to every consumer,
-   just with masked columns. The WHERE is the row layer; the SELECT list
-   is the column layer; author both.
-2. **Derived objects are separate exposures.** A matview or plain view
-   computed FROM a masked/policied table is its own relation with its own
-   access: matviews are owner-computed snapshots (raw, unscoped data
-   frozen at refresh), and owner-schema views are owner-rights by default.
-   Masking `invoices` does NOT protect `invoices_by_rep`. For each derived
-   object, either confirm it aggregates to genuinely non-sensitive
-   granularity, or give it its own inf_mask_view treatment.
-
-Joins compose for free: any unqualified reference — `JOIN invoices`,
-`EXISTS (SELECT … FROM invoices)`, CTEs — resolves to the masked view, so
-its scoping and masks apply before the join, and a join condition on a
-masked column compares the MASKED value (NULL matches nothing).
-
-## 8. Streaming ingest — point any HTTP sink at your webhook
+## 7. Streaming ingest — point any HTTP sink at your webhook
 
 For continuous data (pg WAL/CDC via Debezium, Kafka via Connect's HTTP
 sink, Stripe/Segment events), the warehouse is the SINK, not the pipeline:
@@ -495,19 +379,19 @@ The contract, and why it's safe:
 - Receipts add `deleted` and `dead`; per-key ordering is the transport's
   job (buffer seq preserves arrival). Multi-table `into` maps work — the
   handler returns `{ table: [...] }` maps per channel.
-- The buffer tables are owner-only (raw events are pre-mask, pre-policy —
-  consumers can never read them) and applied events age out after 72h.
+- The buffer tables are owner-only (consumers can never read them) and
+  applied events age out after 72h.
 
-## 9. The UI — small but real
+## 8. The UI — small but real
 
 Always ship an `index.html` (headless warehouses are not a supported
 pattern — an app with no entry point renders the server's error page). The
 warehouse UI's jobs, in priority order:
 
 1. **Ground the user**: what this warehouse holds, where it comes from,
-   per-table as-of lines (derive from the tasks ledger).
+   per-table as-of lines (derive from the run ledger).
 2. **The sync affordance**: one button → `POST /api/_server/etl/sync` →
-   progress via the task's SSE stream. Add a per-table refresh only where
+   progress via the run's SSE stream. Add a per-table refresh only where
    refreshing that table alone is truly safe.
 3. **Reconciliation checks**: a query against the warehouse vs. a spot
    total from the source (e.g. AR aging vs. QBO's own report) — the trust
@@ -516,5 +400,5 @@ warehouse UI's jobs, in priority order:
    and caveats.
 
 Ad-hoc exploration (arbitrary SQL, schema browsing, run history) does NOT
-belong in your UI — the platform Data panel already does it for every
-viewer with datasource read access.
+belong in your UI — Informer covers it for every viewer with datasource read
+access, and the run ledger already holds the history.

@@ -532,7 +532,7 @@ access:
 Matching rules:
 
 - Patterns match the **path only** — a query string never affects matching.
-  `GET /api/tasks` allows `tasks?appId=…`; you never need a `*` just to
+  `GET /api/runs` allows `runs?appId=…`; you never need a `*` just to
   admit query params.
 - `*` matches one path segment, `**` matches across segments
   (`GET /api/apps/*/contents/**`).
