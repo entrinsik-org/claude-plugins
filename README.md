@@ -9,6 +9,26 @@ Claude Code plugins for Informer development.
 /plugin install informer@entrinsik-plugins
 ```
 
+## Beta channel
+
+Docs for Informer features that have not shipped yet live on the `beta`
+branch and are published as a second plugin, `informer-beta`, from the same
+marketplace. It carries a prerelease version (`5.3.0-beta.N`) and moves to
+`main` when the matching Informer release goes GA.
+
+```
+/plugin install informer-beta@entrinsik-plugins
+/plugin disable informer@entrinsik-plugins      # while testing — both plugins advertise the same skill triggers
+```
+
+Beta skills are addressed as `/informer-beta:<skill-name>`. Third-party
+marketplaces do not auto-update, so pick up a newer beta with
+`/plugin marketplace update entrinsik-plugins` followed by `/plugin update informer-beta`.
+
+Working on the skills themselves? Skip the marketplace and load your checkout
+directly: `claude --plugin-dir plugins/informer` from the `beta` branch, and
+`claude plugin validate plugins/informer` before pushing.
+
 ## Available Plugins
 
 ### informer (v4.0.0)
