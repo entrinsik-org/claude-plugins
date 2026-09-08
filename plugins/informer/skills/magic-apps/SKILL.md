@@ -1,6 +1,6 @@
 ---
 name: magic-apps
-description: Building Informer Apps with local Vite development. Covers the dev/publish workflow, the centerpiece "Accessing Your Dependencies" model (typed slots + three patterns), and the orientation map for deeper topics (server routes, webhooks, persistence, widgets, copilot sidebar, event-driven AI agents, PDF export, informer.yaml schema, app-to-app/pack API integration and openapi.json contracts) — each routes to a reference file under `references/` so the front door stays loadable on every trigger.
+description: Building Informer Apps with local Vite development. Covers the dev/publish workflow, the centerpiece "Accessing Your Dependencies" model (typed slots + three patterns), and the orientation map for deeper topics (server routes, webhooks, persistence, declarative vector embeddings, widgets, copilot sidebar, event-driven AI agents, live broadcast channels over WebSockets, staged uploads/downloads for files and large result sets, PDF export, informer.yaml schema, app-to-app/pack API integration and openapi.json contracts, and the UI quality bar every screen must meet: mobile-first responsive layout, no layout shift, TanStack Query freshness after every action, sortable table headers, vertical rhythm, bright distinct icons with the full icon asset set) — each routes to a reference file under `references/` so the front door stays loadable on every trigger.
 ---
 
 # Informer App Development
@@ -13,9 +13,12 @@ An Informer App is a custom HTML/JS/CSS application that runs inside Informer. I
 - Make authenticated requests to external APIs via integrations (Salesforce, etc.)
 - **Store and query its own data** in a dedicated Postgres workspace (with SQL migrations)
 - **Run server-side JavaScript handlers** in sandboxed V8 isolates (with direct DB access)
+- **Maintain vector embeddings** over its own data declaratively (platform embedding pump + pgvector) for semantic search (Informer 2026.1.3+)
+- **Move files and large result sets** (CSV imports, attachments, big exports) without the bytes touching the app's sandbox — staged uploads/downloads (2026.1.3+)
 - Render charts, tables, and interactive visualizations
 - Include a **built-in AI copilot** sidebar that can query your data and answer questions in context
 - Define **AI agents** that react to events, execute tools, and chain together for automated workflows
+- Push **live updates** to every open page over a WebSocket Informer owns for it (channels — 2026.1.3+, origin-mode servers)
 
 Apps are stored in Informer libraries and served through the Informer UI. (You may see the term "Magic Report" in older documentation — Apps are the current name for the same concept.)
 
@@ -28,18 +31,47 @@ This file is the orientation layer. Most topics have a dedicated reference under
 | Writing handlers under `server/`, working with `query` / `transaction` / `fetch` / `respond` / `notify` / `email` / `log` / `crypto` / base64 / markdown / `env` / `request` / sandbox constraints | `references/server-routes.md` |
 | Receiving external callbacks (Stripe, GitHub, Slack, Gmail push) under `webhooks/`, HMAC verification, signed `?token=` URLs | `references/webhooks.md` |
 | Storing app data — `migrations/`, dev-workspace lifecycle, `workspace:init` / `:migrate` / `:reset`, CRUD example | `references/persistence.md` |
+| Declaring embedding use cases under `embeddings/`, vector search over workspace data, `embed(name, text)`, chunking profiles, pgvector columns in app migrations | `references/embeddings.md` |
+| Building or polishing any screen — the mobile modes (inside Informer GO, home-screen tile, browser tab, widget card) and the screen-by-screen phone layout pass, dialogs that shift, skeletons, stale UI after an action (empty states, dropdowns, counts), TanStack Query, sortable tables / AG Grid, spacing and vertical rhythm, icon brightness and the home-screen/PWA icon set; also when to load the `frontend-design` plugin | `references/ui-quality.md` |
+| Building a WAREHOUSE / ETL app — the sync-route pattern (one atomic entry point; per-table only when safe), the `load()` spec (replace/append/**upsert** with key + prune, multi-table `into` maps for atomic header/line publishes, scoped prune, `dryRun` validation, batch hooks, page walkers, `onComplete`/`onLoaded`/`emit`), run receipts, `automations:` schedules, the run-ledger/SSE surface, what the warehouse's own UI must cover | `references/warehouse-etl.md` |
+| Declaring SEMANTICS for a workspace database — `semantics.yaml` (structure: types/units/enum values + quick-dev inline labels, `decimals`, computed `expr`, `bins`), `semantics.<locale>.yaml` strings-only overlays, categories and declared links, the `exposure` policy (open vs curated sources), description-vs-COMMENT channels, how customer overlays layer on top after install | `references/semantics.md` |
+| Writing a walker against a SPECIFIC integration (QuickBooks, Salesforce, …) — per-connector traps: hidden inactive rows, pagination quirks, incremental watermark fields, deletion detection | `references/connector-gotchas.md` |
 | Declaring `widgets:` in `informer.yaml`, building self-contained HTML cards under `public/widgets/`, iframe quirks | `references/widgets.md` |
 | Activating the in-app copilot, `openChat()` / `registerTool()`, AI completion endpoints (`_chat` / `_completion` / `_object`), `useChat` hook patterns | `references/copilot.md` |
 | Declaring `agents:` in `informer.yaml`, writing `tools/*.js`, `emit()` chaining, cron, toolkits/assistants integration, agent REST API | `references/agents.md` |
+| Live updates to open pages — "real-time" / "push" / "stop polling" / presence / typing; `broadcast(channel, event, payload)` from a handler, the `channels:` relay block, gated channels under `channels/` (`join` / `leave` / `config.roles`), `@user/<username>`, `__INFORMER__.channel(name).on(event, fn)`, `origin_mode_required` | `references/channels.md` |
+| Moving FILES or large result sets — CSV/Excel import into a workspace table, an attachment into a `bytea` column, a big CSV/JSON/JSONL export, "upload" / "download" / "save as" / "import"; `__INFORMER__.upload(file)` on the page, `uploads.get(id)` → `copyInto()` / bytea parameter / `text()`, `downloads.create()` → `fromQuery()` / `writeRows()` / `return dl` / `dl.url`, the 10 MB inline cap | `references/streams.md` |
 | Exposing tools to outside AI clients (Claude Code/Desktop, Cursor) — the `mcp/` folder, why the folder is the decision, writing for a caller with no context, the per-app endpoint, the OAuth connect flow, who a tool runs as | `references/mcp.md` |
 | Deep `informer.yaml` work — `dependencies:` slot field reference, app-sourced `integrations:` (an app declares and owns an Integration — OAuth, `$env` secrets, icons), RLS via `$user.*`, modernizing a legacy `access:` block, `defaultBinding` lookup, declaring env-var keys with `env:` | `references/informer-yaml.md` |
 | App-to-app/pack APIs — fetching a target's contract (`openapi.json`), typed dev bindings (`.informer/app-deps.d.ts`), public-vs-internal routes, and making your own App integratable (`description`/`schema` exports, `config.api = 'public'`, root `API.md`) | `references/app-api.md` |
 | In-gallery app docs (`docs.html`), in-app `?` help button, `README.md` fallback | `references/docs-html.md` |
 | Looking up the raw API surface behind the typed-slot proxy (still useful when something fails) | `references/api-reference.md` |
 | HTML/CSS/JS starter snippets, theme-variable patterns, CSS Modules for React | `references/app-templates.md` |
+| Public pages & anonymous API routes (`public: true`, `server/public/**`), the app's OWN sign-up/login (`accounts.issuers.local`, `/_auth/*`), password reset, OIDC/SSO (`/_auth/oidc/{name}`), "Sign in with Informer" (`/_auth/informer`), accepting other apps' users (`accounts.accept`), the unified `request.user` | `references/accounts-and-login.md` |
 | Running a WASM library or Web Worker in the sandbox (DuckDB-WASM, sql.js, ffmpeg.wasm, pdf.js, ONNX) — the blob-worker pattern, bundling wasm locally, `new Worker` failing with origin `'null'`, external extension fetches | `references/wasm-workers.md` |
 
 The sections that **stay in this file** are the ones nearly every project touches: bootstrapping, local-dev essentials, the dep-access centerpiece, the small surfaces (App Context, HTML5 routing, App Roles, PDF Export). Everything else is one click away in `references/`.
+
+## Feature floors — which Informer release has what
+
+Customers run a spread of Informer versions, so every newer feature carries the release that first shipped it. Pin the target version before proposing anything (After bootstrap, step 1), then read this table against it. A feature whose row is newer than the target is unavailable there: say so, offer the fallback its reference names, and never emit the API hoping the server is newer.
+
+| Feature | Since | Reference |
+|---|---|---|
+| Bare `/api/{path}` app routes; per-app origins (origin mode) | 2026.1.2 | `references/server-routes.md` |
+| `platform` descriptor (`platform.version`, `platform.capabilities`) and the `requires:` manifest key | 2026.1.3 | `references/server-routes.md`, `references/informer-yaml.md` |
+| Live broadcast channels (`broadcast()`, `channels:`, `channels/`) | 2026.1.3 | `references/channels.md` |
+| Declarative embeddings (`embeddings/`, `embed()`, pgvector) | 2026.1.3 | `references/embeddings.md` |
+| Staged uploads/downloads (`uploads`, `downloads`, `__INFORMER__.upload()`) | 2026.1.3 | `references/streams.md` |
+| Warehouse loads (`load()`, the run ledger, `schedule()`, streaming ingest) | 2026.2.0 | `references/warehouse-etl.md` |
+| `semantics.yaml` and the semantic registry | 2026.2.0 | `references/semantics.md` |
+| App accounts and public serving (`accounts:`, `public: true`, `/_auth/*`) | 2026.2.0 | `references/accounts-and-login.md` |
+
+Features not listed have no floor recorded here; where a reference states one inline (the `openapi.json` endpoint needs 2026.1.1, for example), that line wins.
+
+**Learning the target version.** From 2026.1.3 the server tells the app: `window.__INFORMER__.platform.version` on the page and `platform.version` in every handler bag, with `platform.capabilities` for feature flags, and the Vite dev mock mirrors both. Older servers expose nothing to the app, so ask the user which Informer version the app deploys to, or read `requires.informer` from an existing `informer.yaml`. Record the answer as `requires: { informer: '>=<version>' }`: servers from 2026.1.3 refuse a deploy below it, older ones ignore the key.
+
+**Tagging inside a reference.** A whole feature states its floor in the reference's Availability block. A later addition to an existing feature carries the floor on its own row or sentence, bold, as `**2026.1.4+**`.
 
 ## Bootstrapping a New Project
 
@@ -74,7 +106,7 @@ npm create vite@latest . -- --template react
 
 # 2. Install dependencies including the Informer plugin.
 npm install
-npm install -D @entrinsik/vite-plugin-informer@2.4.0
+npm install -D @entrinsik/vite-plugin-informer@latest
 
 # 3. Run the Informer init — creates informer.yaml, .env, .env.example,
 #    updates vite.config.js to include informer(), updates .gitignore,
@@ -118,11 +150,17 @@ The `.env` template includes both API key and basic auth blocks — uncomment th
 
 Once the project is set up, the typical next moves are:
 
-1. Ask the user what data the app needs (datasets/queries/datasources/integrations) and add `dependencies:` slots to `informer.yaml` — look up `defaultBinding` UUIDs via `GET /api/datasets-list` etc. against the configured `INFORMER_URL`. For an external service the app itself needs (a REST API, Salesforce, and so on), prefer declaring it in the `integrations:` block instead of binding to a pre-existing one — deploy creates the Integration and the slot for you, no UUID and no out-of-band setup. See `references/informer-yaml.md`.
-2. Replace Vite's default `index.html` + `main.js` with the app shell.
-3. If the app stores its own data, scaffold `migrations/` and add a first migration — load `references/persistence.md`.
-4. If the app exposes server-side routes, scaffold `server/` — load `references/server-routes.md`.
-5. If the app should be usable from an outside AI client (Claude Code/Desktop, Cursor), scaffold `mcp/` with tools written for a context-free caller — load `references/mcp.md`.
+1. Pin the Informer version the app deploys to: `requires.informer` in an existing `informer.yaml`, `__INFORMER__.platform.version` on a 2026.1.3+ server, or ask. Write it back as `requires: { informer: '>=…' }`. Every step below is gated on it through the Feature floors table.
+2. Ask the user what data the app needs (datasets/queries/datasources/integrations) and add `dependencies:` slots to `informer.yaml` — look up `defaultBinding` UUIDs via `GET /api/datasets-list` etc. against the configured `INFORMER_URL`. For an external service the app itself needs (a REST API, Salesforce, and so on), prefer declaring it in the `integrations:` block instead of binding to a pre-existing one — deploy creates the Integration and the slot for you, no UUID and no out-of-band setup. See `references/informer-yaml.md`.
+3. Replace Vite's default `index.html` + `main.js` with the app shell — mobile-first, and with TanStack Query wired at the root for a React app (see the UI Quality Bar below).
+4. If the app stores its own data, scaffold `migrations/` and add a first migration — load `references/persistence.md`.
+   If the data is LOADED from sources on a cadence (a warehouse), load `references/warehouse-etl.md` instead (Informer 2026.2.0+) — it layers sync routes, `load()`, and `automations:` schedules on top of plain persistence.
+   A warehouse meant for BI consumption should also ship semantics — load `references/semantics.md` when writing informer.yaml's siblings or authoring migrations that add tables/columns.
+5. If the app exposes server-side routes, scaffold `server/` — load `references/server-routes.md`.
+6. If the app needs semantic/vector search over its own data, scaffold `embeddings/` use cases (vector tables live in `migrations/`) — load `references/embeddings.md`.
+7. If the app should be usable from an outside AI client (Claude Code/Desktop, Cursor), scaffold `mcp/` with tools written for a context-free caller — load `references/mcp.md`.
+8. If open pages should update live when server code changes something (no polling), add a `channels:` relay block and/or `channels/` handlers — load `references/channels.md` (needs an origin-mode server; confirm before building on it).
+9. If the app imports files or exports large result sets (CSV in, attachments, CSV/JSON out), stage them with `__INFORMER__.upload()` on the page and use the `uploads` / `downloads` handles in `server/` — load `references/streams.md`.
 
 ## Local Development Workflow
 
@@ -131,7 +169,7 @@ Once the project is set up, the typical next moves are:
 Install the Informer Vite plugin as a dev dependency (skip if `npx informer-init` was used — it's already there):
 
 ```bash
-npm install -D @entrinsik/vite-plugin-informer@2.4.0
+npm install -D @entrinsik/vite-plugin-informer@latest
 ```
 
 ### Code Splitting
@@ -203,14 +241,18 @@ Builds your project and uploads to Informer:
 2. Snapshots the library for rollback
 3. Clears existing files
 4. Uploads all built assets from `dist/`
-5. Uploads `informer.yaml` and `data-access.yaml` from project root (if they exist)
+5. Uploads `informer.yaml`, `data-access.yaml`, `API.md`, and `README.md` from project root (whichever exist)
 6. Uploads `migrations/` directory (if it exists)
 7. Uploads `tools/` and `mcp/` directories (if they exist)
 8. Uploads `server/` directory (if it exists)
 9. Uploads `webhooks/` directory (if it exists)
-10. Runs deploy: pending SQL migrations + server-route scanning + webhook scanning + handler bundling + tool bundling (`tools/` + `mcp/`) + resource reference validation + agent upsert from `informer.yaml`
+10. Uploads `channels/` directory (if it exists)
+11. Uploads `embeddings/` directory (if it exists) — plugin ≥ 2.8.0; 2.7.0 and earlier never upload the folder
+12. Uploads `lib/` and `shared/` directories (if they exist). Every source tree drops dotfiles, `node_modules`, and `*.test.js`
+13. Runs deploy: pending SQL migrations + server-route scanning + webhook scanning + embedding use-case scanning + channel scanning (`channels/` handlers + the `channels:` relay block) + handler bundling + tool bundling (`tools/` + `mcp/`) + resource reference validation + agent upsert from `informer.yaml`
     - **Resource refs are validated**: all datasets, queries, datasources, integrations, and toolkits declared in `informer.yaml` must exist — deploy fails with a clear error if any are missing
-11. App is viewable at `/api/apps/{owner}:{slug}/view`
+    - **Channels need origin mode**: a `channels:` block or `channels/` directory on a path-mode server still deploys, with a non-fatal `channels_require_origin_mode` warning — see `references/channels.md`
+14. App is viewable at `/api/apps/{owner}:{slug}/view`
 
 ### Package.json Configuration
 
@@ -233,33 +275,47 @@ The `informer` section in `package.json` controls deploy metadata:
 
 ### App Icon (favicon.svg)
 
-Place a `favicon.svg` in your `public/` directory. It will be deployed to the app's library root and used as:
-- **App gallery icon** — shown as the app's tile in the desktop and mobile app galleries
-- **Browser tab favicon** — shown when the app is viewed in a browser tab
+Place a `favicon.svg` in your `public/` directory. It is deployed to the app's library root and the platform derives every surface from it:
+- **App gallery icon** — the app's tile in the desktop and Informer GO mobile galleries
+- **Browser tab favicon** — injected when the app is viewed in a tab
+- **Home-screen tile** — rasterized by the platform to a 180 px PNG for the standalone `/launch` page's `apple-touch-icon`
+- **Marketplace listing icon** — read by `informer-publish` / `informer-ci`
 
-**Recommended style: duotone** — one hue, two opacity levels.
+**Style: bright and distinct.** A saturated mid-tone tile (or a two-stop gradient within one hue) with a white mark, or a light tile with a saturated mark. Not a deep, dark background with a muted mark — that reads as a placeholder, and every app ends up looking the same in the gallery.
 
 ```svg
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
-  <!-- Background with rounded corners -->
-  <rect width="512" height="512" rx="96" fill="#064e3b"/>
-  <!-- Secondary elements at 35% opacity -->
-  <rect x="96" y="240" width="64" height="152" rx="10" fill="#6ee7b7" opacity="0.35"/>
-  <!-- Primary elements at full opacity -->
-  <rect x="176" y="160" width="64" height="232" rx="10" fill="#6ee7b7"/>
+  <!-- Bright tile with rounded corners -->
+  <rect width="512" height="512" rx="96" fill="#14b8a6"/>
+  <!-- Secondary shapes: white at reduced opacity -->
+  <rect x="96" y="240" width="64" height="152" rx="10" fill="#ffffff" opacity="0.55"/>
+  <!-- Primary shapes: solid white -->
+  <rect x="176" y="160" width="64" height="232" rx="10" fill="#ffffff"/>
 </svg>
 ```
 
 Guidelines:
 - **512x512 viewBox**, square (1:1 aspect ratio)
-- **Self-contained background** — bake the background color into the SVG with rounded corners (`rx="96"`)
-- **Single hue** with full opacity for primary shapes, ~35% for secondary
-- **Bold, simple shapes** that are recognizable at 70px (mobile icon size)
+- **Self-contained background** — bake the tile color into the SVG with rounded corners (`rx="96"`); the home-screen rasterizer flattens onto an opaque background, so a transparent SVG gets whatever it is given
+- **One saturated hue** the sibling apps on the install don't already use, white or near-white marks; one accent pop allowed. Dark navy/forest tiles only for security and admin apps
+- **Bold, simple shapes** that are recognizable at 16 px (tab) and 70 px (mobile tile); no thin strokes, no text beyond a single-letter monogram
 - Design should visually represent the app's content (bars for dashboards, document for invoices, etc.)
+- Apps that run on their own origin and want a real PWA install also ship a PNG set and `manifest.webmanifest` — the list is in `references/ui-quality.md`
 
 ## App Documentation (`docs.html`)
 
 Apps can include a `docs.html` page in `public/` that opens from the app gallery's book-icon badge — and a `?` help button inside the app can iframe-open the same file. Full guidance — gallery integration, structure template, in-app help button code, the `README.md` fallback — lives in `references/docs-html.md`. Load that reference when adding or restyling docs.
+
+## UI Quality Bar — six non-negotiables
+
+Every screen in every app meets these. A screen that breaks one is not done; treat it as a bug, not a polish item. Details, techniques, and the test for each are in `references/ui-quality.md` — load it before building or reshaping any page. Before the first screen, also load the **`frontend-design` skill** (Anthropic's plugin from the official Claude Code marketplace, `/frontend-design:frontend-design`) for the aesthetic direction — palette, type, layout that fit the app's subject instead of a templated default; the quality bar below is the engineering floor under that direction.
+
+1. **Every page works on a phone, designed screen by screen.** Apps run inside Informer GO on phones and tablets (an iframe under GO's bars, frame shrunk when the keyboard opens), as chrome-less home-screen tiles (`/launch`, where `window.__INFORMER__.standalone` is true and safe areas are yours), as half-width widget cards, and in a browser tab. Walk every screen in each mode it will be seen in and choose its phone layout deliberately: list → cards, table → cards or pinned-column scroll, form → full-screen sheet, board → one column at a time. Design at 360 px first; wide content scrolls in its own box, dialogs go full-screen on narrow viewports, touch targets are 44 px.
+2. **No pop-in.** Reserve space before content arrives: skeletons in the content's exact shape, `min-height` on dialogs and cards, fixed dimensions on images and charts. A dialog never changes size after the user starts interacting with it.
+3. **Every action shows up immediately, everywhere.** The first create must clear the empty state; dropdowns, counts, and other panels that list the same things must refresh. React apps use TanStack Query for all server state, with every mutation invalidating every key that can show its result — consistently, never mixed with ad-hoc `fetch` + `useState`.
+4. **Table headers sort.** Every column, with an indicator and `aria-sort`. Data grids use AG Grid Community (`ag-grid-community` + `ag-grid-react`, pinned), where sorting is on by default.
+5. **Vertical rhythm and breathing room.** One 4 px spacing scale, groups tighter inside than between (about 2:1), headings attach downward, nothing flush against an edge, and no padding-everything either.
+6. **Icons are bright, distinct, and present on every surface** — see App Icon above and the asset list in the reference.
 
 ## Accessing Your Dependencies
 
@@ -271,7 +327,7 @@ An Informer App has **two** JavaScript runtimes, and they access dependencies di
 
 | Runtime | Where it runs | How it talks to deps |
 |---|---|---|
-| **Server handler** | V8 isolate inside the Informer server (files in `server/`, `tools/`, `webhooks/`, or `agents:`) | `context.<slot>.<method>(args)` — typed proxy, no UUIDs in code |
+| **Server handler** | V8 isolate inside the Informer server (files in `server/`, `tools/`, `webhooks/`, `channels/`, or `agents:`) | `context.<slot>.<method>(args)` — typed proxy, no UUIDs in code |
 | **Frontend** | Browser (your `main.js` / React components / etc.) | Has to make HTTP calls. **Does NOT have `context`.** |
 
 `context` is a property the V8 isolate runtime injects into the handler argument. It does not exist in the browser. Trying to use `context.<slot>` in a React component will throw `ReferenceError: context is not defined`.
@@ -598,7 +654,7 @@ Returned shape:
 
 ## App Configuration (`informer.yaml`) — rule of thumb
 
-Apps are configured with an `informer.yaml` file in the project root. It declares the app's **data dependencies** (typed slots bound at install time), any **raw API allowlist**, **widgets**, **agents**, and **custom roles**. It's uploaded automatically on deploy.
+Apps are configured with an `informer.yaml` file in the project root. It declares the app's **data dependencies** (typed slots bound at install time), any **raw API allowlist**, **widgets**, **agents**, **live channel relays** (`channels:`), and **custom roles**. It's uploaded automatically on deploy.
 
 **Rule of thumb — read this before writing to informer.yaml:**
 
@@ -689,7 +745,7 @@ export async function POST({ query, request }) {
 }
 ```
 
-Handlers receive a single argument with the sandbox helpers (`query`, `transaction`, `fetch`, `context`, `respond`, `emit`, `notify`, `email`, `log`, `crypto`, `env`, `request`). Globals available without destructuring: `markdown`, `base64Encode` / `base64Decode` / `base64UrlEncode` / `base64UrlDecode`, `atob` / `btoa`.
+Handlers receive a single argument with the sandbox helpers (`query`, `transaction`, `fetch`, `context`, `respond`, `emit`, `broadcast`, `notify`, `email`, `log`, `crypto`, `env`, `request`). Globals available without destructuring: `markdown`, `base64Encode` / `base64Decode` / `base64UrlEncode` / `base64UrlDecode`, `atob` / `btoa`.
 
 Sandbox constraints: no Node APIs, no filesystem, no direct network — all I/O is through the injected callbacks. 128 MB memory, 30s default wall-clock timeout (configurable via `config.timeout`).
 
@@ -713,9 +769,80 @@ export async function POST({ crypto, request, env, query }) {
 }
 ```
 
-Webhook handlers receive the **same bag as server routes** — `query`, `transaction`, `fetch`, `context`, `respond`, `emit`, `notify`, `email`, `crypto`, `markdown`, `log`, `env`, plus the base64 globals and `request.rawBody` (for HMAC verification). `notify()` and `email()` **are** available (handlers run as the app owner). The only differences are inbound identity: `request.user` is `null` (no user session) and `request.roles` is `[]` — the handler still *runs as* the app owner, so `fetch()`, `notify()`, and `email()` use owner credentials.
+Webhook handlers receive the **same bag as server routes** — `query`, `transaction`, `fetch`, `context`, `respond`, `emit`, `broadcast`, `notify`, `email`, `crypto`, `markdown`, `log`, `env`, plus the base64 globals and `request.rawBody` (for HMAC verification). `notify()` and `email()` **are** available (handlers run as the app owner). The only differences are inbound identity: `request.user` is `null` (no user session) and `request.roles` is `[]` — the handler still *runs as* the app owner, so `fetch()`, `notify()`, and `email()` use owner credentials.
 
 Load `references/webhooks.md` for: file-convention routing, the `?token=` issuance/verification flow, full HMAC verification examples (GitHub, Stripe, shared-secret), and reading per-app secrets via the `env` bag (configured in **Admin → Environment** or declared as keys in `informer.yaml` `env:`).
+
+## Embeddings — overview
+
+Apps can maintain **vector embeddings over their own data** declaratively (Informer **2026.1.3+**). Ship an `embeddings/` folder with one file per use case — a `config` export plus `GET` and `POST` handlers — and the platform runs an **embedding pump**: it asks your `GET` what's pending, chunks and embeds the content in billed batches, and hands the vectors to your `POST` to store in your own workspace tables. The platform holds no copy of the corpus and no progress ledger — your `GET`'s anti-join against your own vector table is the watermark.
+
+```javascript
+// embeddings/tickets.js — both halves required; deploy scans the folder like server/
+export const config = { chunking: 'none', on: ['ticket.created'], revision: 1 };
+export async function GET({ query, batch })  { /* SELECT pending rows → [{ id, content }] */ }
+export async function POST({ query, batch }) { /* store batch.docs[].chunks[].embedding */ }
+```
+
+pgvector is provisioned in the workspace, so migrations can declare `vector(1536)` columns and search is plain SQL in `server/` handlers — the sandbox bag gains `embed(name, text)` for query-time vectors from the same model as the stored corpus. Triggers (deploy backfill, `on:` events, cron, manual `_run` route) coalesce under a single-flight lease. The App admin panel's **Embeddings** tab shows per-use-case pump status (queued/running/failed/up to date, last run, last error, skipped docs) with a **Run now** action — the usual dev loop. Pump handlers are never reachable through the app's own API or webhooks and never appear in `openapi.json`. Full `app` type only, not legacy Magic Reports.
+
+Load `references/embeddings.md` for: the use-case file contract (`config` strictness, `GET`/`POST` batch shapes), revision semantics (author bump + platform model repoint both surface as re-embed work), failure tombstones (`skipped: true` re-reporting), chunking profiles, pgvector migration + search examples, the status and `_run` routes, deploy behavior and gotchas.
+
+## Channels — overview
+
+Informer **2026.1.3+**, origin-mode servers only. Apps can push **live updates to every open page** over a WebSocket Informer owns for them. Name a channel (a relay of events you already `emit()`, or a gated one under `channels/`), subscribe on the page, and `broadcast()` from any server-side handler — no socket code, no credentials, no Redis in the App. **Requires an origin-mode server** (`app.appsBaseUrl`); on a path-mode server the deploy warns (`channels_require_origin_mode`) and `__INFORMER__.channel()` throws `origin_mode_required`.
+
+```yaml
+# informer.yaml — every emit('order_created') is also broadcast to `orders`
+channels:
+  orders:
+    description: Live order activity
+    on: [order_created, order_shipped]
+```
+
+```javascript
+// server/orders/[id]/approve.js — broadcast is in every handler bag (routes, webhooks, tools, channel handlers)
+export async function POST({ query, request, broadcast }) {
+    const [order] = await query(`UPDATE orders SET status = 'approved' WHERE id = $1 RETURNING *`, [request.params.id]);
+    await broadcast(`orders/${order.region}`, 'approved', order);   // fire-and-forget, at-most-once, no DB row
+    return order;
+}
+```
+
+```javascript
+// on the page — lazy: nothing connects until the first on()
+__INFORMER__.channel('orders/east').on('approved', (order, frame) => refreshRow(order));
+```
+
+Rule of thumb: **if you'd be upset it was lost, `emit`; if it'd be stale in a second anyway, `broadcast`.** A channel with no `channels/` file is open to every viewer of the App; `@user/<username>` is private to that user with no file needed.
+
+Load `references/channels.md` for: the harness/App ownership model and the origin-mode requirement, the `channels:` field reference and relay rules, `channels/` handlers (`config.roles`, `join` must return exactly `true`, `leave` never throws, the bag carries `channel` + `payload` + `request` and no `respond`), the `broadcast()` error table, the full client API (error codes `join_refused` / `rate_limited` / `disconnected` / `origin_mode_required` / `not_supported`, auto-reconnect with backoff), the React hook, limits, what dev mode does and doesn't enforce, and the phase-2 `send()` note.
+
+## Streams — overview
+
+Files and large result sets move through **staged byte streams** — the bytes never enter the isolate. The page stages an upload with `__INFORMER__.upload(file)` and hands your route only the id; the route gets a **handle** whose methods ask the host to move bytes (`COPY FROM STDIN` into a table, bind as a `bytea` parameter). Exports go the other way: `downloads.create()` → `fromQuery(sql)` streams Postgres → browser, and returning the handle makes it the response.
+
+```javascript
+// server/import.js — a 100k-row CSV lands in about half a second; the handler never holds a row
+export async function POST({ request, uploads, query }) {
+    const upload = await uploads.get(request.body.uploadId);
+    await query('CREATE TEMP TABLE staging (LIKE orders INCLUDING ALL)');
+    await upload.copyInto('staging', { header: true });
+    await query('INSERT INTO orders SELECT * FROM staging ON CONFLICT (id) DO UPDATE SET total = EXCLUDED.total');
+    await upload.discard();
+}
+
+// server/export.js — return the handle: Content-Disposition: attachment; filename="orders.csv"
+export async function GET({ downloads }) {
+    const dl = await downloads.create({ filename: 'orders.csv' });
+    await dl.fromQuery('SELECT id, customer, total FROM orders ORDER BY id');
+    return dl;
+}
+```
+
+Rule of thumb: **into a table → `copyInto()`; into a column → the handle as a parameter; into the isolate → only under 10 MB (`text()` / `json()` / `extractText()`).** Informer 2026.1.3+; older servers have no `uploads` / `downloads` in the bag, so feature-detect rather than assume.
+
+Load `references/streams.md` for: the page helper's options (chunking, concurrency, retry, abort, resume + the fingerprint rule), the `_uploads` / `_downloads` route protocol and the six limits, `copyInto` options and identifier rules, `writeRows` / `write` / `end` / `dl.url` and the three delivery shapes, single-use downloads and `?keep`, the inline cap and the error table, which handler surfaces have streams (not channel handlers), and the dev-server emulation gaps.
 
 ## App Context
 
@@ -726,7 +853,10 @@ const appId = window.__INFORMER__?.report?.id;
 const appName = window.__INFORMER__?.report?.name;
 const theme = window.__INFORMER__?.theme; // 'light' or 'dark'
 const roles = window.__INFORMER__?.roles; // string[] of assigned role IDs
+const user = window.__INFORMER__?.user;   // { username, displayName } of the signed-in viewer
 ```
+
+`user` is present on every render (main app and widgets). Its main job is naming the viewer's private channel — `` `@user/${__INFORMER__.user.username}` `` — see `references/channels.md`.
 
 When the page is rendering a **widget entry** (not the main app), the context object also carries widget metadata:
 
@@ -736,7 +866,7 @@ const widget = window.__INFORMER__?.widget; // { id, label } when rendering a wi
 
 Use this to branch behavior between the main app surface and a widget render (different fetch URLs, different DOM layout, etc.).
 
-In dev mode, the Vite plugin mocks this with placeholder values (theme defaults to `'light'`, roles defaults to `[]`, no widget context).
+In dev mode, the Vite plugin mocks this with placeholder values (theme defaults to `'light'`, roles defaults to `[]`, user defaults to `{ username: 'dev', displayName: 'Local Developer' }` — override with `mock.user` — no widget context).
 
 ### Responding to theme
 
@@ -907,6 +1037,24 @@ export default {
 };
 ```
 
+## App Accounts & Public Serving — overview
+
+Informer **2026.2.0+**, origin-mode servers only. On deployments with per-app origins, an app can face the WORLD, not just
+Informer users: `public: true` serves the page + assets anonymously,
+`server/public/**` handlers dispatch with no session (`/api/public/...`,
+`request.user = null`), and `accounts.issuers` gives the app its OWN
+sign-up/login (`/_auth/signup|login|logout|reset`) with platform-held
+credentials — plus OIDC (`/_auth/oidc/{name}`), a ready-made
+"Sign in with Informer" link (`/_auth/informer`), and acceptance of other
+apps' users (`accounts.accept`). Every door yields one unified
+`request.user` (`{ id, issuer, subject, email, name, claims }`; Informer
+viewers also keep `username`/`displayName`), and `request.roles` combines
+the issuer's default with Users-tab grants. Account sessions can never call
+platform APIs — the app's own routes are their surface.
+
+Load `references/accounts-and-login.md` for the full route table, manifest
+shapes, and limits before building any of this.
+
 ## Built-in App Copilot — overview
 
 Every Informer App gets a **built-in AI copilot sidebar** — a chat panel that slides in from the right side of the app window. Hidden by default; activates automatically when the app calls `registerTool()`, or explicitly via `showCopilot()`, or via a paint-your-own button that calls `openChat({ prompt, context, instructions })`.
@@ -949,7 +1097,7 @@ agents:
     cron: "0 8 * * 1-5"
 ```
 
-Tools live in `tools/` and share the same V8 sandbox as server route handlers. A tool exports a named `handler` that receives a **single bag** with the same service surface as routes/webhooks — `context` (typed deps), `query`, `transaction`, `fetch`, `emit`, `notify`, `email`, `crypto`, `markdown`, `log`, `env` — plus `args` (the AI tool input) and `run` (`{ appId, agentId, runId, trigger }`):
+Tools live in `tools/` and share the same V8 sandbox as server route handlers. A tool exports a named `handler` that receives a **single bag** with the same service surface as routes/webhooks — `context` (typed deps), `query`, `transaction`, `fetch`, `emit`, `broadcast`, `notify`, `email`, `crypto`, `markdown`, `log`, `env` — plus `args` (the AI tool input) and `run` (`{ appId, agentId, runId, trigger }`):
 
 ```javascript
 // tools/notifications/send_email.js
@@ -1080,15 +1228,23 @@ The orientation above points to each file; this is the canonical list of what's 
 | `references/server-routes.md` | `server/` handlers, full sandbox-helper reference (`query`, `transaction`, `fetch`, `respond`, `notify`, `email`, `log`, `crypto`, base64/markdown globals), `config.timeout` / `config.roles`, worked CRUD example |
 | `references/webhooks.md` | `webhooks/` handlers, signed `?token=` flow, HMAC verification (`crypto.verifyHmac`), how webhooks differ from server routes (inbound identity only — same handler bag) |
 | `references/persistence.md` | `migrations/`, dev workspace lifecycle, CRUD worked example |
+| `references/embeddings.md` | The `embeddings/` folder — declarative vector embeddings via the platform pump (`config` + `GET`/`POST` contract), revision/re-embed semantics, tombstoned failures, pgvector columns + `embed(name, text)` search, status/`_run` routes |
+| `references/ui-quality.md` | The six UI non-negotiables in depth — mobile-first layout, layout-shift prevention (skeletons, reserved dimensions, stable dialogs), TanStack Query freshness rules, sortable tables / AG Grid Community, spacing and vertical rhythm, icon brightness and where each icon surface comes from (gallery, tab, home-screen tile, marketplace, PWA manifest) |
 | `references/widgets.md` | `widgets:` declaration, self-contained HTML template, iframe constraints, SVG charts without libraries |
 | `references/copilot.md` | `openChat()` / `showCopilot()` / `registerTool()`, AI completion endpoints (`_chat` / `_completion` / `_object`), `useChat` hook pattern, defensive `_object` parsing |
 | `references/agents.md` | `agents:` declaration, `tools/*.js`, event chaining via `emit()`, cron lifecycle, toolkits/assistants, agent REST API |
+| `references/channels.md` | Live broadcast to open pages — origin-mode requirement, `channels:` relay block, `channels/` handlers (`config` / `join` / `leave`, the channel bag), `broadcast()` + error table, `@user/<username>`, the `__INFORMER__.channel()` client API (error codes, reconnect), `broadcast()` vs `emit()`, limits, dev-mode coverage, phase-2 `send()` |
+| `references/streams.md` | Staged uploads/downloads — `__INFORMER__.upload()` on the page, `uploads.get(id)` → `copyInto()` / bytea parameter / inline reads under the 10 MB cap, `downloads.create()` → `fromQuery()` / `writeRows()` / `return dl` / `dl.url`, the six limits, error table, dev-server emulation gaps |
 | `references/mcp.md` | The `mcp/` folder, `mcp/` vs `tools/` split, writing tools for a context-free caller, identity (`runAs` / `run.user` / `run.roles`, workspace-not-per-caller), the per-app endpoint, OAuth discovery + DCR connect flow, curl testing, observability |
 | `references/informer-yaml.md` | Full `informer.yaml` schema deep dive — slot fields, `$user.*` variables, modernizing legacy `access:` blocks, declaring env-var keys with `env:` |
 | `references/docs-html.md` | In-gallery `docs.html` page, in-app `?` help button, `README.md` fallback |
 | `references/api-reference.md` | Raw API surface behind the typed-slot proxy (useful for diagnostics) |
 | `references/app-templates.md` | HTML/CSS/JS starter snippets — charts, layouts |
 | `references/wasm-workers.md` | Running WASM / Web-Worker libs in the sandbox — why `new Worker(url)` fails on the opaque origin, the local-bundle + blob-worker pattern, handing wasm to the worker as a blob URL, external fetch targets as `data` Approved Resources, loading Informer data into the engine |
+| `references/warehouse-etl.md` | Warehouse / ETL apps — the sync-route pattern, `load()` forms (replace / append / upsert with key + prune, multi-table `into`, `dryRun`, batch hooks), streaming ingest, `schedule()`, `automations:`, the run ledger and its SSE surface, what the warehouse UI must cover |
+| `references/connector-gotchas.md` | Per-connector traps for source walkers (QuickBooks, Salesforce, …) — hidden inactive rows, pagination quirks, incremental watermark fields, deletion detection |
+| `references/semantics.md` | `semantics.yaml` grammar (types / units / enum values, `decimals`, computed `expr`, `bins`), locale overlays, categories and links, the `exposure` policy, the resolved layers (tenant over vendor over scan) |
+| `references/accounts-and-login.md` | Public serving (`public: true`, `server/public/**`), the app's own accounts (`accounts.issuers`, `/_auth/*`), OIDC and "Sign in with Informer", `request.user` / `request.roles`, limits |
 
 ## Terminology Note
 

@@ -2,7 +2,7 @@
 
 > **Load this reference when:** writing handler files under `server/`, working with the V8 sandbox helpers (`query`, `transaction`, `fetch`, `respond`, `notify`, `email`, `log`, `crypto`, the base64/markdown/extractText globals), configuring per-handler `timeout` or `roles`, or wiring frontend calls to `/api/...`.
 >
-> **Not in this file:** public token-gated webhook endpoints — see `webhooks.md`. Agent tool handlers — see `agents.md` (they share the same sandbox, so this file is the authoritative sandbox reference). The typed dep proxy (`context.<slot>.<method>()`) — see SKILL.md "Accessing Your Dependencies".
+> **Not in this file:** public token-gated webhook endpoints — see `webhooks.md`. Agent tool handlers — see `agents.md` (they share the same sandbox, so this file is the authoritative sandbox reference). Live broadcast to open pages (`broadcast()`, `channels/` handlers, the page-side `channel()` API) — see `channels.md`. The typed dep proxy (`context.<slot>.<method>()`) — see SKILL.md "Accessing Your Dependencies".
 
 Apps can include **server-side JavaScript handlers** that run on the Informer server in sandboxed V8 isolates. These handlers have direct access to the app's Postgres workspace and can make authenticated API calls — ideal for business logic, data transformations, webhooks, or anything that shouldn't run in the browser.
 
@@ -63,11 +63,15 @@ Each handler function receives a single context object with these properties:
 | `context` | `object` | Typed dep proxies keyed by slot name. Call deps as `context.<slotName>.<method>(args)`. Methods per `target`: `dataset` → `search(esQuery)` / `fields()`; `query` → `execute(params)`; `datasource` → `query(payload)`; `integration` → `request(opts)`. Throws boom 422 with `errorCode: 'dependency_unbound'` if the installer hasn't bound the slot yet, or `'dependency_broken'` if the bound target was deleted. Prefer this over raw `fetch()` — slots survive bundle export/import and resource renames; raw paths don't. |
 | `respond` | `async (response) => void` | Send an early HTTP response while the handler continues running in the background. Accepts the same shape as a synchronous return — a response object (`{ status, headers?, body?, encoding? }`) or any plain value (wrapped as 200 JSON). See [Using `respond()`](#using-respond). |
 | `emit` | `async (event, payload) => void` | Emit an app event to trigger agents. Creates an `AppEvent` record and notifies the event dispatcher. |
+| `broadcast` | `async (channel, event, payload?) => { ok: true }` | Push a fire-and-forget, at-most-once frame to every open page subscribed to `channel` (origin-mode servers only). No DB row, no delivery report; rejects on a bad channel/event name, a payload over 64 KiB, or the App's rate limit. The live counterpart of `emit()` — see `channels.md`. **2026.1.3+** |
+| `uploads` | `object` | Resolve a file the page staged with `__INFORMER__.upload()` — `uploads.get(id)` returns a handle (`copyInto(table)`, `text()`, `json()`, `extractText()`, `discard()`; the handle itself binds as a `bytea` query parameter). Bytes never enter the isolate. See `streams.md`. **2026.1.3+** |
+| `downloads` | `object` | Stage bytes for the browser — `downloads.create({ filename })` returns a handle (`fromQuery(sql)`, `writeRows(rows)`, `write(chunk)`, `end()`, `url`); return it or `respond()` with it to stream it as the response. See `streams.md`. **2026.1.3+** |
 | `notify` | `async (username, message) => { id }` | Enqueue a push notification for delivery to a user's Informer GO devices. See [Using `notify()`](#using-notify). |
 | `email` | `async (to, message) => { id }` | Enqueue an email for delivery via the tenant's mail transport. See [Using `email()`](#using-email). |
 | `crypto` | `object` | Cryptographic helpers (all async): `hmac`, `hash`, `randomUUID`, `randomBytes`, `timingSafeEqual`, `verifyHmac`, `encrypt`/`decrypt` (AES-256-GCM), `verify`. See [Using `crypto`](#using-crypto). |
 | `log` | `function` | Structured logging. `log(message, data?)` or `log.info()`/`log.warn()`/`log.error()`/`log.debug()`. Writes to `app_log`. See [Using `log()`](#using-log). |
 | `env` | `object` | App environment variables — decrypted values from the app's Environment. Set in **Admin → Environment**; declared keys in `informer.yaml` `env:` arrive as unset placeholders for the installer to fill per tenant. Encrypted at rest; never returned by any API. |
+| `platform` | `{ version, capabilities }` | What the platform offers: the Informer build version and the app type's capability flags (`serverRoutes`, `webhooks`, `mcp`, `storage`, `embeddings`, …). Feature-detect with `platform.capabilities.<name>` instead of probing for a helper or comparing versions; the same object is `window.__INFORMER__.platform` in the browser. Informer ≥ the release carrying I5-12984; absent on older servers (treat a missing `platform` as "unknown"). **2026.1.3+** |
 | `request` | `object` | The incoming request (see below). |
 
 **Sandbox globals (available without destructuring):**
@@ -154,6 +158,15 @@ export async function POST({ query, request }) {
 export async function DELETE({ query, request }) {
     await query('DELETE FROM orders WHERE id = $1', [request.params.id]);
     // implicit 204
+}
+```
+
+**Download handle** — the staged bytes stream as the response body, with the handle's filename and content type (see `streams.md`):
+```javascript
+export async function GET({ downloads }) {
+    const dl = await downloads.create({ filename: 'orders.csv' });
+    await dl.fromQuery('SELECT * FROM orders');
+    return dl;   // or: return await dl.end()
 }
 ```
 
@@ -418,7 +431,7 @@ export async function POST({ query, log, request }) {
 - Logging is **fire-and-forget** — it never blocks or throws. If the log write fails, it's silently dropped.
 - The `source` field is set automatically based on where the handler runs: `'server'` for server routes, `'webhook'` for webhook handlers, `'tool'` for agent tool handlers.
 - Correlation fields are set automatically based on context: `invocationId` for server routes and webhooks; `agentId` and `runId` for agent tool handlers. You don't need to pass them.
-- Available in **server routes**, **webhook handlers**, and **agent tool handlers**.
+- Available in **server routes**, **webhook handlers**, **agent tool handlers**, and **channel handlers** (`channels/` `join` / `leave` — logged with `source: 'server'`).
 
 ## Handler Config
 
@@ -448,6 +461,8 @@ export async function POST({ query, request }) {
 | `timeout` | `number` | `30000` | Wall-clock timeout in ms. Handler is killed if it exceeds this. |
 | `roles` | `string[]` | `[]` (open) | If set, only viewers with at least one matching role can call this route. Returns 403 otherwise. |
 | `api` | `'public'` | (internal) | Marks this file's routes as part of the App's **public API** — advertised in its `openapi.json` contract for other Apps to build on. |
+
+**`config`, `schema`, and `description` are read as literals.** The deploy scanner lifts `export const config = { … }` (and `export const schema = { … }`, `export const description = '…'`) out of the source text and evaluates each on its own, with none of the file's imports in scope. Write them as self-contained literals directly on the `export const`: no identifiers from imports (`enum: STATUS_OPTIONS`), no spreads of imported objects, no `export { config }` re-export. A `config` that can't be evaluated **fails the deploy** (it may carry the role gate); a `schema` or `description` that can't be evaluated is **dropped with a deploy warning** and the route publishes with no contract. Need the same values at runtime? Keep the literal in the handler and import it from there, or mirror it in a `lib/` module with a test pinning the copy.
 
 ### Describing your routes for consumers
 
@@ -569,7 +584,7 @@ Any other content type (including images) throws. For a PDF or image you want an
 
 ## Imports
 
-Files under `server/`, `webhooks/`, and `tools/` are bundled at deploy by an esbuild plugin that resolves imports **only against the app's own library** — the host filesystem and `node_modules` are invisible.
+Files under `server/`, `webhooks/`, `tools/`, `mcp/`, `channels/`, and `embeddings/` are bundled at deploy by an esbuild plugin that resolves imports **only against the app's own library** — the host filesystem and `node_modules` are invisible.
 
 **Use relative imports only** (`./foo`, `../shared/util.js`); implicit `.js` / `.json` / `/index.js` resolution works. The bundler rejects (and `npm run deploy` fails on):
 
@@ -588,6 +603,7 @@ Server handlers run in a sandboxed V8 isolate. This means:
 - **No Node.js APIs** — no `require()`, `fs`, `http`, `process`, `Buffer`, etc. The bundler blocks these as imports (see [Imports](#imports) above); even if you got one past the bundler, the runtime has no Node module system to load it.
 - **No network access** — all external calls must go through `fetch()` (which enforces the whitelist)
 - **No filesystem** — use `query()` for persistence
+- **Files and large data bypass the isolate** — `uploads` / `downloads` handles move bytes host-side (staging store ↔ Postgres ↔ browser); only `text()` / `json()` / `base64()` / `extractText()` bring bytes in, capped at 10 MB. See `streams.md`.
 - **`btoa()` and `atob()` are available** — base64 encode/decode strings (Latin-1 only, per spec)
 - **UTF-8 base64 helpers** — `base64Decode()`, `base64Encode()`, `base64UrlDecode()`, `base64UrlEncode()` are async functions that correctly handle multi-byte UTF-8 characters (e.g. smart quotes, emoji). **Prefer these over `atob()`/`btoa()` for any text that may contain non-ASCII characters.**
 - **`markdown(text)`** — async function that converts markdown text to HTML using `marked`. Useful for generating formatted email bodies.
@@ -749,3 +765,5 @@ Server routes run locally during `npm run dev` via Vite's `ssrLoadModule()`. The
 4. Supports HMR — editing a server handler file takes effect immediately without restarting
 
 No extra configuration is needed beyond having `.env` set up with `INFORMER_URL` and credentials. If your handlers use `query()`, ensure `migrations/` exists so the workspace is auto-provisioned (see `persistence.md`).
+
+**Not emulated in dev.** The dev handler bag carries `request`, `context`, `query`, `fetch`, `respond`, `emit`, `notify`, `email`, `crypto`, `markdown`, `log`, and `env` — but not `transaction()`, `extractText()`, the `base64*` helpers, or `embed()`, and the embedding pump never runs locally. A handler that uses one of those runs only against a deployed app; feature-detect (`typeof embed === 'function'`) if the same file must also load in dev.

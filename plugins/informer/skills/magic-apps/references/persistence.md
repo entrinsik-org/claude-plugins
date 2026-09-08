@@ -2,7 +2,7 @@
 
 > **Load this reference when:** the app needs to store its own data (form submissions, workflow state, anything that isn't backed by a dataset/datasource/integration). Covers the `migrations/` directory, the dev-workspace lifecycle (`workspace:init` / `:migrate` / `:reset`), and how published apps read/write workspace data through server routes.
 >
-> **Not in this file:** raw `query()` calling shape and parameter binding — see `server-routes.md`. Datasource/dataset queries (those are deps, not workspace) — see SKILL.md "Accessing Your Dependencies".
+> **Not in this file:** raw `query()` calling shape and parameter binding — see `server-routes.md`. Datasource/dataset queries (those are deps, not workspace) — see SKILL.md "Accessing Your Dependencies". Tables LOADED from sources on a cadence (a warehouse: sync routes, `load()`, schedules) — see `warehouse-etl.md`, which layers on top of this file.
 
 Apps can opt into a **dedicated Postgres schema** for storing and querying custom data. This is ideal for apps that need CRUD operations, form submissions, workflow state, or any data that belongs to the app itself rather than coming from external datasources or datasets.
 
@@ -60,6 +60,33 @@ CREATE INDEX line_items_order_idx ON line_items (order_id);
 - Each migration runs exactly once — Informer tracks completed migrations in a `_migrations` table
 - Migrations are **append-only** — never modify a migration that has already been deployed. Add a new file instead.
 - Each migration runs in its own transaction
+
+## Capability-gated migrations (Informer ≥ the release carrying I5-12984)
+
+A migration whose DDL needs something not every install has (today: the
+`vector` type from pgvector) opens with a directive on its leading comment
+lines:
+
+```sql
+-- requires: embeddings
+CREATE TABLE ticket_embeddings (ticket_id INTEGER NOT NULL, embedding vector(1536) NOT NULL);
+```
+
+Where every listed capability is available the file runs normally. Where one
+is missing it is **skipped without being recorded** (the deploy continues and
+lists it under `skippedMigrations`), stays pending, and applies on the first
+deploy after the capability arrives. So a gated migration must be
+self-contained: its own tables/indexes, nothing later assuming it ran.
+Capability names are `platform.capabilities` flags; `embeddings` also needs
+pgvector present in the workspace database. An unknown name fails the deploy
+(422) naming the known ones. Only the leading comment block is read.
+
+**Older Informer releases ignore the directive and run the file as plain
+SQL** (a `vector(1536)` column then fails the deploy, and a failed app
+migration aborts the whole install/update). An app that must also install on
+them keeps such DDL out of numbered migrations and creates it idempotently
+from the code path that needs it (for embeddings: the pump's `GET`, which
+only ever runs where the feature exists).
 
 ## Querying the Workspace
 
