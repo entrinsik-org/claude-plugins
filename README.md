@@ -9,38 +9,142 @@ Claude Code plugins for Informer development.
 /plugin install informer@entrinsik-plugins
 ```
 
-## Beta and alpha channels
+## Channels
 
-Docs for Informer features that have not shipped yet live on two integration
-branches, each published from this same marketplace as its own plugin:
+The stable plugin tracks what has shipped. Docs for features in unreleased
+Informer versions live on two integration branches, each published from this
+same marketplace as its own plugin:
 
 | Channel | Branch | Plugin | Version | Carries |
 |---|---|---|---|---|
-| Beta | `beta` | `informer-beta` | `5.3.0-beta.N` | Docs for the next Informer release (2026.1.3: App Channels, App Embeddings, App Streams) |
+| Stable | `main` | `informer` | `5.N.0` | Docs for shipped Informer releases |
+| Beta | `beta` | `informer-beta` | `5.3.0-beta.N` | The next Informer release (2026.1.3: App Channels, App Embeddings, App Streams) |
 | Alpha | `alpha` | `informer-alpha` | `5.4.0-alpha.N` | Everything on beta plus the release after it (2026.2.0: warehouses and ETL, row security, semantics, app accounts) |
 
-Alpha stacks on beta, so install one, not both. Bumping a branch's prerelease
-suffix is what delivers an update to its installs. When an Informer release
-goes GA its docs promote to `main` and the suffix drops; when the following
-release reaches beta, alpha's content moves to `beta` as `5.4.0-beta.1`.
+Alpha stacks on beta, so an alpha install already has everything beta has.
+Pick the channel that matches the Informer version your app targets:
 
 ```
 /plugin install informer-beta@entrinsik-plugins     # or informer-alpha@entrinsik-plugins
-/plugin disable informer@entrinsik-plugins          # while testing — every channel advertises the same skill triggers
+/plugin disable informer@entrinsik-plugins          # while testing: every channel advertises the same skill triggers
 ```
 
-Channel skills are addressed as `/informer-beta:<skill-name>` or
-`/informer-alpha:<skill-name>`. Third-party marketplaces do not auto-update,
-so pick up a newer build with `/plugin marketplace update entrinsik-plugins`
-followed by `/plugin update informer-beta` (or `informer-alpha`).
+Channel skills are addressed as `/informer-beta:<skill-name>` and
+`/informer-alpha:<skill-name>`; the namespace comes from the marketplace entry,
+not the plugin manifest. Third-party marketplaces do not auto-update:
 
-Working on the skills themselves? Skip the marketplace and load your checkout
-directly: `claude --plugin-dir plugins/informer` from the `beta` or `alpha`
-branch, and `claude plugin validate plugins/informer` before pushing.
+```
+/plugin marketplace update entrinsik-plugins
+/plugin update informer-beta                        # or informer-alpha
+```
+
+The channel entries carry no `version`, so every new commit on the branch is
+an update. The prerelease suffix in `plugin.json` is the label you see in
+`/plugin`, and the only way to tell which build you have, since the plugin
+manager shows no commit.
+
+Requires a Claude Code newer than 2.1.66: older builds do not understand the
+`git-subdir` marketplace source and reject the whole marketplace file.
+
+### Two channels side by side
+
+**Per project, from the marketplace.** Install both channels once, then choose
+per repo in `.claude/settings.local.json` (git-ignored, overrides user and
+project scope):
+
+```json
+{
+  "enabledPlugins": {
+    "informer@entrinsik-plugins": false,
+    "informer-beta@entrinsik-plugins": true,
+    "informer-alpha@entrinsik-plugins": false
+  }
+}
+```
+
+Keep one channel enabled per project. Explicit invocation by prefix always
+works, but which skill auto-loads when two enabled ones share a trigger
+description is not defined.
+
+**Per terminal, from checkouts.** One worktree per branch, one session per
+worktree; nothing is installed and `git pull` is the update:
+
+```
+git worktree add ../claude-plugins-beta beta
+git worktree add ../claude-plugins-alpha alpha
+claude --plugin-dir ../claude-plugins-beta/plugins/informer     # terminal 1
+claude --plugin-dir ../claude-plugins-alpha/plugins/informer    # terminal 2
+```
+
+The manifest in every branch is named `informer`, so each session's
+`/informer:magic-apps` is that checkout, overriding the installed stable plugin
+for that session only. This is also the route for working on the skills
+themselves: validate with `claude plugin validate plugins/informer` before
+pushing.
+
+## Release flow
+
+The marketplace manifest never changes across releases; the channel entries
+point at branch names. Only versions move.
+
+Between releases:
+
+- A doc for the **next** release lands on `beta`: PR base `beta`, rebase-merge,
+  suffix bump as the last commit. Then rebase `alpha` onto `beta`, amend
+  alpha's tip bump, force-push alpha.
+- A doc for the **release after** lands on `alpha` only.
+- A fix to **shipped** docs lands on `main`. Then rebase `beta` onto `main` and
+  `alpha` onto `beta`; already-merged commits drop out on their own.
+- A feature that **slips** a release: drop its commits from `beta`, rebase
+  `alpha`, re-apply them on `alpha`.
+
+When the next Informer release goes GA:
+
+1. Cut `release/5.3.0` from beta's tip with one commit that drops the suffix in
+   both plugin manifests and the stable marketplace entry. PR to `main`, merge.
+2. Point `beta` at alpha's tip, rebase it onto `main`, replace the tip bump with
+   `5.4.0-beta.1`, force-push.
+3. Fast-forward `alpha` to `beta`. Alpha diverges again with the first doc for
+   the following release, starting `5.5.0-alpha.1`.
+
+| Moment | `main` | `beta` | `alpha` |
+|---|---|---|---|
+| Now | 5.2.0 | 5.3.0-beta.N (2026.1.3) | 5.4.0-alpha.N (2026.2.0) |
+| 2026.1.3 GA | 5.3.0 | 5.4.0-beta.1 (2026.2.0) | same as beta |
+| First doc past 2026.2.0 | 5.3.0 | 5.4.0-beta.N | 5.5.0-alpha.1 |
+| 2026.2.0 GA | 5.4.0 | 5.5.0-beta.1 | same as beta |
+
+## Contributing a doc for a ticket
+
+1. The product PR names the reference it changes and this repo's branch that
+   carries it. Push that branch before the product PR merges.
+2. Branch from the channel matching the release: `beta` for the next Informer
+   version, `alpha` for the one after. A worktree keeps it out of your main
+   checkout: `git worktree add ../claude-plugins-wt-<topic> -b docs/<topic> origin/beta`.
+3. Write from the product PR's `packages/docs` diff, its route and sandbox
+   specs, and the demo app if there is one. Update every hook the skill relies
+   on: the reference itself, the `SKILL.md` index row, the overview section,
+   the reference-files table, and the bag table in `server-routes.md` when a
+   handler helper changes. State the version floor whenever it differs from the
+   channel's release.
+4. Commit as `docs(magic-apps): <what> (I5-xxxxx)`, then
+   `chore(informer): 5.3.0-beta.N` as the last commit, touching only the two
+   plugin manifests.
+5. Validate and try it: `claude plugin validate plugins/informer`, then
+   `claude --plugin-dir plugins/informer` and ask for something the new section
+   should answer.
+6. PR with base `beta` (or `alpha`), rebase-merge, merged when the product PR
+   merges. For a beta landing, rebase `alpha` afterwards.
+7. Testers run `/plugin marketplace update entrinsik-plugins` and
+   `/plugin update informer-beta`. Nothing further happens at GA: the release
+   commit carries the doc to `main`.
+
+`CLAUDE.md` in this repo carries the same rules in the form Claude follows when
+working here.
 
 ## Available Plugins
 
-### informer (v4.0.0)
+### informer
 
 A growing collection of Informer-development skills under one plugin. Skills are addressed as `/informer:<skill-name>` and auto-load whenever the conversation touches a relevant topic (you don't have to type the slash command — mentioning Informer Apps, `informer.yaml`, widgets, agents, etc. is enough).
 
