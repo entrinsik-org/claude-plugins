@@ -26,6 +26,19 @@
       "author": {
         "name": "Entrinsik"
       }
+    },
+    {
+      "name": "informer-alpha",
+      "source": {
+        "source": "git-subdir",
+        "url": "https://github.com/entrinsik-org/claude-plugins.git",
+        "path": "plugins/informer",
+        "ref": "alpha"
+      },
+      "description": "Alpha channel of the informer plugin: docs for features two Informer releases out, stacked on the beta channel (see README, Beta and alpha channels). Skills are addressed as /informer-alpha:<skill>. Version comes from the alpha branch's plugin manifest.",
+      "author": {
+        "name": "Entrinsik"
+      }
     }
   ]
 }
