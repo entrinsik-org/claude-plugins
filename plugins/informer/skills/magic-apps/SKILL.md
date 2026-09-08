@@ -777,7 +777,7 @@ Load `references/webhooks.md` for: file-convention routing, the `?token=` issuan
 
 ## Embeddings — overview
 
-Apps can maintain **vector embeddings over their own data** declaratively (Informer **2026.1.3+**). Ship an `embeddings/` folder with one file per use case — a `config` export plus `GET` and `POST` handlers — and the platform runs an **embedding pump**: it asks your `GET` what's pending, chunks and embeds the content in billed batches, and hands the vectors to your `POST` to store in your own workspace tables. The platform holds no copy of the corpus and no progress ledger — your `GET`'s anti-join against your own vector table is the watermark.
+Apps can maintain **vector embeddings over their own data** declaratively (Informer **2026.1.3+**). Ship an `embeddings/` folder with one file per use case — `GET` and `POST` handlers plus an optional `config` — and the platform runs an **embedding pump**: it asks your `GET` what's pending, chunks and embeds the content in billed batches, and hands the vectors to your `POST` to store in your own workspace tables. The platform holds no copy of the corpus and no progress ledger — your `GET`'s anti-join against your own vector table is the watermark.
 
 ```javascript
 // embeddings/tickets.js — both halves required; deploy scans the folder like server/
@@ -786,7 +786,7 @@ export async function GET({ query, batch })  { /* SELECT pending rows → [{ id,
 export async function POST({ query, batch }) { /* store batch.docs[].chunks[].embedding */ }
 ```
 
-pgvector is provisioned in the workspace, so migrations can declare `vector(1536)` columns and search is plain SQL in `server/` handlers — the sandbox bag gains `embed(name, text)` for query-time vectors from the same model as the stored corpus. Triggers (deploy backfill, `on:` events, cron, manual `_run` route) coalesce under a single-flight lease. The App admin panel's **Embeddings** tab shows per-use-case pump status (queued/running/failed/up to date, last run, last error, skipped docs) with a **Run now** action — the usual dev loop. Pump handlers are never reachable through the app's own API or webhooks and never appear in `openapi.json`. Full `app` type only, not legacy Magic Reports.
+pgvector is provisioned in the workspace, so migrations can declare `vector(1536)` columns and search is plain SQL in `server/` handlers — every handler bag gains `embed(name, text)` for query-time vectors. It returns **`{ embedding, revision }`**, and the revision is not decoration: filter on it as well as ordering by distance, or a repointed embedding model silently returns near-random neighbours. Triggers (deploy backfill, `on:` events, cron, manual `_run` route) coalesce under a single-flight lease. The App admin panel's **Embeddings** tab shows per-use-case pump status (up to date / indexed with gaps / queued / running / retry scheduled / failed, last run, last error, skipped docs) with a **Run now** action — the usual dev loop. Pump handlers are never reachable through the app's own API or webhooks and never appear in `openapi.json`. Full `app` type only, not legacy Magic Reports.
 
 Load `references/embeddings.md` for: the use-case file contract (`config` strictness, `GET`/`POST` batch shapes), revision semantics (author bump + platform model repoint both surface as re-embed work), failure tombstones (`skipped: true` re-reporting), chunking profiles, pgvector migration + search examples, the status and `_run` routes, deploy behavior and gotchas.
 
