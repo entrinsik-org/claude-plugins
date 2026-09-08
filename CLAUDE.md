@@ -18,6 +18,11 @@ Branch by the Informer release the feature ships in, never by convenience:
 
 - `alpha` stacks on `beta` stacks on `main`, linearly. Rebase, never merge, when
   moving content between them. Both channels are force-pushed on rebase.
+- The plugin manifests (`.claude-plugin/plugin.json`, `.codex-plugin/plugin.json`)
+  carry the branch's identity: `name` is `informer` on `main`, `informer-beta`
+  on `beta`, `informer-alpha` on `alpha`. Claude Code namespaces skills by that
+  `name`, so a channel manifest still named `informer` collides with the stable
+  plugin. The name and the version move together in the tip bump commit.
 - Docs for an unshipped feature never branch from `main`.
 - Confirm the target release from the product PR's base branch
   (`gh pr view <n> --json baseRefName` in the i5 repo) or ask. Never infer it
@@ -53,7 +58,9 @@ Branch by the Informer release the feature ships in, never by convenience:
   manifest changes. Bodies say what changed and why in a few lines.
 - The bump is the last commit on a channel branch and touches only
   `plugins/informer/.claude-plugin/plugin.json` and
-  `plugins/informer/.codex-plugin/plugin.json`. On `main` it also moves the
+  `plugins/informer/.codex-plugin/plugin.json`, setting both `name` and
+  `version`. Promotion between branches is a rename as well as a version
+  change. On `main` it also moves the
   stable entry's `version` in `.claude-plugin/marketplace.json`, which is what
   gates stable updates. Channel entries carry no `version` on purpose: every
   commit on the branch is an update, and the suffix is the visible label.

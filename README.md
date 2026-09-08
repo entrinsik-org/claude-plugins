@@ -30,8 +30,11 @@ Pick the channel that matches the Informer version your app targets:
 ```
 
 Channel skills are addressed as `/informer-beta:<skill-name>` and
-`/informer-alpha:<skill-name>`; the namespace comes from the marketplace entry,
-not the plugin manifest. Third-party marketplaces do not auto-update:
+`/informer-alpha:<skill-name>`. Claude Code takes that prefix from the plugin
+manifest's `name`, not from the marketplace entry, so each channel branch
+names its manifest after the channel in its tip commit; a branch whose
+manifest still said `informer` would list a second `/informer:magic-apps`
+beside the stable one. Third-party marketplaces do not auto-update:
 
 ```
 /plugin marketplace update entrinsik-plugins
@@ -76,11 +79,11 @@ claude --plugin-dir ../claude-plugins-beta/plugins/informer     # terminal 1
 claude --plugin-dir ../claude-plugins-alpha/plugins/informer    # terminal 2
 ```
 
-The manifest in every branch is named `informer`, so each session's
-`/informer:magic-apps` is that checkout, overriding the installed stable plugin
-for that session only. This is also the route for working on the skills
-themselves: validate with `claude plugin validate plugins/informer` before
-pushing.
+Each branch's manifest carries its channel name, so the checkout appears as
+`/informer-beta:magic-apps` or `/informer-alpha:magic-apps` and takes
+precedence over an installed plugin of the same name for that session only.
+This is also the route for working on the skills themselves: validate with
+`claude plugin validate plugins/informer` before pushing.
 
 ## Release flow
 
@@ -100,19 +103,22 @@ Between releases:
 
 When the next Informer release goes GA:
 
-1. Cut `release/5.3.0` from beta's tip with one commit that drops the suffix in
-   both plugin manifests and the stable marketplace entry. PR to `main`, merge.
-2. Point `beta` at alpha's tip, rebase it onto `main`, replace the tip bump with
-   `5.4.0-beta.1`, force-push.
-3. Fast-forward `alpha` to `beta`. Alpha diverges again with the first doc for
-   the following release, starting `5.5.0-alpha.1`.
+1. Cut `release/5.3.0` from beta's tip with one commit that names both plugin
+   manifests `informer` again, drops the suffix, and moves the stable
+   marketplace entry's version. PR to `main`, merge.
+2. Point `beta` at alpha's tip, rebase it onto `main`, and replace the tip bump
+   with one that names the manifests `informer-beta` at `5.4.0-beta.1`.
+   Force-push.
+3. Rebuild `alpha` as `beta` plus one tip commit naming the manifests
+   `informer-alpha` at `5.5.0-alpha.1`. Same content as beta until the first
+   doc for the following release lands.
 
 | Moment | `main` | `beta` | `alpha` |
 |---|---|---|---|
 | Now | 5.2.0 | 5.3.0-beta.N (2026.1.3) | 5.4.0-alpha.N (2026.2.0) |
-| 2026.1.3 GA | 5.3.0 | 5.4.0-beta.1 (2026.2.0) | same as beta |
+| 2026.1.3 GA | 5.3.0 | 5.4.0-beta.1 (2026.2.0) | 5.5.0-alpha.1 (same content as beta) |
 | First doc past 2026.2.0 | 5.3.0 | 5.4.0-beta.N | 5.5.0-alpha.1 |
-| 2026.2.0 GA | 5.4.0 | 5.5.0-beta.1 | same as beta |
+| 2026.2.0 GA | 5.4.0 | 5.5.0-beta.1 | 5.6.0-alpha.1 (same content as beta) |
 
 ## Contributing a doc for a ticket
 
@@ -129,7 +135,7 @@ When the next Informer release goes GA:
    channel's release.
 4. Commit as `docs(magic-apps): <what> (I5-xxxxx)`, then
    `chore(informer): 5.3.0-beta.N` as the last commit, touching only the two
-   plugin manifests.
+   plugin manifests. The manifest `name` stays the branch's (`informer-beta`).
 5. Validate and try it: `claude plugin validate plugins/informer`, then
    `claude --plugin-dir plugins/informer` and ask for something the new section
    should answer.
