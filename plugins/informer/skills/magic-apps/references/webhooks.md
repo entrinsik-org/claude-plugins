@@ -58,7 +58,7 @@ export async function POST({ query, request, fetch, emit, log, crypto, env }) {
 
 | | Server Routes (`server/`) | Webhook Routes (`webhooks/`) |
 |---|---|---|
-| **URL prefix** | `/api/apps/{id}/view/api/_server/` | `/api/apps/{id}/_hook/` |
+| **URL prefix** | `/api/{path}` from app code (externally `/api/apps/{id}/view/api/…`) | `/api/apps/{id}/_hook/` |
 | **Authentication** | Session or app-token (viewer's identity) | Signed `?token=…` query parameter (tenant-scoped, no user session) |
 | **`request.user`** | Current viewer's identity | `null` |
 | **`request.roles`** | Viewer's assigned roles | `[]` |

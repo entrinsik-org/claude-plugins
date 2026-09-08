@@ -126,7 +126,7 @@ html, body {
     //    Widget code never sees the integration UUID or slug, so
     //    installer rebinds don't break this widget. See SKILL.md
     //    "Accessing Your Dependencies" for the three patterns.
-    fetch('/api/_server/widget/balance')
+    fetch('/api/widget/balance')
     .then(r => { if (!r.ok) throw new Error(r.status); return r.json(); })
     .then(data => {
         document.body.innerHTML = '<div class="ready"><!-- your content --></div>';
@@ -240,7 +240,7 @@ Widgets are frontend code — same runtime as the main app's browser-side code. 
 
 ```javascript
 // Pattern A (preferred) — call a server route that uses context.<slot>
-fetch('/api/_server/widget/cash-balance')
+fetch('/api/widget/cash-balance')
     .then(r => r.json())
     .then(({ balance }) => { /* render */ });
 

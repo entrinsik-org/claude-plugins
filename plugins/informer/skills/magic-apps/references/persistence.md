@@ -67,7 +67,7 @@ All database access goes through server-side route handlers (see `server-routes.
 
 For several writes that must all succeed or all roll back, wrap them in the handler's `transaction(fn)` helper (commit-all-or-rollback) — see `server-routes.md`.
 
-End-user code in a published app does not query the workspace directly — call your own server routes via `fetch('/api/_server/...')` and let the server handler use `query()`. A privileged `POST /api/apps/{id}/workspace/_query` endpoint exists for publishers and IDE tooling (it requires the `app:write` permission), but it's not a runtime surface for end-users.
+End-user code in a published app does not query the workspace directly — call your own server routes via `fetch('/api/...')` and let the server handler use `query()`. A privileged `POST /api/apps/{id}/workspace/_query` endpoint exists for publishers and IDE tooling (it requires the `app:write` permission), but it's not a runtime surface for end-users.
 
 ## Local Development with Workspaces
 
@@ -130,14 +130,14 @@ my-order-tracker/
 
 // Load orders
 async function loadOrders() {
-    const response = await fetch('/api/_server/orders');
+    const response = await fetch('/api/orders');
     const orders = await response.json();
     renderOrderTable(orders);
 }
 
 // Create order
 async function createOrder(customer, total) {
-    const response = await fetch('/api/_server/orders', {
+    const response = await fetch('/api/orders', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ customer, total })
@@ -152,7 +152,7 @@ async function createOrder(customer, total) {
 
 // Delete order
 async function deleteOrder(id) {
-    await fetch(`/api/_server/orders/${id}`, { method: 'DELETE' });
+    await fetch(`/api/orders/${id}`, { method: 'DELETE' });
     loadOrders(); // refresh
 }
 
