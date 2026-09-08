@@ -1219,6 +1219,10 @@ The orientation above points to each file; this is the canonical list of what's 
 | `references/api-reference.md` | Raw API surface behind the typed-slot proxy (useful for diagnostics) |
 | `references/app-templates.md` | HTML/CSS/JS starter snippets — charts, layouts |
 | `references/wasm-workers.md` | Running WASM / Web-Worker libs in the sandbox — why `new Worker(url)` fails on the opaque origin, the local-bundle + blob-worker pattern, handing wasm to the worker as a blob URL, external fetch targets as `data` Approved Resources, loading Informer data into the engine |
+| `references/warehouse-etl.md` | Warehouse / ETL apps — the sync-route pattern, `load()` forms (replace / append / upsert with key + prune, multi-table `into`, `dryRun`, batch hooks), streaming ingest, `schedule()`, `automations:`, the run ledger and its SSE surface, what the warehouse UI must cover |
+| `references/connector-gotchas.md` | Per-connector traps for source walkers (QuickBooks, Salesforce, …) — hidden inactive rows, pagination quirks, incremental watermark fields, deletion detection |
+| `references/semantics.md` | `semantics.yaml` grammar (types / units / enum values, `decimals`, computed `expr`, `bins`), locale overlays, categories and links, the `exposure` policy, the resolved layers (tenant over vendor over scan) |
+| `references/accounts-and-login.md` | Public serving (`public: true`, `server/public/**`), the app's own accounts (`accounts.issuers`, `/_auth/*`), OIDC and "Sign in with Informer", `request.user` / `request.roles`, limits |
 
 ## Terminology Note
 
