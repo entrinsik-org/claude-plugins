@@ -132,7 +132,7 @@ access:
     - POST /api/models/go_everyday/_object   # raw API — stays in access
 ```
 
-## `requires:` (platform floor; Informer ≥ the release carrying I5-12984)
+## `requires:` (platform floor; Informer 2026.1.3+ enforces it, older releases ignore the key)
 
 ```yaml
 requires:
@@ -214,7 +214,7 @@ couldn't be re-used across tenants anyway.)
 > plaintext through `GET` responses. Use the Environment tab (or declare keys
 > in `env:`) instead.
 
-## `channels:` (live channel relays)
+## `channels:` (live channel relays; Informer 2026.1.3+, origin mode)
 
 Maps a live channel to the app events it should carry. Every `emit()` of a
 listed event still creates the durable app event (agents trigger as before)

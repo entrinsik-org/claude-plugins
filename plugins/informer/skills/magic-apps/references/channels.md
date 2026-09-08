@@ -3,6 +3,8 @@
 > **Load this reference when:** pushing live updates from the server to every open page of an App — `broadcast(channel, event, payload)` from a route/webhook/tool/channel handler, the `channels:` relay block in `informer.yaml`, gated channels under `channels/` (`join` / `leave` / `config.roles`), the `@user/<username>` private channel, or the page-side `__INFORMER__.channel(name).on(event, fn)` API. Also load it when a user asks for "real-time", "live", "push", "WebSocket", "presence", "typing indicator", or "stop polling".
 >
 > **Not in this file:** durable events and agents (`emit()`) — see `agents.md`. The rest of the handler bag (`query`, `fetch`, `respond`, …) — see `server-routes.md`. Origin mode itself (`app.appsBaseUrl`, per-app hostnames) — see `accounts-and-login.md`.
+>
+> **Availability:** Informer **2026.1.3+** (I5-12980), on an origin-mode server. Older servers have no `broadcast` in the handler bag and no `__INFORMER__.channel`; a path-mode server of any version deploys the app with a warning and `channel()` throws `origin_mode_required`. Feature-detect (`typeof broadcast === 'function'` server-side, `typeof __INFORMER__.channel === 'function'` on the page) and fall back to polling the route you would have broadcast from.
 
 A **channel** is a named place a page subscribes to (`orders`, `orders/east`, `@user/jane`). A server-side handler calls `broadcast(channel, event, payload)`; every subscriber of that channel on every server in the cluster gets the frame a moment later. The App never opens a socket, mints a credential, or touches Redis: it names a channel on the page and broadcasts to it from the server.
 

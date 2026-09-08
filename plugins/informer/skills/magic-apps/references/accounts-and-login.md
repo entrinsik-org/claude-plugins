@@ -1,5 +1,7 @@
 # App Accounts, Public Serving & Login (App API v2 origins)
 
+> **Availability:** Informer **2026.2.0+**, on an origin-mode server. Per-app origins themselves are 2026.1.2+; the `accounts:` manifest block, `public: true`, `server/public/**`, and the `/_auth/*` routes described here do not exist before 2026.2.0, and there is no runtime fallback: an app that must install on older servers keeps its sign-in with Informer's own session and leaves this file alone.
+
 Everything in this file exists **only when the deployment serves apps from
 per-app origins** (`app.appsBaseUrl` configured). On a per-app origin your
 app is a first-class website: it can serve pages to the public, run its own

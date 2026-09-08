@@ -13,12 +13,12 @@ An Informer App is a custom HTML/JS/CSS application that runs inside Informer. I
 - Make authenticated requests to external APIs via integrations (Salesforce, etc.)
 - **Store and query its own data** in a dedicated Postgres workspace (with SQL migrations)
 - **Run server-side JavaScript handlers** in sandboxed V8 isolates (with direct DB access)
-- **Maintain vector embeddings** over its own data declaratively (platform embedding pump + pgvector) for semantic search
-- **Move files and large result sets** (CSV imports, attachments, big exports) without the bytes touching the app's sandbox — staged uploads/downloads
+- **Maintain vector embeddings** over its own data declaratively (platform embedding pump + pgvector) for semantic search (Informer 2026.1.3+)
+- **Move files and large result sets** (CSV imports, attachments, big exports) without the bytes touching the app's sandbox — staged uploads/downloads (2026.1.3+)
 - Render charts, tables, and interactive visualizations
 - Include a **built-in AI copilot** sidebar that can query your data and answer questions in context
 - Define **AI agents** that react to events, execute tools, and chain together for automated workflows
-- Push **live updates** to every open page over a WebSocket Informer owns for it (channels — origin-mode servers)
+- Push **live updates** to every open page over a WebSocket Informer owns for it (channels — 2026.1.3+, origin-mode servers)
 
 Apps are stored in Informer libraries and served through the Informer UI. (You may see the term "Magic Report" in older documentation — Apps are the current name for the same concept.)
 
@@ -51,6 +51,27 @@ This file is the orientation layer. Most topics have a dedicated reference under
 | Running a WASM library or Web Worker in the sandbox (DuckDB-WASM, sql.js, ffmpeg.wasm, pdf.js, ONNX) — the blob-worker pattern, bundling wasm locally, `new Worker` failing with origin `'null'`, external extension fetches | `references/wasm-workers.md` |
 
 The sections that **stay in this file** are the ones nearly every project touches: bootstrapping, local-dev essentials, the dep-access centerpiece, the small surfaces (App Context, HTML5 routing, App Roles, PDF Export). Everything else is one click away in `references/`.
+
+## Feature floors — which Informer release has what
+
+Customers run a spread of Informer versions, so every newer feature carries the release that first shipped it. Pin the target version before proposing anything (After bootstrap, step 1), then read this table against it. A feature whose row is newer than the target is unavailable there: say so, offer the fallback its reference names, and never emit the API hoping the server is newer.
+
+| Feature | Since | Reference |
+|---|---|---|
+| Bare `/api/{path}` app routes; per-app origins (origin mode) | 2026.1.2 | `references/server-routes.md` |
+| `platform` descriptor (`platform.version`, `platform.capabilities`) and the `requires:` manifest key | 2026.1.3 | `references/server-routes.md`, `references/informer-yaml.md` |
+| Live broadcast channels (`broadcast()`, `channels:`, `channels/`) | 2026.1.3 | `references/channels.md` |
+| Declarative embeddings (`embeddings/`, `embed()`, pgvector) | 2026.1.3 | `references/embeddings.md` |
+| Staged uploads/downloads (`uploads`, `downloads`, `__INFORMER__.upload()`) | 2026.1.3 | `references/streams.md` |
+| Warehouse loads (`load()`, the run ledger, `schedule()`, streaming ingest) | 2026.2.0 | `references/warehouse-etl.md` |
+| `semantics.yaml` and the semantic registry | 2026.2.0 | `references/semantics.md` |
+| App accounts and public serving (`accounts:`, `public: true`, `/_auth/*`) | 2026.2.0 | `references/accounts-and-login.md` |
+
+Features not listed have no floor recorded here; where a reference states one inline (the `openapi.json` endpoint needs 2026.1.1, for example), that line wins.
+
+**Learning the target version.** From 2026.1.3 the server tells the app: `window.__INFORMER__.platform.version` on the page and `platform.version` in every handler bag, with `platform.capabilities` for feature flags, and the Vite dev mock mirrors both. Older servers expose nothing to the app, so ask the user which Informer version the app deploys to, or read `requires.informer` from an existing `informer.yaml`. Record the answer as `requires: { informer: '>=<version>' }`: servers from 2026.1.3 refuse a deploy below it, older ones ignore the key.
+
+**Tagging inside a reference.** A whole feature states its floor in the reference's Availability block. A later addition to an existing feature carries the floor on its own row or sentence, bold, as `**2026.1.4+**`.
 
 ## Bootstrapping a New Project
 
@@ -129,16 +150,17 @@ The `.env` template includes both API key and basic auth blocks — uncomment th
 
 Once the project is set up, the typical next moves are:
 
-1. Ask the user what data the app needs (datasets/queries/datasources/integrations) and add `dependencies:` slots to `informer.yaml` — look up `defaultBinding` UUIDs via `GET /api/datasets-list` etc. against the configured `INFORMER_URL`. For an external service the app itself needs (a REST API, Salesforce, and so on), prefer declaring it in the `integrations:` block instead of binding to a pre-existing one — deploy creates the Integration and the slot for you, no UUID and no out-of-band setup. See `references/informer-yaml.md`.
-2. Replace Vite's default `index.html` + `main.js` with the app shell — mobile-first, and with TanStack Query wired at the root for a React app (see the UI Quality Bar below).
-3. If the app stores its own data, scaffold `migrations/` and add a first migration — load `references/persistence.md`.
-   If the data is LOADED from sources on a cadence (a warehouse), load `references/warehouse-etl.md` instead — it layers sync routes, `load()`, and `automations:` schedules on top of plain persistence.
+1. Pin the Informer version the app deploys to: `requires.informer` in an existing `informer.yaml`, `__INFORMER__.platform.version` on a 2026.1.3+ server, or ask. Write it back as `requires: { informer: '>=…' }`. Every step below is gated on it through the Feature floors table.
+2. Ask the user what data the app needs (datasets/queries/datasources/integrations) and add `dependencies:` slots to `informer.yaml` — look up `defaultBinding` UUIDs via `GET /api/datasets-list` etc. against the configured `INFORMER_URL`. For an external service the app itself needs (a REST API, Salesforce, and so on), prefer declaring it in the `integrations:` block instead of binding to a pre-existing one — deploy creates the Integration and the slot for you, no UUID and no out-of-band setup. See `references/informer-yaml.md`.
+3. Replace Vite's default `index.html` + `main.js` with the app shell — mobile-first, and with TanStack Query wired at the root for a React app (see the UI Quality Bar below).
+4. If the app stores its own data, scaffold `migrations/` and add a first migration — load `references/persistence.md`.
+   If the data is LOADED from sources on a cadence (a warehouse), load `references/warehouse-etl.md` instead (Informer 2026.2.0+) — it layers sync routes, `load()`, and `automations:` schedules on top of plain persistence.
    A warehouse meant for BI consumption should also ship semantics — load `references/semantics.md` when writing informer.yaml's siblings or authoring migrations that add tables/columns.
-4. If the app exposes server-side routes, scaffold `server/` — load `references/server-routes.md`.
-5. If the app needs semantic/vector search over its own data, scaffold `embeddings/` use cases (vector tables live in `migrations/`) — load `references/embeddings.md`.
-6. If the app should be usable from an outside AI client (Claude Code/Desktop, Cursor), scaffold `mcp/` with tools written for a context-free caller — load `references/mcp.md`.
-7. If open pages should update live when server code changes something (no polling), add a `channels:` relay block and/or `channels/` handlers — load `references/channels.md` (needs an origin-mode server; confirm before building on it).
-8. If the app imports files or exports large result sets (CSV in, attachments, CSV/JSON out), stage them with `__INFORMER__.upload()` on the page and use the `uploads` / `downloads` handles in `server/` — load `references/streams.md`.
+5. If the app exposes server-side routes, scaffold `server/` — load `references/server-routes.md`.
+6. If the app needs semantic/vector search over its own data, scaffold `embeddings/` use cases (vector tables live in `migrations/`) — load `references/embeddings.md`.
+7. If the app should be usable from an outside AI client (Claude Code/Desktop, Cursor), scaffold `mcp/` with tools written for a context-free caller — load `references/mcp.md`.
+8. If open pages should update live when server code changes something (no polling), add a `channels:` relay block and/or `channels/` handlers — load `references/channels.md` (needs an origin-mode server; confirm before building on it).
+9. If the app imports files or exports large result sets (CSV in, attachments, CSV/JSON out), stage them with `__INFORMER__.upload()` on the page and use the `uploads` / `downloads` handles in `server/` — load `references/streams.md`.
 
 ## Local Development Workflow
 
@@ -753,7 +775,7 @@ Load `references/webhooks.md` for: file-convention routing, the `?token=` issuan
 
 ## Embeddings — overview
 
-Apps can maintain **vector embeddings over their own data** declaratively (ships in an upcoming Informer release). Ship an `embeddings/` folder with one file per use case — a `config` export plus `GET` and `POST` handlers — and the platform runs an **embedding pump**: it asks your `GET` what's pending, chunks and embeds the content in billed batches, and hands the vectors to your `POST` to store in your own workspace tables. The platform holds no copy of the corpus and no progress ledger — your `GET`'s anti-join against your own vector table is the watermark.
+Apps can maintain **vector embeddings over their own data** declaratively (Informer **2026.1.3+**). Ship an `embeddings/` folder with one file per use case — a `config` export plus `GET` and `POST` handlers — and the platform runs an **embedding pump**: it asks your `GET` what's pending, chunks and embeds the content in billed batches, and hands the vectors to your `POST` to store in your own workspace tables. The platform holds no copy of the corpus and no progress ledger — your `GET`'s anti-join against your own vector table is the watermark.
 
 ```javascript
 // embeddings/tickets.js — both halves required; deploy scans the folder like server/
@@ -768,7 +790,7 @@ Load `references/embeddings.md` for: the use-case file contract (`config` strict
 
 ## Channels — overview
 
-Apps can push **live updates to every open page** over a WebSocket Informer owns for them. Name a channel (a relay of events you already `emit()`, or a gated one under `channels/`), subscribe on the page, and `broadcast()` from any server-side handler — no socket code, no credentials, no Redis in the App. **Requires an origin-mode server** (`app.appsBaseUrl`); on a path-mode server the deploy warns (`channels_require_origin_mode`) and `__INFORMER__.channel()` throws `origin_mode_required`.
+Informer **2026.1.3+**, origin-mode servers only. Apps can push **live updates to every open page** over a WebSocket Informer owns for them. Name a channel (a relay of events you already `emit()`, or a gated one under `channels/`), subscribe on the page, and `broadcast()` from any server-side handler — no socket code, no credentials, no Redis in the App. **Requires an origin-mode server** (`app.appsBaseUrl`); on a path-mode server the deploy warns (`channels_require_origin_mode`) and `__INFORMER__.channel()` throws `origin_mode_required`.
 
 ```yaml
 # informer.yaml — every emit('order_created') is also broadcast to `orders`
@@ -1017,7 +1039,7 @@ export default {
 
 ## App Accounts & Public Serving — overview
 
-On deployments with per-app origins, an app can face the WORLD, not just
+Informer **2026.2.0+**, origin-mode servers only. On deployments with per-app origins, an app can face the WORLD, not just
 Informer users: `public: true` serves the page + assets anonymously,
 `server/public/**` handlers dispatch with no session (`/api/public/...`,
 `request.user = null`), and `accounts.issuers` gives the app its OWN
