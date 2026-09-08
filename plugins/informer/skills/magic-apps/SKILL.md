@@ -69,7 +69,9 @@ Customers run a spread of Informer versions, so every newer feature carries the 
 
 Features not listed have no floor recorded here; where a reference states one inline (the `openapi.json` endpoint needs 2026.1.1, for example), that line wins.
 
-**Learning the target version.** From 2026.1.3 the server tells the app: `window.__INFORMER__.platform.version` on the page and `platform.version` in every handler bag, with `platform.capabilities` for feature flags, and the Vite dev mock mirrors both. Older servers expose nothing to the app, so ask the user which Informer version the app deploys to, or read `requires.informer` from an existing `informer.yaml`. Record the answer as `requires: { informer: '>=<version>' }`: servers from 2026.1.3 refuse a deploy below it, older ones ignore the key.
+**Learning the target version.** `GET /api/about` on the target server reports its build version: unauthenticated, unchanged across releases, and what the Vite plugin itself probes at deploy. From 2026.1.3 the running app also sees it as `window.__INFORMER__.platform.version` on the page and `platform.version` in every handler bag, with `platform.capabilities` for feature flags; below that `platform` is absent entirely, so feature-detect with optional chaining (`platform?.capabilities?.channels`). The Vite dev mock reports `version: 'dev'` and its own capability flags. Record the answer as `requires: { informer: '>=<version>' }`: servers from 2026.1.3 refuse a deploy below it, and `@entrinsik/vite-plugin-informer` 2.10.0+ enforces it at deploy against older servers, which ignore the key themselves.
+
+**The Vite plugin has one floor.** Dev-server and deploy support for every 2026.1.3 feature (the channel shim, `embeddings/` upload, the streams emulation, the `platform` mock, the `requires:` gate) arrived together in `@entrinsik/vite-plugin-informer` **2.10.0**. 2.8.0 and 2.9.0 were never published; 2.7.0 is the release before it. Against a server below 2026.1.3, 2.10.0 leaves `channels/` and `embeddings/` on disk, because those releases would serve the folders as static files, and names every feature that would be inert, so a green deploy cannot pass for a working one.
 
 **Tagging inside a reference.** A whole feature states its floor in the reference's Availability block. A later addition to an existing feature carries the floor on its own row or sentence, bold, as `**2026.1.4+**`.
 
@@ -150,7 +152,7 @@ The `.env` template includes both API key and basic auth blocks — uncomment th
 
 Once the project is set up, the typical next moves are:
 
-1. Pin the Informer version the app deploys to: `requires.informer` in an existing `informer.yaml`, `__INFORMER__.platform.version` on a 2026.1.3+ server, or ask. Write it back as `requires: { informer: '>=…' }`. Every step below is gated on it through the Feature floors table.
+1. Pin the Informer version the app deploys to: `requires.informer` in an existing `informer.yaml`, else `GET /api/about` on the server named in `.env` (`INFORMER_URL`), else ask. Write it back as `requires: { informer: '>=…' }`. Every step below is gated on it through the Feature floors table.
 2. Ask the user what data the app needs (datasets/queries/datasources/integrations) and add `dependencies:` slots to `informer.yaml` — look up `defaultBinding` UUIDs via `GET /api/datasets-list` etc. against the configured `INFORMER_URL`. For an external service the app itself needs (a REST API, Salesforce, and so on), prefer declaring it in the `integrations:` block instead of binding to a pre-existing one — deploy creates the Integration and the slot for you, no UUID and no out-of-band setup. See `references/informer-yaml.md`.
 3. Replace Vite's default `index.html` + `main.js` with the app shell — mobile-first, and with TanStack Query wired at the root for a React app (see the UI Quality Bar below).
 4. If the app stores its own data, scaffold `migrations/` and add a first migration — load `references/persistence.md`.
@@ -247,7 +249,7 @@ Builds your project and uploads to Informer:
 8. Uploads `server/` directory (if it exists)
 9. Uploads `webhooks/` directory (if it exists)
 10. Uploads `channels/` directory (if it exists)
-11. Uploads `embeddings/` directory (if it exists) — plugin ≥ 2.8.0; 2.7.0 and earlier never upload the folder
+11. Uploads `embeddings/` directory (if it exists) — plugin 2.10.0+; 2.7.0 never uploads the folder
 12. Uploads `lib/` and `shared/` directories (if they exist). Every source tree drops dotfiles, `node_modules`, and `*.test.js`
 13. Runs deploy: pending SQL migrations + server-route scanning + webhook scanning + embedding use-case scanning + channel scanning (`channels/` handlers + the `channels:` relay block) + handler bundling + tool bundling (`tools/` + `mcp/`) + resource reference validation + agent upsert from `informer.yaml`
     - **Resource refs are validated**: all datasets, queries, datasources, integrations, and toolkits declared in `informer.yaml` must exist — deploy fails with a clear error if any are missing

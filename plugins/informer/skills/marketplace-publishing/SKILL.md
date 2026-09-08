@@ -40,7 +40,7 @@ Both ship in **`@entrinsik/vite-plugin-informer`** (sibling bins to `informer-de
 Track `@latest` — newer capabilities land in later releases, so pin forward, not back. Three
 floors matter: **≥ 2.6.0-beta.1** for `informer-publish` (earlier versions did not package
 `lib/` and `shared/`, so apps with shared server-side modules published incomplete
-archives), **≥ 2.7.0** for `informer-ci`, which did not exist before, and **≥ 2.8.0** for `embeddings/` (2.7.0 and earlier never package the folder, so an app's
+archives), **≥ 2.7.0** for `informer-ci`, which did not exist before, and **≥ 2.10.0** for `channels/` and `embeddings/` (2.7.0, the release before it, never packages either folder, so an app's
 embedding use cases were silently absent from deploys and archives alike).
 
 ## One-time repo setup

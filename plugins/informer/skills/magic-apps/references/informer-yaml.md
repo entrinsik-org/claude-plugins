@@ -147,6 +147,8 @@ Unknown keys and non-semver ranges are refused. Use it only for an app that
 cannot work without a newer platform feature: **older releases never read
 this key**, so an app that should still install on them leaves it out and
 feature-detects at runtime (`platform.capabilities`, see `server-routes.md`).
+`@entrinsik/vite-plugin-informer` 2.10.0+ enforces the range itself at deploy,
+so a declared floor is honoured even against a server that cannot read it.
 
 ## `env:` (environment variables)
 

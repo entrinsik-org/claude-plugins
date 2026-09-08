@@ -4,7 +4,7 @@
 >
 > **Not in this file:** the rest of the handler bag (`query`, `transaction`, `fetch`, `respond`, …) — see `server-routes.md`. Small files that fit a JSON field (base64 in, `base64Decode()` / `extractText(data, type)`) — see `server-routes.md`.
 >
-> **Availability:** Informer **2026.1.3+** (I5-12979). On older servers the handler bag has no `uploads` / `downloads` and the page has no `__INFORMER__.upload` — feature-detect (`if (!uploads)` in a handler, `typeof __INFORMER__.upload === 'function'` on the page) rather than compare versions; there is no `platform.capabilities` flag for streams. The page helper is injected by the server into every deployed app page, so it does not depend on the Vite plugin version; the **dev-server emulation** needs `@entrinsik/vite-plugin-informer` **≥ 2.9.0** (see [Local development](#local-development)).
+> **Availability:** Informer **2026.1.3+** (I5-12979). On older servers the handler bag has no `uploads` / `downloads` and the page has no `__INFORMER__.upload` — feature-detect (`if (!uploads)` in a handler, `typeof __INFORMER__.upload === 'function'` on the page) rather than compare versions; there is no `platform.capabilities` flag for streams. The page helper is injected by the server into every deployed app page, so it does not depend on the Vite plugin version; the **dev-server emulation** needs `@entrinsik/vite-plugin-informer` **2.10.0+** (see [Local development](#local-development)).
 
 ## The model
 
@@ -210,7 +210,7 @@ try {
 
 ## Local development
 
-The Vite plugin (**≥ 2.9.0**) stands in for the harness: an in-memory store behind same-origin `/_uploads` and `/_downloads`, the page helper injected into the dev mock, the same geometry rules, statuses (`412` + `missing`, `409`, `413`) and handle shapes — an app that works here works deployed. The emulation gaps are named in errors, not papered over:
+The Vite plugin (**2.10.0+**) stands in for the harness: an in-memory store behind same-origin `/_uploads` and `/_downloads`, the page helper injected into the dev mock, the same geometry rules, statuses (`412` + `missing`, `409`, `413`) and handle shapes — an app that works here works deployed. The emulation gaps are named in errors, not papered over:
 
 | Production | Dev server |
 |---|---|
