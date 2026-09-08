@@ -1,6 +1,6 @@
 ---
 name: magic-apps
-description: Building Informer Apps with local Vite development. Covers the dev/publish workflow, the centerpiece "Accessing Your Dependencies" model (typed slots + three patterns), and the orientation map for deeper topics (server routes, webhooks, persistence, declarative vector embeddings, widgets, copilot sidebar, event-driven AI agents, live broadcast channels over WebSockets, PDF export, informer.yaml schema, app-to-app/pack API integration and openapi.json contracts, and the UI quality bar every screen must meet: mobile-first responsive layout, no layout shift, TanStack Query freshness after every action, sortable table headers, vertical rhythm, bright distinct icons with the full icon asset set) — each routes to a reference file under `references/` so the front door stays loadable on every trigger.
+description: Building Informer Apps with local Vite development. Covers the dev/publish workflow, the centerpiece "Accessing Your Dependencies" model (typed slots + three patterns), and the orientation map for deeper topics (server routes, webhooks, persistence, declarative vector embeddings, widgets, copilot sidebar, event-driven AI agents, live broadcast channels over WebSockets, staged uploads/downloads for files and large result sets, PDF export, informer.yaml schema, app-to-app/pack API integration and openapi.json contracts, and the UI quality bar every screen must meet: mobile-first responsive layout, no layout shift, TanStack Query freshness after every action, sortable table headers, vertical rhythm, bright distinct icons with the full icon asset set) — each routes to a reference file under `references/` so the front door stays loadable on every trigger.
 ---
 
 # Informer App Development
@@ -14,6 +14,7 @@ An Informer App is a custom HTML/JS/CSS application that runs inside Informer. I
 - **Store and query its own data** in a dedicated Postgres workspace (with SQL migrations)
 - **Run server-side JavaScript handlers** in sandboxed V8 isolates (with direct DB access)
 - **Maintain vector embeddings** over its own data declaratively (platform embedding pump + pgvector) for semantic search
+- **Move files and large result sets** (CSV imports, attachments, big exports) without the bytes touching the app's sandbox — staged uploads/downloads
 - Render charts, tables, and interactive visualizations
 - Include a **built-in AI copilot** sidebar that can query your data and answer questions in context
 - Define **AI agents** that react to events, execute tools, and chain together for automated workflows
@@ -36,6 +37,7 @@ This file is the orientation layer. Most topics have a dedicated reference under
 | Activating the in-app copilot, `openChat()` / `registerTool()`, AI completion endpoints (`_chat` / `_completion` / `_object`), `useChat` hook patterns | `references/copilot.md` |
 | Declaring `agents:` in `informer.yaml`, writing `tools/*.js`, `emit()` chaining, cron, toolkits/assistants integration, agent REST API | `references/agents.md` |
 | Live updates to open pages — "real-time" / "push" / "stop polling" / presence / typing; `broadcast(channel, event, payload)` from a handler, the `channels:` relay block, gated channels under `channels/` (`join` / `leave` / `config.roles`), `@user/<username>`, `__INFORMER__.channel(name).on(event, fn)`, `origin_mode_required` | `references/channels.md` |
+| Moving FILES or large result sets — CSV/Excel import into a workspace table, an attachment into a `bytea` column, a big CSV/JSON/JSONL export, "upload" / "download" / "save as" / "import"; `__INFORMER__.upload(file)` on the page, `uploads.get(id)` → `copyInto()` / bytea parameter / `text()`, `downloads.create()` → `fromQuery()` / `writeRows()` / `return dl` / `dl.url`, the 10 MB inline cap | `references/streams.md` |
 | Exposing tools to outside AI clients (Claude Code/Desktop, Cursor) — the `mcp/` folder, why the folder is the decision, writing for a caller with no context, the per-app endpoint, the OAuth connect flow, who a tool runs as | `references/mcp.md` |
 | Deep `informer.yaml` work — `dependencies:` slot field reference, app-sourced `integrations:` (an app declares and owns an Integration — OAuth, `$env` secrets, icons), RLS via `$user.*`, modernizing a legacy `access:` block, `defaultBinding` lookup, declaring env-var keys with `env:` | `references/informer-yaml.md` |
 | App-to-app/pack APIs — fetching a target's contract (`openapi.json`), typed dev bindings (`.informer/app-deps.d.ts`), public-vs-internal routes, and making your own App integratable (`description`/`schema` exports, `config.api = 'public'`, root `API.md`) | `references/app-api.md` |
@@ -130,6 +132,7 @@ Once the project is set up, the typical next moves are:
 5. If the app needs semantic/vector search over its own data, scaffold `embeddings/` use cases (vector tables live in `migrations/`) — load `references/embeddings.md`.
 6. If the app should be usable from an outside AI client (Claude Code/Desktop, Cursor), scaffold `mcp/` with tools written for a context-free caller — load `references/mcp.md`.
 7. If open pages should update live when server code changes something (no polling), add a `channels:` relay block and/or `channels/` handlers — load `references/channels.md` (needs an origin-mode server; confirm before building on it).
+8. If the app imports files or exports large result sets (CSV in, attachments, CSV/JSON out), stage them with `__INFORMER__.upload()` on the page and use the `uploads` / `downloads` handles in `server/` — load `references/streams.md`.
 
 ## Local Development Workflow
 
@@ -787,6 +790,32 @@ Rule of thumb: **if you'd be upset it was lost, `emit`; if it'd be stale in a se
 
 Load `references/channels.md` for: the harness/App ownership model and the origin-mode requirement, the `channels:` field reference and relay rules, `channels/` handlers (`config.roles`, `join` must return exactly `true`, `leave` never throws, the bag carries `channel` + `payload` + `request` and no `respond`), the `broadcast()` error table, the full client API (error codes `join_refused` / `rate_limited` / `disconnected` / `origin_mode_required` / `not_supported`, auto-reconnect with backoff), the React hook, limits, what dev mode does and doesn't enforce, and the phase-2 `send()` note.
 
+## Streams — overview
+
+Files and large result sets move through **staged byte streams** — the bytes never enter the isolate. The page stages an upload with `__INFORMER__.upload(file)` and hands your route only the id; the route gets a **handle** whose methods ask the host to move bytes (`COPY FROM STDIN` into a table, bind as a `bytea` parameter). Exports go the other way: `downloads.create()` → `fromQuery(sql)` streams Postgres → browser, and returning the handle makes it the response.
+
+```javascript
+// server/import.js — a 100k-row CSV lands in about half a second; the handler never holds a row
+export async function POST({ request, uploads, query }) {
+    const upload = await uploads.get(request.body.uploadId);
+    await query('CREATE TEMP TABLE staging (LIKE orders INCLUDING ALL)');
+    await upload.copyInto('staging', { header: true });
+    await query('INSERT INTO orders SELECT * FROM staging ON CONFLICT (id) DO UPDATE SET total = EXCLUDED.total');
+    await upload.discard();
+}
+
+// server/export.js — return the handle: Content-Disposition: attachment; filename="orders.csv"
+export async function GET({ downloads }) {
+    const dl = await downloads.create({ filename: 'orders.csv' });
+    await dl.fromQuery('SELECT id, customer, total FROM orders ORDER BY id');
+    return dl;
+}
+```
+
+Rule of thumb: **into a table → `copyInto()`; into a column → the handle as a parameter; into the isolate → only under 10 MB (`text()` / `json()` / `extractText()`).** Informer 2026.1.3+; older servers have no `uploads` / `downloads` in the bag, so feature-detect rather than assume.
+
+Load `references/streams.md` for: the page helper's options (chunking, concurrency, retry, abort, resume + the fingerprint rule), the `_uploads` / `_downloads` route protocol and the six limits, `copyInto` options and identifier rules, `writeRows` / `write` / `end` / `dl.url` and the three delivery shapes, single-use downloads and `?keep`, the inline cap and the error table, which handler surfaces have streams (not channel handlers), and the dev-server emulation gaps.
+
 ## App Context
 
 When running inside Informer (not dev mode), the app receives context:
@@ -1159,6 +1188,7 @@ The orientation above points to each file; this is the canonical list of what's 
 | `references/copilot.md` | `openChat()` / `showCopilot()` / `registerTool()`, AI completion endpoints (`_chat` / `_completion` / `_object`), `useChat` hook pattern, defensive `_object` parsing |
 | `references/agents.md` | `agents:` declaration, `tools/*.js`, event chaining via `emit()`, cron lifecycle, toolkits/assistants, agent REST API |
 | `references/channels.md` | Live broadcast to open pages — origin-mode requirement, `channels:` relay block, `channels/` handlers (`config` / `join` / `leave`, the channel bag), `broadcast()` + error table, `@user/<username>`, the `__INFORMER__.channel()` client API (error codes, reconnect), `broadcast()` vs `emit()`, limits, dev-mode coverage, phase-2 `send()` |
+| `references/streams.md` | Staged uploads/downloads — `__INFORMER__.upload()` on the page, `uploads.get(id)` → `copyInto()` / bytea parameter / inline reads under the 10 MB cap, `downloads.create()` → `fromQuery()` / `writeRows()` / `return dl` / `dl.url`, the six limits, error table, dev-server emulation gaps |
 | `references/mcp.md` | The `mcp/` folder, `mcp/` vs `tools/` split, writing tools for a context-free caller, identity (`runAs` / `run.user` / `run.roles`, workspace-not-per-caller), the per-app endpoint, OAuth discovery + DCR connect flow, curl testing, observability |
 | `references/informer-yaml.md` | Full `informer.yaml` schema deep dive — slot fields, `$user.*` variables, modernizing legacy `access:` blocks, declaring env-var keys with `env:` |
 | `references/docs-html.md` | In-gallery `docs.html` page, in-app `?` help button, `README.md` fallback |

@@ -64,6 +64,8 @@ Each handler function receives a single context object with these properties:
 | `respond` | `async (response) => void` | Send an early HTTP response while the handler continues running in the background. Accepts the same shape as a synchronous return — a response object (`{ status, headers?, body?, encoding? }`) or any plain value (wrapped as 200 JSON). See [Using `respond()`](#using-respond). |
 | `emit` | `async (event, payload) => void` | Emit an app event to trigger agents. Creates an `AppEvent` record and notifies the event dispatcher. |
 | `broadcast` | `async (channel, event, payload?) => { ok: true }` | Push a fire-and-forget, at-most-once frame to every open page subscribed to `channel` (origin-mode servers only). No DB row, no delivery report; rejects on a bad channel/event name, a payload over 64 KiB, or the App's rate limit. The live counterpart of `emit()` — see `channels.md`. |
+| `uploads` | `object` | Resolve a file the page staged with `__INFORMER__.upload()` — `uploads.get(id)` returns a handle (`copyInto(table)`, `text()`, `json()`, `extractText()`, `discard()`; the handle itself binds as a `bytea` query parameter). Bytes never enter the isolate. See `streams.md`. |
+| `downloads` | `object` | Stage bytes for the browser — `downloads.create({ filename })` returns a handle (`fromQuery(sql)`, `writeRows(rows)`, `write(chunk)`, `end()`, `url`); return it or `respond()` with it to stream it as the response. See `streams.md`. |
 | `notify` | `async (username, message) => { id }` | Enqueue a push notification for delivery to a user's Informer GO devices. See [Using `notify()`](#using-notify). |
 | `email` | `async (to, message) => { id }` | Enqueue an email for delivery via the tenant's mail transport. See [Using `email()`](#using-email). |
 | `crypto` | `object` | Cryptographic helpers (all async): `hmac`, `hash`, `randomUUID`, `randomBytes`, `timingSafeEqual`, `verifyHmac`, `encrypt`/`decrypt` (AES-256-GCM), `verify`. See [Using `crypto`](#using-crypto). |
@@ -156,6 +158,15 @@ export async function POST({ query, request }) {
 export async function DELETE({ query, request }) {
     await query('DELETE FROM orders WHERE id = $1', [request.params.id]);
     // implicit 204
+}
+```
+
+**Download handle** — the staged bytes stream as the response body, with the handle's filename and content type (see `streams.md`):
+```javascript
+export async function GET({ downloads }) {
+    const dl = await downloads.create({ filename: 'orders.csv' });
+    await dl.fromQuery('SELECT * FROM orders');
+    return dl;   // or: return await dl.end()
 }
 ```
 
@@ -592,6 +603,7 @@ Server handlers run in a sandboxed V8 isolate. This means:
 - **No Node.js APIs** — no `require()`, `fs`, `http`, `process`, `Buffer`, etc. The bundler blocks these as imports (see [Imports](#imports) above); even if you got one past the bundler, the runtime has no Node module system to load it.
 - **No network access** — all external calls must go through `fetch()` (which enforces the whitelist)
 - **No filesystem** — use `query()` for persistence
+- **Files and large data bypass the isolate** — `uploads` / `downloads` handles move bytes host-side (staging store ↔ Postgres ↔ browser); only `text()` / `json()` / `base64()` / `extractText()` bring bytes in, capped at 10 MB. See `streams.md`.
 - **`btoa()` and `atob()` are available** — base64 encode/decode strings (Latin-1 only, per spec)
 - **UTF-8 base64 helpers** — `base64Decode()`, `base64Encode()`, `base64UrlDecode()`, `base64UrlEncode()` are async functions that correctly handle multi-byte UTF-8 characters (e.g. smart quotes, emoji). **Prefer these over `atob()`/`btoa()` for any text that may contain non-ASCII characters.**
 - **`markdown(text)`** — async function that converts markdown text to HTML using `marked`. Useful for generating formatted email bodies.
