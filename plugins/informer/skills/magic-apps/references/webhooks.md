@@ -78,7 +78,7 @@ Webhook handlers receive the **same bag as server routes** (see `server-routes.m
 | `fetch(path, options?)` | Make authenticated API calls (runs as app owner) |
 | `context.<slot>.<method>()` | Typed bound dependencies (see `informer-yaml.md`) |
 | `emit(event, payload?)` | Fire app events (trigger agents) |
-| `broadcast(channel, event, payload?)` | Push a fire-and-forget, at-most-once frame to every open page subscribed to `channel` — the natural way to tell dashboards a webhook landed (origin-mode servers only). See `channels.md`. |
+| `broadcast(channel, event, payload?, options?)` | Push a fire-and-forget frame to every open page subscribed to `channel` — the natural way to tell dashboards a webhook landed (origin-mode servers only). Resolves `{ ok: true, seq }`; pass `{ replay: false }` for frames not worth replaying to a reconnecting page. See `channels.md`. |
 | `notify(user, message)` / `email(to, message)` | Enqueue a push notification / email |
 | `respond(response)` | Send early response while handler continues in background. Same shape as handler return: plain value (wrapped as 200 JSON), `{ status, body }`, or `{ status, headers, body, encoding: 'base64' }` for binary. |
 | `crypto` | `hmac`, `hash`, `randomUUID`, `randomBytes`, `timingSafeEqual`, `verifyHmac`, `encrypt`/`decrypt` (AES-256-GCM), `verify` — all async. Use `verifyHmac` for signature checks. See `server-routes.md`. |

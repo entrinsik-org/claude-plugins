@@ -128,7 +128,7 @@ export async function handler({ args, query, fetch, emit, notify, email, crypto,
 | `query` | `async (sql, params?) => rows` | Execute SQL against the app's workspace |
 | `fetch` | `async (path, options?) => { status, body }` | Make authenticated API calls (subject to whitelist) |
 | `emit` | `async (event, payload) => void` | Emit an event to trigger other agents |
-| `broadcast` | `async (channel, event, payload?) => { ok: true }` | Push a fire-and-forget, at-most-once frame to every open page subscribed to `channel` — e.g. tell the dashboard an agent finished triaging (origin-mode servers only). See `channels.md`. |
+| `broadcast` | `async (channel, event, payload?, options?) => { ok: true, seq }` | Push a fire-and-forget frame to every open page subscribed to `channel` — e.g. tell the dashboard an agent finished triaging (origin-mode servers only). Kept briefly for reconnecting pages unless `options` is `{ replay: false }`. See `channels.md`. |
 | `notify` | `async (username, message) => { id }` | Enqueue a push notification (single or bulk) |
 | `email` | `async (to, message) => { id }` | Enqueue an email (single or bulk) |
 | `crypto` | `object` | `hmac`, `hash`, `randomUUID`, `randomBytes`, `timingSafeEqual`, `verifyHmac`, `encrypt`/`decrypt`, `verify` — all async. See `server-routes.md`. |
