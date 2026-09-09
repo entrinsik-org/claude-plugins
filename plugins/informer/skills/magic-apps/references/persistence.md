@@ -107,6 +107,8 @@ In dev mode, the Vite plugin automatically provisions a **dev workspace** — a 
 
 Server route `query()` calls use this dev workspace automatically during local development.
 
+**Inherited workspace ids.** The plugin walks up parent directories for `.env` files (monorepo fallback), so a new app under a folder whose parent `.env` already carries `INFORMER_DEV_WORKSPACE` inherits **another app's** workspace: `npm run workspace:init` answers "already initialized" and every `query()` runs against that other schema. Plugin **2.11.0+** reads only the app's own `.env` for that check and prints `Ignoring INFORMER_DEV_WORKSPACE=… inherited from the environment`. On an older plugin, put an empty `INFORMER_DEV_WORKSPACE=` line in the app's local `.env` before running init; init overwrites it with the new id. The generated local `.env` also ships `INFORMER_API_KEY=your-api-key`, which overrides working parent credentials until replaced or removed.
+
 **Manual workspace management:**
 
 ```bash

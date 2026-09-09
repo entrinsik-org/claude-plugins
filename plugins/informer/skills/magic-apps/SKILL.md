@@ -1,6 +1,6 @@
 ---
 name: magic-apps
-description: Building Informer Apps with local Vite development. Covers the dev/publish workflow, the centerpiece "Accessing Your Dependencies" model (typed slots + three patterns), and the orientation map for deeper topics (server routes, webhooks, persistence, declarative vector embeddings, widgets, copilot sidebar, event-driven AI agents, live broadcast channels over WebSockets, staged uploads/downloads for files and large result sets, PDF export, informer.yaml schema, app-to-app/pack API integration and openapi.json contracts, and the UI quality bar every screen must meet: mobile-first responsive layout, no layout shift, TanStack Query freshness after every action, sortable table headers, vertical rhythm, bright distinct icons with the full icon asset set) — each routes to a reference file under `references/` so the front door stays loadable on every trigger.
+description: Building Informer Apps with local Vite development. Covers the dev/publish workflow, the centerpiece "Accessing Your Dependencies" model (typed slots + three patterns), and the orientation map for deeper topics (server routes, webhooks, persistence, declarative vector embeddings, widgets, copilot sidebar, event-driven AI agents, live broadcast channels over WebSockets (and messages back from the page: send(), joined, wildcards, replay), staged uploads/downloads for files and large result sets, PDF export, informer.yaml schema, app-to-app/pack API integration and openapi.json contracts, and the UI quality bar every screen must meet: mobile-first responsive layout, no layout shift, TanStack Query freshness after every action, sortable table headers, vertical rhythm, bright distinct icons with the full icon asset set) — each routes to a reference file under `references/` so the front door stays loadable on every trigger.
 ---
 
 # Informer App Development
@@ -18,7 +18,7 @@ An Informer App is a custom HTML/JS/CSS application that runs inside Informer. I
 - Render charts, tables, and interactive visualizations
 - Include a **built-in AI copilot** sidebar that can query your data and answer questions in context
 - Define **AI agents** that react to events, execute tools, and chain together for automated workflows
-- Push **live updates** to every open page over a WebSocket Informer owns for it (channels — 2026.1.3+, origin-mode servers)
+- Push **live updates** to every open page over a WebSocket Informer owns for it, and take messages back from the page over the same socket (channels — 2026.1.3+, origin-mode servers)
 
 Apps are stored in Informer libraries and served through the Informer UI. (You may see the term "Magic Report" in older documentation — Apps are the current name for the same concept.)
 
@@ -39,7 +39,7 @@ This file is the orientation layer. Most topics have a dedicated reference under
 | Declaring `widgets:` in `informer.yaml`, building self-contained HTML cards under `public/widgets/`, iframe quirks | `references/widgets.md` |
 | Activating the in-app copilot, `openChat()` / `registerTool()`, AI completion endpoints (`_chat` / `_completion` / `_object`), `useChat` hook patterns | `references/copilot.md` |
 | Declaring `agents:` in `informer.yaml`, writing `tools/*.js`, `emit()` chaining, cron, toolkits/assistants integration, agent REST API | `references/agents.md` |
-| Live updates to open pages — "real-time" / "push" / "stop polling" / presence / typing; `broadcast(channel, event, payload)` from a handler, the `channels:` relay block, gated channels under `channels/` (`join` / `leave` / `config.roles`), `@user/<username>`, `__INFORMER__.channel(name).on(event, fn)`, `origin_mode_required` | `references/channels.md` |
+| Live updates to open pages and messages back from them — "real-time" / "push" / "stop polling" / presence / typing / chat / cursors; `broadcast(channel, event, payload, { replay })` from a handler, the `channels:` relay block (`on` required), gated channels under `channels/` (`join` / `joined` / `leave` / event exports, `config.roles`), `@user/<username>`, wildcards (`rooms/*`), `__INFORMER__.channel(name, { since }).on(event, fn)` / `.send(event, payload)`, `connected`, frame `seq` and replay after a reconnect, `replay_gap`, `platform.originMode`, `origin_mode_required` | `references/channels.md` |
 | Moving FILES or large result sets — CSV/Excel import into a workspace table, an attachment into a `bytea` column, a big CSV/JSON/JSONL export, "upload" / "download" / "save as" / "import"; `__INFORMER__.upload(file)` on the page, `uploads.get(id)` → `copyInto()` / bytea parameter / `text()`, `downloads.create()` → `fromQuery()` / `writeRows()` / `return dl` / `dl.url`, the 10 MB inline cap | `references/streams.md` |
 | Exposing tools to outside AI clients (Claude Code/Desktop, Cursor) — the `mcp/` folder, why the folder is the decision, writing for a caller with no context, the per-app endpoint, the OAuth connect flow, who a tool runs as | `references/mcp.md` |
 | Deep `informer.yaml` work — `dependencies:` slot field reference, app-sourced `integrations:` (an app declares and owns an Integration — OAuth, `$env` secrets, icons), RLS via `$user.*`, modernizing a legacy `access:` block, `defaultBinding` lookup, declaring env-var keys with `env:` | `references/informer-yaml.md` |
@@ -60,7 +60,8 @@ Customers run a spread of Informer versions, so every newer feature carries the 
 |---|---|---|
 | Bare `/api/{path}` app routes; per-app origins (origin mode) | 2026.1.2 | `references/server-routes.md` |
 | `platform` descriptor (`platform.version`, `platform.capabilities`) and the `requires:` manifest key | 2026.1.3 | `references/server-routes.md`, `references/informer-yaml.md` |
-| Live broadcast channels (`broadcast()`, `channels:`, `channels/`) | 2026.1.3 | `references/channels.md` |
+| Live broadcast channels (`broadcast()`, `channels:`, `channels/` with `join` / `leave`, `@user/`) | 2026.1.3 | `references/channels.md` |
+| Channels phase 2: inbound `send()` + event exports, `joined`, wildcards, frame `seq` + replay, `connected`, `platform.originMode`, `on` required in `channels:` | 2026.1.3 (the I5-13027 build; earlier 2026.1.3 previews carry phase 1 only — `platform.originMode` is `undefined` there) | `references/channels.md` |
 | Declarative embeddings (`embeddings/`, `embed()`, pgvector) | 2026.1.3 | `references/embeddings.md` |
 | Staged uploads/downloads (`uploads`, `downloads`, `__INFORMER__.upload()`) | 2026.1.3 | `references/streams.md` |
 | Warehouse loads (`load()`, the run ledger, `schedule()`, streaming ingest) | 2026.2.0 | `references/warehouse-etl.md` |
@@ -69,9 +70,9 @@ Customers run a spread of Informer versions, so every newer feature carries the 
 
 Features not listed have no floor recorded here; where a reference states one inline (the `openapi.json` endpoint needs 2026.1.1, for example), that line wins.
 
-**Learning the target version.** `GET /api/about` on the target server reports its build version: unauthenticated, unchanged across releases, and what the Vite plugin itself probes at deploy. From 2026.1.3 the running app also sees it as `window.__INFORMER__.platform.version` on the page and `platform.version` in every handler bag, with `platform.capabilities` for feature flags; below that `platform` is absent entirely, so feature-detect with optional chaining (`platform?.capabilities?.channels`). The Vite dev mock reports `version: 'dev'` and its own capability flags. Record the answer as `requires: { informer: '>=<version>' }`: servers from 2026.1.3 refuse a deploy below it, and `@entrinsik/vite-plugin-informer` 2.10.0+ enforces it at deploy against older servers, which ignore the key themselves.
+**Learning the target version.** `GET /api/about` on the target server reports its build version: unauthenticated, unchanged across releases, and what the Vite plugin itself probes at deploy. From 2026.1.3 the running app also sees it as `window.__INFORMER__.platform.version` on the page and `platform.version` in every handler bag, with `platform.capabilities` for feature flags and (from the I5-13027 build) `platform.originMode` for whether apps serve from their own origins; below that `platform` is absent entirely, so feature-detect with optional chaining (`platform?.capabilities?.channels`). The Vite dev mock reports `version: 'dev'`, its own capability flags, and `originMode: true`. Record the answer as `requires: { informer: '>=<version>' }`: servers from 2026.1.3 refuse a deploy below it, and `@entrinsik/vite-plugin-informer` 2.10.0+ enforces it at deploy against older servers, which ignore the key themselves.
 
-**The Vite plugin has one floor.** Dev-server and deploy support for every 2026.1.3 feature (the channel shim, `embeddings/` upload, the streams emulation, the `platform` mock, the `requires:` gate) arrived together in `@entrinsik/vite-plugin-informer` **2.10.0**. 2.8.0 and 2.9.0 were never published; 2.7.0 is the release before it. Against a server below 2026.1.3, 2.10.0 leaves `channels/` and `embeddings/` on disk, because those releases would serve the folders as static files, and names every feature that would be inert, so a green deploy cannot pass for a working one.
+**The Vite plugin's floors.** Deploy support for every 2026.1.3 feature (`channels/` and `embeddings/` upload, the `requires:` gate, the `platform` mock, the streams emulation) arrived together in `@entrinsik/vite-plugin-informer` **2.10.0**; 2.8.0 and 2.9.0 were never published, and 2.7.0 is the release before it. The dev server caught up in two steps: **2.11.0** runs `channels/` handlers and the page's `send()` locally (`channels.md`), and **2.12.0** aligns that emulation with the server (wildcard gating, replay expiry, the send budget), adds the `embed()` opt-in (`embeddings.md`), and emulates the streams phase 2 surface — `__INFORMER__.streams`, transfer events, forwarding to an integration (`streams.md`). Install lines use `@latest`, which resolves to 2.12.0 or later. Against a server below 2026.1.3, 2.10.0+ leaves `channels/` and `embeddings/` on disk, because those releases would serve the folders as static files, and names every feature that would be inert, so a green deploy cannot pass for a working one.
 
 **Tagging inside a reference.** A whole feature states its floor in the reference's Availability block. A later addition to an existing feature carries the floor on its own row or sentence, bold, as `**2026.1.4+**`.
 
@@ -161,7 +162,7 @@ Once the project is set up, the typical next moves are:
 5. If the app exposes server-side routes, scaffold `server/` — load `references/server-routes.md`.
 6. If the app needs semantic/vector search over its own data, scaffold `embeddings/` use cases (vector tables live in `migrations/`) — load `references/embeddings.md`.
 7. If the app should be usable from an outside AI client (Claude Code/Desktop, Cursor), scaffold `mcp/` with tools written for a context-free caller — load `references/mcp.md`.
-8. If open pages should update live when server code changes something (no polling), add a `channels:` relay block and/or `channels/` handlers — load `references/channels.md` (needs an origin-mode server; confirm before building on it).
+8. If open pages should update live when server code changes something (no polling), or send something back over the socket (typing, comments, cursors), add a `channels:` relay block and/or `channels/` handlers — load `references/channels.md` (needs an origin-mode server: read `platform.originMode`, or confirm with the user before building on it).
 9. If the app imports files or exports large result sets (CSV in, attachments, CSV/JSON out), stage them with `__INFORMER__.upload()` on the page and use the `uploads` / `downloads` handles in `server/` — load `references/streams.md`.
 
 ## Local Development Workflow
@@ -254,6 +255,7 @@ Builds your project and uploads to Informer:
 13. Runs deploy: pending SQL migrations + server-route scanning + webhook scanning + embedding use-case scanning + channel scanning (`channels/` handlers + the `channels:` relay block) + handler bundling + tool bundling (`tools/` + `mcp/`) + resource reference validation + agent upsert from `informer.yaml`
     - **Resource refs are validated**: all datasets, queries, datasources, integrations, and toolkits declared in `informer.yaml` must exist — deploy fails with a clear error if any are missing
     - **Channels need origin mode**: a `channels:` block or `channels/` directory on a path-mode server still deploys, with a non-fatal `channels_require_origin_mode` warning — see `references/channels.md`
+    - **`channels:` entries need `on`**: an entry with nothing to relay fails the deploy; a `channels/` file may export `config`, `join`, `joined`, `leave`, and event-named inbound handlers, nothing else
 14. App is viewable at `/api/apps/{owner}:{slug}/view`
 
 ### Package.json Configuration
@@ -792,10 +794,10 @@ Load `references/embeddings.md` for: the use-case file contract (`config` strict
 
 ## Channels — overview
 
-Informer **2026.1.3+**, origin-mode servers only. Apps can push **live updates to every open page** over a WebSocket Informer owns for them. Name a channel (a relay of events you already `emit()`, or a gated one under `channels/`), subscribe on the page, and `broadcast()` from any server-side handler — no socket code, no credentials, no Redis in the App. **Requires an origin-mode server** (`app.appsBaseUrl`); on a path-mode server the deploy warns (`channels_require_origin_mode`) and `__INFORMER__.channel()` throws `origin_mode_required`.
+Informer **2026.1.3+**, origin-mode servers only. Apps can push **live updates to every open page** over a WebSocket Informer owns for them, and take messages back from the page over the same socket. Name a channel (a relay of events you already `emit()`, or a gated one under `channels/`), subscribe on the page, and `broadcast()` from any server-side handler — no socket code, no credentials, no Redis in the App. **Requires an origin-mode server** (`app.appsBaseUrl`); read `window.__INFORMER__.platform.originMode` before the first `channel()` call and fall back to polling when it is not `true`. On a path-mode server the deploy warns (`channels_require_origin_mode`) and `__INFORMER__.channel()` throws `origin_mode_required`.
 
 ```yaml
-# informer.yaml — every emit('order_created') is also broadcast to `orders`
+# informer.yaml — every emit('order_created') is also broadcast to `orders` (`on` is required; the block declares relays only)
 channels:
   orders:
     description: Live order activity
@@ -806,19 +808,31 @@ channels:
 // server/orders/[id]/approve.js — broadcast is in every handler bag (routes, webhooks, tools, channel handlers)
 export async function POST({ query, request, broadcast }) {
     const [order] = await query(`UPDATE orders SET status = 'approved' WHERE id = $1 RETURNING *`, [request.params.id]);
-    await broadcast(`orders/${order.region}`, 'approved', order);   // fire-and-forget, at-most-once, no DB row
+    await broadcast(`orders/${order.region}`, 'approved', order);   // fire-and-forget, { ok, seq }, kept briefly for reconnecting pages
     return order;
 }
 ```
 
 ```javascript
-// on the page — lazy: nothing connects until the first on()
-__INFORMER__.channel('orders/east').on('approved', (order, frame) => refreshRow(order));
+// channels/rooms/[room].js — decide in join, announce in joined, hear the page in an event export
+export async function join({ channel, request }) { return request.roles.includes('member'); }   // exactly true admits
+export async function joined({ channel, request }) { await channel.broadcast('presence', { joined: request.user.username }); }
+export async function typing({ channel, request }) { await channel.broadcast('typing', { user: request.user.username }, { replay: false }); }
 ```
 
-Rule of thumb: **if you'd be upset it was lost, `emit`; if it'd be stale in a second anyway, `broadcast`.** A channel with no `channels/` file is open to every viewer of the App; `@user/<username>` is private to that user with no file needed.
+```javascript
+// on the page — lazy: nothing connects until the first on(); a wildcard hears every room
+const room = __INFORMER__.channel('rooms/east');
+room.on('approved', (order, frame) => refreshRow(order));      // frame.seq numbers frames per channel
+room.on('connected', ({ replayed }) => setLive(true));         // after every (re)subscribe, missed frames replayed
+room.on('error', err => { if (err.code === 'replay_gap') refetch(); });
+await room.send('typing');                                     // runs the `typing` export above, as the viewer
+__INFORMER__.channel('rooms/*').on('presence', (p, frame) => note(frame.channel, p));
+```
 
-Load `references/channels.md` for: the harness/App ownership model and the origin-mode requirement, the `channels:` field reference and relay rules, `channels/` handlers (`config.roles`, `join` must return exactly `true`, `leave` never throws, the bag carries `channel` + `payload` + `request` and no `respond`), the `broadcast()` error table, the full client API (error codes `join_refused` / `rate_limited` / `disconnected` / `origin_mode_required` / `not_supported`, auto-reconnect with backoff), the React hook, limits, what dev mode does and doesn't enforce, and the phase-2 `send()` note.
+Rule of thumb: **if you'd be upset it was lost, `emit`; if it'd be stale in a second anyway, `broadcast` (and `{ replay: false }`).** A channel with no `channels/` file is open to every viewer of the App and cannot receive `send()`; `@user/<username>` is private to that user with no file needed. You never see your own join from `join` — that is what `joined` is for. A dropped socket reconnects and replays on its own; refetch only on `replay_gap`.
+
+Load `references/channels.md` for: the harness/App ownership model and the origin-mode requirement (`platform.originMode`), the `channels:` field reference and relay rules (`on` required), `channels/` handlers (`config.roles`, `join` must return exactly `true`, `joined` after admission, `leave` never throws, event exports for `send()`, the bag carries `channel` + `payload` + `request` and no `respond`), the inbound refusal table and per-user `inboundRate`, the `broadcast()` error table and the replay opt-out, wildcards and their fail-closed gating, the full client API (`since`, `connected`, `send()`, error codes `join_refused` / `rate_limited` / `disconnected` / `replay_gap` / `send_refused` / `origin_mode_required`, auto-reconnect with replay), the React hook + store pattern, limits, what dev mode does and doesn't enforce (plugin 2.11.0+), and the gotchas.
 
 ## Streams — overview
 
@@ -858,7 +872,7 @@ const roles = window.__INFORMER__?.roles; // string[] of assigned role IDs
 const user = window.__INFORMER__?.user;   // { username, displayName } of the signed-in viewer
 ```
 
-`user` is present on every render (main app and widgets). Its main job is naming the viewer's private channel — `` `@user/${__INFORMER__.user.username}` `` — see `references/channels.md`.
+`user` is present on every render (main app and widgets). Its main job is naming the viewer's private channel — `` `@user/${__INFORMER__.user.username}` `` — see `references/channels.md`. `platform.originMode` (the I5-13027 build) says whether live channels can work at all on this server; read it before the first `channel()` call.
 
 When the page is rendering a **widget entry** (not the main app), the context object also carries widget metadata:
 
@@ -1235,7 +1249,7 @@ The orientation above points to each file; this is the canonical list of what's 
 | `references/widgets.md` | `widgets:` declaration, self-contained HTML template, iframe constraints, SVG charts without libraries |
 | `references/copilot.md` | `openChat()` / `showCopilot()` / `registerTool()`, AI completion endpoints (`_chat` / `_completion` / `_object`), `useChat` hook pattern, defensive `_object` parsing |
 | `references/agents.md` | `agents:` declaration, `tools/*.js`, event chaining via `emit()`, cron lifecycle, toolkits/assistants, agent REST API |
-| `references/channels.md` | Live broadcast to open pages — origin-mode requirement, `channels:` relay block, `channels/` handlers (`config` / `join` / `leave`, the channel bag), `broadcast()` + error table, `@user/<username>`, the `__INFORMER__.channel()` client API (error codes, reconnect), `broadcast()` vs `emit()`, limits, dev-mode coverage, phase-2 `send()` |
+| `references/channels.md` | Live broadcast to open pages and `send()` back — origin-mode requirement and `platform.originMode`, `channels:` relay block (`on` required), `channels/` handlers (`config` / `join` / `joined` / `leave` / event exports, the channel bag), `broadcast()` + error table + `{ replay: false }`, `@user/<username>`, wildcards, the `__INFORMER__.channel()` client API (`since`, `connected`, `send()`, error codes, reconnect + replay, `replay_gap`), `broadcast()` vs `emit()`, limits (`inboundRate`, `replay`), dev-mode coverage (plugin 2.11.0+) |
 | `references/streams.md` | Staged uploads/downloads — `__INFORMER__.upload()` on the page, `uploads.get(id)` → `copyInto()` / bytea parameter / inline reads under the 10 MB cap, `downloads.create()` → `fromQuery()` / `writeRows()` / `return dl` / `dl.url`, the six limits, error table, dev-server emulation gaps |
 | `references/mcp.md` | The `mcp/` folder, `mcp/` vs `tools/` split, writing tools for a context-free caller, identity (`runAs` / `run.user` / `run.roles`, workspace-not-per-caller), the per-app endpoint, OAuth discovery + DCR connect flow, curl testing, observability |
 | `references/informer-yaml.md` | Full `informer.yaml` schema deep dive — slot fields, `$user.*` variables, modernizing legacy `access:` blocks, declaring env-var keys with `env:` |
