@@ -433,7 +433,7 @@ export async function POST({ query, log, request }) {
 - Logging is **fire-and-forget** — it never blocks or throws. If the log write fails, it's silently dropped.
 - The `source` field is set automatically based on where the handler runs: `'server'` for server routes, `'webhook'` for webhook handlers, `'tool'` for agent tool handlers.
 - Correlation fields are set automatically based on context: `invocationId` for server routes and webhooks; `agentId` and `runId` for agent tool handlers. You don't need to pass them.
-- Available in **server routes**, **webhook handlers**, **agent tool handlers**, and **channel handlers** (`channels/` `join` / `leave` — logged with `source: 'server'`).
+- Available in **server routes**, **webhook handlers**, **agent tool handlers**, and **channel handlers** (every `channels/` export — `join` / `joined` / `leave` and the event exports — logged with `source: 'channel'`).
 
 ## Handler Config
 

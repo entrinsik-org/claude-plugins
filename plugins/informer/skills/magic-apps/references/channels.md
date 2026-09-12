@@ -4,7 +4,7 @@
 >
 > **Not in this file:** durable events and agents (`emit()`) — see `agents.md`. The rest of the handler bag (`query`, `fetch`, `respond`, …) — see `server-routes.md`. Origin mode itself (`app.appsBaseUrl`, per-app hostnames) — see `accounts-and-login.md`.
 >
-> **Availability:** Informer **2026.1.3** (I5-12980 phase 1, I5-13027 phase 2), on an origin-mode server. Phase 1 is broadcast, relay, `join`/`leave`, `@user/`. Phase 2 adds inbound `send()`, the `joined` export, wildcards, `seq` + replay, `connected`, `platform.originMode`, and requires `on` in the `channels:` block; **earlier 2026.1.3 preview builds carry phase 1 only.** Feature-detect: `platform.originMode` is `undefined` on a phase 1 build and a boolean on phase 2; on the page a phase 1 `send()` rejects with `not_supported`. Older servers have no `broadcast` in the bag and no `__INFORMER__.channel`; a path-mode server of any version deploys the app with a warning and `channel()` throws `origin_mode_required`. Below the floor, poll the route you would have broadcast from. Dev support for phase 2 needs `@entrinsik/vite-plugin-informer` **2.11.0+**.
+> **Availability:** Informer **2026.1.3** (I5-12980 phase 1, I5-13027 phase 2), on an origin-mode server. Phase 1 is broadcast, relay, `join`/`leave`, `@user/`. Phase 2 adds inbound `send()`, the `joined` export, wildcards, `seq` + replay, `connected`, `platform.originMode`, and requires `on` in the `channels:` block; a **released** 2026.1.3 server always carries phase 2 (only unreleased 2026.1.3 preview builds had phase 1 alone, where `platform.originMode` is `undefined`). Feature-detect in two parts: `platform?.capabilities?.channels` (an App has them, a Magic Report does not) and `platform?.originMode` (this server serves Apps on their own origins). Older servers have no `broadcast` in the bag and no `__INFORMER__.channel`; a path-mode server of any version deploys the app with a warning and `channel()` throws `origin_mode_required`. Below the floor, poll the route you would have broadcast from. Dev support for phase 2 needs `@entrinsik/vite-plugin-informer` **2.11.0+**; **2.12.0** is what makes the emulation match the server (see [Dev mode](#dev-mode)).
 
 A **channel** is a named place a page subscribes to (`orders`, `orders/east`, `rooms/*`, `@user/jane`). A server-side handler calls `broadcast(channel, event, payload)`; every subscriber of that channel on every server in the cluster gets the frame a moment later. A subscribed page can answer with `channel.send(event, payload)`, which runs a handler of the App's on the server. The App never opens a socket, mints a credential, or touches Redis: it names a channel on the page and broadcasts to it from the server.
 
@@ -27,7 +27,7 @@ The socket is opened from the App's **own origin**, which only exists when the I
 - **Deploy succeeds with a warning.** An App with a `channels:` block or a `channels/` directory deploys, and the response carries a non-fatal partial failure `{ phase: 'channels', error: 'channels_require_origin_mode' }` (`npm run deploy` prints it under "non-fatal deploy phase failure(s)").
 - **`__INFORMER__.channel()` throws synchronously** with `err.code === 'origin_mode_required'` — it never returns a channel that silently never delivers.
 
-**Decide before the first `channel()` call, not in a catch.** `window.__INFORMER__.platform.originMode` is `true` on an origin-mode server and `false` in path mode (phase 2; `undefined` on phase 1 builds and older servers, which is your cue to treat it as unknown and ask). The same `platform` object reaches every handler bag, and the Vite dev mock reports `true`.
+**Decide before the first `channel()` call, not in a catch.** `window.__INFORMER__.platform.originMode` is `true` on an origin-mode server and `false` in path mode (phase 2; `undefined` on phase 1 builds and older servers, which is your cue to treat it as unknown and ask). The same `platform` object reaches every handler bag, and the Vite dev mock reports `true` — override it with `informer({ mock: { platform: { originMode: false } } })` (plugin 2.12.0+ types it) to exercise the path-mode fallback locally. Check `platform?.capabilities?.channels` first: a Magic Report reports `false` whatever the server's mode.
 
 ```javascript
 const live = window.__INFORMER__.platform?.originMode === true;
@@ -88,7 +88,7 @@ Every `emit('order_created', payload)` now does two things: creates the durable 
 
 Rules:
 
-- Names are validated at deploy. A bad channel or event name **fails the deploy** with `400 Invalid channels: block in informer.yaml: …` — never a silent drop. Every problem is reported at once. A wildcard cannot be a relay target.
+- Names are validated at deploy. A bad channel or event name **fails the deploy** with `400 Invalid channels: block in informer.yaml: …` — never a silent drop. Every problem is reported at once. A wildcard key (`rooms/*`) never receives relays — `npm run dev` flags it at boot, while the server accepts the entry and drops every relayed frame (`relay_dropped` in the Logs tab).
 - A relay that can't be delivered (frame too large, App over its broadcast rate, channels disabled) is logged on the server as "App channel relay dropped" and skipped. **The `emit()` itself still succeeds** — relay never fails an emit.
 - Only `emit()` calls from the App's own handlers are relayed. The platform's `onFailure` event (agent run terminally failed) is not.
 - `emit()` with no payload crosses the sandbox as `{}`, so the relayed frame's `payload` is `{}`, not `null`.
@@ -202,12 +202,12 @@ Then the handler layer:
 5. The name resolves against the `CHANNEL` rows. No file matches → **admitted** (open channel), unless the name is a wildcard reaching over a gated channel (→ 403 `app_channel_wildcard_gated`, see [Wildcard subscriptions](#wildcard-subscriptions)). Nothing runs on join or leave for an open channel.
 6. `config.roles` set and the subscriber holds none → 403 `app_channel_role_required`.
 7. No `join` export → admitted.
-8. Compute budget check (→ 402 when exhausted — surfaces as `join_refused`), then `join` runs under `min(config.timeout, joinTimeoutMs)`. `=== true` admits; anything else → 403 `app_channel_join_refused`; timeout → 504 `app_channel_join_timeout` (surfaces as **`disconnected`**, not `join_refused`).
+8. Compute budget check (→ 402 when exhausted — surfaces as `budget_exhausted`), then `join` runs under `min(config.timeout, joinTimeoutMs)`. `=== true` admits; anything else → 403 `app_channel_join_refused`; timeout → 504 `app_channel_join_timeout` and a throw → 500 `app_channel_join_failed` (both surface as **`handler_failed`**, not `join_refused`, and the page does not retry them).
 9. nes registers the subscription. A macrotask later, `joined` runs (if exported); its failure is logged and never unwinds the subscription.
 
 ### Inbound messages: `send()` on the server side
 
-`channel.send(event, payload)` on the page is a request **over the app socket** to `POST /api/apps/{id}/channels/_send` (never plain HTTP — over HTTP it is 403 `app_channel_socket_required`). The server checks that the socket currently holds the channel, that the event is valid and not reserved, that the covering file exports it, takes a token from the **user's** inbound bucket (`inboundRate`: 10/s, burst 30, per user per App, shared by all of that person's tabs), checks the compute budget, and runs the export. **The subscription is the authorization**: whatever `join` and `config.roles` admitted may send, and nothing else can; there is no separate permission to declare.
+`channel.send(event, payload)` on the page is a request **over the app socket** to `POST /api/apps/{id}/channels/_send` (never plain HTTP — over HTTP it is 403 `app_channel_socket_required`). The server takes a token from the **user's** inbound bucket first (`inboundRate`: 10/s, burst 30, per user per App, shared by all of that person's tabs — spent before anything is looked up, so a refused `send()` costs a token too, and a socket that joined nothing cannot drive the App lookup on refusals alone), then checks that the socket currently holds the channel, that the event is valid and not reserved, that the covering file exports it (an event named `config`, `join`, `joined` or `leave` is refused by name — the relay drives those exports itself), checks the compute budget, and runs the export. **The subscription is the authorization**: whatever `join` and `config.roles` admitted may send, and nothing else can; there is no separate permission to declare.
 
 | Server answer | When | On the page |
 |---|---|---|
@@ -215,9 +215,9 @@ Then the handler layer:
 | 404 `app_channel_no_handler` | No export of that name, or an open channel (no file) | `send_refused` |
 | 400 `app_channel_reserved_event` / `app_channel_invalid_event` | `error`, `connected`, or not an event name | `send_refused` |
 | 429 `app_channel_rate_limited` | The user is over `inboundRate` | `rate_limited` |
-| 402 | The App's compute budget is spent | `send_refused` |
-| 504 `app_channel_send_timeout` | The export ran past its cap | `disconnected` |
-| 500 `app_channel_send_failed` | The export threw | `disconnected` |
+| 402 | The App's compute budget is spent | `budget_exhausted` |
+| 504 `app_channel_send_timeout` | The export ran past its cap | `handler_failed` |
+| 500 `app_channel_send_failed` | The export threw | `handler_failed` |
 
 A message body over 128 KiB is refused before any handler runs. Each inbound run is recorded as a `SEND` invocation row under `channel:<name>#<event>` and counted as **Sends · 30d** in the Channels tab; a thrown export is audited `send_failed`, a rate-limited one `send_rate_limited`.
 
@@ -262,7 +262,7 @@ export async function POST({ query, request, broadcast }) {
 
 `payload` is any JSON value; omitted → `null`. Serialized once, delivered verbatim. **Send the changed row, not the table** — the cap is 64 KiB per frame.
 
-**Replay opt-out.** Every published frame is kept for a short while (the last `replay.frames` per channel, 50 by default, for `replay.ttlMs`, 60 s) so a page that drops and reconnects can catch up. A frame that would be stale by the time anyone replayed it — a typing indicator, a cursor position, a heartbeat — should stay out: `broadcast(channel, event, payload, { replay: false })`, or `channel.broadcast(event, payload, { replay: false })` in a channel handler. It still takes a `seq` and reaches every live subscriber. Do this for every "moment" frame, or a busy typing channel pushes the frames that matter out of the window.
+**Replay opt-out.** Every published frame is kept for a short while (the last `replay.frames` per channel, 50 by default, for `replay.ttlMs`, 60 s) so a page that drops and reconnects can catch up. A frame that would be stale by the time anyone replayed it — a typing indicator, a cursor position, a heartbeat — should stay out: `broadcast(channel, event, payload, { replay: false })`, or `channel.broadcast(event, payload, { replay: false })` in a channel handler. It still takes a `seq` and reaches every live subscriber — so a page away longer than the window while only such frames flowed hears `replay_gap` on reconnect (the counter moved, the buffer did not), and re-fetching then is the safe answer. Do this for every "moment" frame, or a busy typing channel pushes the frames that matter out of the window.
 
 `broadcast()` **rejects** (the `await` throws) when the frame can't be published:
 
@@ -323,7 +323,7 @@ __INFORMER__.channel('rooms/*').on('message', (msg, frame) => appendTo(frame.cha
 
 - `*` only as the **last** segment, on its own: `rooms/*` is a wildcard; `rooms/*/typing`, `room*`, and `*` alone are invalid; `@user/*` is refused as another user's channel.
 - A wildcard is listened to, never broadcast to (`app_channel_invalid_name`) or sent on (`send_refused`, decided on the page). Send on the concrete channel.
-- **Gating fails closed.** The wildcard name resolves through `channels/` like any other name, with `*` as the param: `rooms/*` runs `channels/rooms/[room].js` with `channel.params.room === '*'`, and its `join` and `config.roles` decide whether this user may hear every room. A wildcard no file covers is admitted only when no file covers anything beneath the prefix either; if one does (`channels/rooms/lobby.js` with a `join`), the subscribe is refused — 403 `app_channel_wildcard_gated`, `join_refused` on the page, `join_wildcard_gated` in the Logs tab — because admitting it would hand out a gated channel's frames around its gate. So when an App gates channels under a prefix with literal files, add the `[param]` file too if wildcards should be allowed, and have its `join` answer the `'*'` case explicitly.
+- **Gating fails closed.** The wildcard name resolves through `channels/` like any other name, with `*` as the param: `rooms/*` runs `channels/rooms/[room].js` with `channel.params.room === '*'`, and its `join` and `config.roles` decide whether this user may hear every room. A wildcard is admitted only when **nothing sits deeper than the file that resolved it** — or, when no file resolves it, deeper than its prefix. `rooms/*` with `channels/rooms/[room].js` passes sibling literals at the same depth (`channels/rooms/lobby.js`), but a `channels/rooms/[room]/typing.js` or `channels/rooms/lobby/members.js` refuses it either way — 403 `app_channel_wildcard_gated`, `join_refused` on the page, `join_wildcard_gated` in the Logs tab — because admitting it would hand out a gated channel's frames around its gate. So when an App gates channels under a prefix with literal files, add the `[param]` file at that depth if wildcards should be allowed, have its `join` answer the `'*'` case explicitly, and keep gated handlers from nesting deeper than the wildcard reaches.
 - A wildcard counts as **one** subscription toward `maxChannelsPerSocket`.
 - Replay is tracked per concrete channel: after a reconnect, a wildcard subscription catches up on each channel it had already heard from.
 
@@ -358,7 +358,7 @@ orders.close();   // unsubscribe the socket path and drop every handler
 | `on(event, fn)` | Registers `fn(payload, frame)` for frames whose `event` matches. Returns an unsubscribe function for that one handler. The first `on()` on the page loads the socket client, fetches `/_socket`, connects, and subscribes; later channels share the connection |
 | `on('connected', fn)` | `fn({ replayed })` after every successful subscribe and re-subscribe, once any replay is done. A listener added while the channel is already up hears it once, asynchronously, with `{ replayed: 0 }` |
 | `on('error', fn)` | `fn(err)`; `err.code` is one of the codes below. Without an error handler, errors go to `console.warn` |
-| `send(event, payload?)` | Sends a message to the App over the socket; resolves with the handler's return value (`null` when it returned nothing). Rejects with `code` `rate_limited`, `send_refused`, or `disconnected`. Phase 1 builds reject every call with `not_supported` |
+| `send(event, payload?)` | Sends a message to the App over the socket; resolves with the handler's return value (`null` when it returned nothing). Rejects with `code` `rate_limited`, `send_refused`, `budget_exhausted`, `handler_failed`, or `disconnected` |
 | `close()` | Unsubscribes and drops all handlers. Idempotent. `on()` after `close()` throws (`code: 'disconnected'`); `send()` after `close()` rejects the same way |
 
 The frame envelope every subscriber receives:
@@ -392,20 +392,21 @@ const orders = __INFORMER__.channel('orders/east', since ? { since } : undefined
 orders.on('created', (order, frame) => { addRow(order); sessionStorage.setItem(key, String(frame.seq)); });
 ```
 
-Without `since`, a first subscribe starts from now and replays nothing. If a replay read itself fails (refused, or the socket dropped mid-read) the channel reports it as an `error` (`send_refused` or `disconnected`), still comes up on live frames, and `connected` fires with `{ replayed: 0 }`.
+Without `since`, a first subscribe starts from now and replays nothing. A replay read spends from the same per-user `inboundRate` bucket as `send()` — one read per concrete channel a reconnect holds, so a wildcard hearing from more channels than the burst allows can be rate-limited on reconnect. If a read fails (`rate_limited`, `budget_exhausted`, `send_refused`, `handler_failed`, or `disconnected`) the channel reports it as an `error` with `err.channel`, is not retried, still comes up on live frames, and `connected` fires with `{ replayed: 0 }`.
 
 ### Error codes
 
 | `err.code` | Meaning | What to do |
 |---|---|---|
-| `join_refused` | Subscribe refused: `join` returned something other than `true`, a `config.roles` miss, malformed name, user can't read the App, compute budget spent, a `@user/` name that belongs to someone else, or a wildcard reaching over a gated channel. (Any 4xx other than 429.) | Don't retry in a loop. Render without the live feed, or tell the user why |
+| `join_refused` | Subscribe refused: `join` returned something other than `true`, a `config.roles` miss, malformed name, user can't read the App, a `@user/` name that belongs to someone else, or a wildcard reaching over a gated channel. (Any 4xx other than 429 and 402.) | Don't retry in a loop. Render without the live feed, or tell the user why |
 | `rate_limited` | On subscribe: this socket holds `maxChannelsPerSocket` (20) subscriptions, or the App has `maxSubscribersPerApp` (500) on this server. On `send()`: the user is over `inboundRate` (10/s, burst 30). | `close()` channels you no longer need; combine channels (a wildcard is one subscription). A refused subscribe is retried with backoff on its own; a rate-limited `send()` is not — slow down |
-| `disconnected` | The socket dropped, couldn't be established (credential refused, client failed to load), **or the App's `join` timed out** (504). Every open channel receives it once per drop. Also the rejection of a `send()` before the channel is up, after `close()`, or whose handler threw or timed out | Nothing required — the shim reconnects on its own and **replays what it missed**. Only act on `replay_gap` |
+| `disconnected` | The socket dropped or couldn't be established (credential refused, client failed to load). Every open channel receives it once per drop. Also the rejection of a `send()` before the channel is up or after `close()` | Nothing required — the shim reconnects on its own and **replays what it missed**. Only act on `replay_gap` |
 | `replay_gap` | After a reconnect (or a `since`), frames were sent that the server no longer buffers; `err.channel` names the concrete channel | Re-fetch that channel's state from a server route. Live frames continue |
-| `send_refused` | The server declined a `send()`: not subscribed, no export of that name, a reserved/invalid event, or compute budget spent. Also returned without a round trip for a reserved/invalid event name or a wildcard channel | Fix the event name or the handler file; do not retry the same message |
+| `send_refused` | The server declined a `send()`: not subscribed, no export of that name (a lifecycle name counts as none), or a reserved/invalid event. Also returned without a round trip for a reserved/invalid event name or a wildcard channel | Fix the event name or the handler file; do not retry the same message |
 | `origin_mode_required` | Thrown by `channel()` itself on a path-mode server | Check `platform.originMode` first and fall back to polling a server route |
 | `channels_disabled` | Thrown by `channel()` itself when an admin turned channels off | Same fallback. Nothing the App does will change it |
-| `not_supported` | Returned by `send()` on a phase 1 build | Post to a server route and let it `broadcast()` the result back; the server predates I5-13027 |
+| `budget_exhausted` | The App's compute budget is spent — on a subscribe or a `send()` (402) | Not retried. Surface it; nothing the page does will change it |
+| `handler_failed` | Your `join` or your `send()` export threw or timed out (500 / 504) | Not retried — it is the App's bug, not the network's. Read the Logs tab (`join_failed`, `join_timeout`, `send_failed`) |
 
 ### Reconnect behaviour
 
@@ -494,7 +495,7 @@ Server defaults under `app.channels` (`config-factory.js`). An admin can change 
 | `maxChannelsPerSocket` | 20 | Subscriptions one page's socket may hold; a wildcard is one. Next `on()` on a new channel → `rate_limited` |
 | `maxFrameBytes` | 65536 (64 KiB) | Serialized **payload** size per broadcast; larger → `app_channel_frame_too_large` |
 | `broadcastRate` | `{ perSecond: 50, burst: 200 }` | Per-App token bucket shared across the cluster; exceeding → `app_channel_rate_limited`. Typing forwarded through a handler counts against it — throttle typing on the page (one `send()` per person every 2 s or so) |
-| `inboundRate` | `{ perSecond: 10, burst: 30 }` | Per-user, per-App bucket for `send()`; exceeding → the page's `send()` rejects `rate_limited` |
+| `inboundRate` | `{ perSecond: 10, burst: 30 }` | Per-user, per-App bucket for `send()` **and** the replay reads a reconnect makes (one per concrete channel); exceeding → `rate_limited` on the page, spent even on a refused `send()` |
 | `replay` | `{ frames: 50, ttlMs: 60000 }` | Frames kept per channel for reconnecting pages, and for how long |
 | `joinTimeoutMs` | 5000 | Hard ceiling for every channel handler run (`join`, `joined`, `leave`, event exports), whatever `config.timeout` says |
 
@@ -515,6 +516,7 @@ Channel activity is too chatty to log per event, so every refusal and drop is co
 | `joined_failed` | `joined` threw or timed out; the subscriptions stand |
 | `send_rate_limited` | One user's `send()` calls exceeded `inboundRate` |
 | `send_failed` | An event export threw or timed out |
+| `replay_rate_limited` | One user's replay reads after a reconnect exceeded `inboundRate`, which they share with `send()` |
 | `subscriber_limit` | App at `maxSubscribersPerApp` cluster-wide |
 | `socket_limit` | One page over `maxChannelsPerSocket` |
 | `broadcast_rate_limited` | App over `broadcastRate` |
@@ -527,13 +529,14 @@ The **Channels** tab of the same panel carries the live counters (subscribers no
 
 ## Local development
 
-`npm run dev` with `@entrinsik/vite-plugin-informer` **2.11.0+** runs the whole loop with **no server socket**:
+`npm run dev` with `@entrinsik/vite-plugin-informer` **2.11.0+** runs the whole loop with **no server socket**. **2.12.0** is what makes the emulation match the server: wildcard-gating depth, replay expiry 60 s after a channel's last write, replay reads spending the same per-user bucket as `send()`, the `@user/*` name rule, and the `budget_exhausted` / `handler_failed` codes — on 2.11.0 the surface is there but not all of that behavior.
 
 - `broadcast()` is in the dev handler bag for server routes, agent tools, and channel handlers — same name/event/payload/reserved-event/frame-size validation and the same error codes as production, resolving `{ ok: true, seq }` with a per-channel `seq`, honoring `{ replay: false }`. Every call is logged to the terminal (`[app-channel] broadcast(...)`).
 - `emit()` runs the `channels:` relay locally (no app-event row in dev), so a page subscribed to a relayed channel sees the frame (`[app-channel] relayed emit("...") → channel "..."`).
-- **`channels/` handlers run locally.** A subscribe runs the covering file's `join` (with `config.roles` checked against `mock.roles`), then `joined`; an unsubscribe runs `leave`; `send()` runs the event-named export and resolves with its return value, metered per user at the production default. `request.user` is `mock.user`, `request.roles` is `mock.roles`. The `@user/` ownership check and wildcard gating behave as on the server. The terminal shows `[app-channel] join("rooms/lobby") admitted|refused (<code>)` and `send("rooms/lobby", "typing") handled`.
+- **`channels/` handlers run locally.** A subscribe runs the covering file's `join` (with `config.roles` checked against `mock.roles`), then `joined`; an unsubscribe runs `leave`; `send()` runs the event-named export and resolves with its return value, metered per user at the production default. `request.user` is `mock.user`, `request.roles` is `mock.roles`. The `@user/` ownership check and wildcard gating behave as on the server (2.12.0+). The terminal shows `[app-channel] join("rooms/lobby") admitted|refused (<code>)` and `send("rooms/lobby", "typing") handled`.
 - `__INFORMER__.channel()` on the dev page has the production surface: `on()`, `on('connected')`, `send()`, `close()`, `since`, replay after a dropped dev socket, `replay_gap`, wildcards. Frames ride **Vite's own dev WebSocket** (`import.meta.hot`) — no second socket, nothing to configure. `frame.tenant` is `'dev'`, `frame.appId` is the mocked App id.
-- `__INFORMER__.platform.originMode` is `true` in dev.
+- `__INFORMER__.platform.originMode` is `true` in dev; `informer({ mock: { platform: { originMode: false } } })` exercises the path-mode fallback.
+- **No timers in the sandbox.** Handlers have no `setTimeout` / `setInterval` (in dev or deployed), so a "tick every second" loop cannot live in a route, and a loop of `broadcast()` calls runs back-to-back against `broadcastRate`. Drive periodic broadcasts from a scheduled agent, a webhook, or the page's own timer calling a route.
 - `informer.yaml` and `channels/` are validated at dev-server boot: an entry without `on`, a bad name, a stray or reserved export, two files on one channel print as `[informer] …` so you see at boot what the deploy would 400 on.
 - `__INFORMER__.user` defaults to `{ username: 'dev', displayName: 'Local Developer' }`; override with `mock.user`.
 
@@ -553,11 +556,11 @@ What dev does **not** do: no compute budget, no per-App broadcast rate, no `enab
 - **Opt "moment" frames out of replay.** `{ replay: false }` on typing, cursors, heartbeats; otherwise they crowd the 50-frame window and the frame that mattered rolls off.
 - **Throttle typing on the page.** Every `send('typing')` costs one inbound token per user and, forwarded, one broadcast token per App. One per person every couple of seconds is plenty.
 - **Don't broadcast, send, or export `error` or `connected`.** Reserved; `default` exports are refused too.
-- **A `join` timeout surfaces as `disconnected`, not `join_refused`.** Make `join` faster or raise `config.timeout` (≤ `joinTimeoutMs`).
+- **A `join` timeout or a thrown `join` surfaces as `handler_failed`, not `join_refused`,** and the page does not retry it. Make `join` faster or raise `config.timeout` (≤ `joinTimeoutMs`).
 - **`join` must return exactly `true`.** `return row`, `return 1`, `return !!row || undefined` — anything but the boolean `true` refuses.
 - **Frames over 64 KiB are rejected, not truncated.** Broadcast the changed row (or just its id and let the page fetch), never a table.
 - **Subscribe to the exact name the server broadcasts to, or to a wildcard above it.** `orders/east` is not `orders`; `orders/*` hears both `orders/east` and `orders/east/rush`, never `orders` itself.
-- **Gating a prefix with literal files blocks wildcards over it** until a `[param]` file covers the wildcard and its `join` answers the `'*'` case.
+- **Gating a prefix with literal files blocks wildcards over it** until a `[param]` file at that depth covers the wildcard and its `join` answers the `'*'` case — and any gated file nested deeper than that blocks it regardless.
 - **`channel.params`, not `request.params`.** A channel handler's `request` is `{ user, roles }` only; route params live on `channel.params`, and there is no `respond`.
 - **`seq` restarts** when a channel's counter key expires (30 days idle) or Redis is flushed; the page copes per channel, but a flush restarts every channel at once.
 - **Older skill/docs examples use `/api/_server/...`** for route calls; the bare `/api/...` spelling is current (see `server-routes.md`). Both reach the same route.

@@ -250,10 +250,11 @@ Earlier 2026.1.3 preview builds accepted such entries as inert declarations.
 
 **Names.** Channel keys: segments of letters, digits, `_`, `.`, `-` joined by
 `/` (`orders`, `orders/east`), ≤ 128 chars; a leading `@user/<username>`
-segment is also legal; a wildcard (`rooms/*`) is not a relay target. Event
-names: letters, digits, `_`, `.`, `-`, ≤ 64 chars; `error` and `connected`
-are reserved. Anything else **fails the deploy** with
+segment is also legal. Event names: letters, digits, `_`, `.`, `-`, ≤ 64 chars;
+`error` and `connected` are reserved. Anything else **fails the deploy** with
 `400 Invalid channels: block in informer.yaml: …`, every problem reported at once.
+A wildcard key (`rooms/*`) passes the deploy but never receives relays: `npm run dev`
+flags it at boot, the server drops every relayed frame (`relay_dropped`).
 
 **Rules.**
 
