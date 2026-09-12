@@ -64,6 +64,7 @@ Customers run a spread of Informer versions, so every newer feature carries the 
 | Channels phase 2: inbound `send()` + event exports, `joined`, wildcards, frame `seq` + replay, `connected`, `platform.originMode`, `on` required in `channels:` | 2026.1.3 (the I5-13027 build; earlier 2026.1.3 previews carry phase 1 only — `platform.originMode` is `undefined` there) | `references/channels.md` |
 | Declarative embeddings (`embeddings/`, `embed()`, pgvector) | 2026.1.3 | `references/embeddings.md` |
 | Staged uploads/downloads (`uploads`, `downloads`, `__INFORMER__.upload()`) | 2026.1.3 | `references/streams.md` |
+| Streams phase 2 — transfer events (`onEvent`, `task.created`), `__INFORMER__.streams` list/status/discard, forwarding a stream to an integration (`data` / `form` / `into`) | 2026.1.3, the I5-13030 build | `references/streams.md` |
 | Warehouse loads (`load()`, the run ledger, `schedule()`, streaming ingest) | 2026.2.0 | `references/warehouse-etl.md` |
 | `semantics.yaml` and the semantic registry | 2026.2.0 | `references/semantics.md` |
 | App accounts and public serving (`accounts:`, `public: true`, `/_auth/*`) | 2026.2.0 | `references/accounts-and-login.md` |
@@ -858,7 +859,7 @@ export async function GET({ downloads }) {
 
 Rule of thumb: **into a table → `copyInto()`; into a column → the handle as a parameter; into the isolate → only under 10 MB (`text()` / `json()` / `extractText()`).** Informer 2026.1.3+; older servers have no `uploads` / `downloads` in the bag, so feature-detect rather than assume.
 
-Load `references/streams.md` for: the page helper's options (chunking, concurrency, retry, abort, resume + the fingerprint rule), the `_uploads` / `_downloads` route protocol and the six limits, `copyInto` options and identifier rules, `writeRows` / `write` / `end` / `dl.url` and the three delivery shapes, single-use downloads and `?keep`, the inline cap and the error table, which handler surfaces have streams (not channel handlers), and the dev-server emulation gaps.
+Load `references/streams.md` for: the page helper's options (chunking, concurrency, retry, abort, resume + the fingerprint rule), the `_uploads` / `_downloads` route protocol and the six limits, `copyInto` options and identifier rules, `writeRows` / `write` / `end` / `dl.url` and the three delivery shapes, single-use downloads and `?keep`, the inline cap and the error table, which handler surfaces have streams (not channel handlers), the phase 2 surface (`onEvent` and `task.created`, the `412` resend, `__INFORMER__.streams`, the listing/discard routes, forwarding to an integration with a handle as `data` / `form` or `into` — header ownership and what a failure leaves behind), and the dev-server emulation gaps.
 
 ## App Context
 
@@ -1250,7 +1251,7 @@ The orientation above points to each file; this is the canonical list of what's 
 | `references/copilot.md` | `openChat()` / `showCopilot()` / `registerTool()`, AI completion endpoints (`_chat` / `_completion` / `_object`), `useChat` hook pattern, defensive `_object` parsing |
 | `references/agents.md` | `agents:` declaration, `tools/*.js`, event chaining via `emit()`, cron lifecycle, toolkits/assistants, agent REST API |
 | `references/channels.md` | Live broadcast to open pages and `send()` back — origin-mode requirement and `platform.originMode`, `channels:` relay block (`on` required), `channels/` handlers (`config` / `join` / `joined` / `leave` / event exports, the channel bag), `broadcast()` + error table + `{ replay: false }`, `@user/<username>`, wildcards, the `__INFORMER__.channel()` client API (`since`, `connected`, `send()`, error codes, reconnect + replay, `replay_gap`), `broadcast()` vs `emit()`, limits (`inboundRate`, `replay`), dev-mode coverage (plugin 2.11.0+) |
-| `references/streams.md` | Staged uploads/downloads — `__INFORMER__.upload()` on the page, `uploads.get(id)` → `copyInto()` / bytea parameter / inline reads under the 10 MB cap, `downloads.create()` → `fromQuery()` / `writeRows()` / `return dl` / `dl.url`, the six limits, error table, dev-server emulation gaps |
+| `references/streams.md` | Staged uploads/downloads — `__INFORMER__.upload()` on the page, `uploads.get(id)` → `copyInto()` / bytea parameter / inline reads under the 10 MB cap, `downloads.create()` → `fromQuery()` / `writeRows()` / `return dl` / `dl.url`, the six limits, transfer events and `__INFORMER__.streams`, forwarding to an integration (`data` / `form` / `into`), error table, dev-server emulation gaps |
 | `references/mcp.md` | The `mcp/` folder, `mcp/` vs `tools/` split, writing tools for a context-free caller, identity (`runAs` / `run.user` / `run.roles`, workspace-not-per-caller), the per-app endpoint, OAuth discovery + DCR connect flow, curl testing, observability |
 | `references/informer-yaml.md` | Full `informer.yaml` schema deep dive — slot fields, `$user.*` variables, modernizing legacy `access:` blocks, declaring env-var keys with `env:` |
 | `references/docs-html.md` | In-gallery `docs.html` page, in-app `?` help button, `README.md` fallback |
