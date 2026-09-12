@@ -6,7 +6,7 @@
 >
 > **Availability:** Informer **2026.1.3+** (I5-12979). On older servers the handler bag has no `uploads` / `downloads` and the page has no `__INFORMER__.upload` — feature-detect (`if (!uploads)` in a handler, `typeof __INFORMER__.upload === 'function'` on the page) rather than compare versions; there is no `platform.capabilities` flag for streams. The page helper is injected by the server into every deployed app page, so it does not depend on the Vite plugin version; the **dev-server emulation** needs `@entrinsik/vite-plugin-informer` **2.10.0+** (see [Local development](#local-development)).
 >
-> **2026.1.3+, the I5-13030 build** (phase 2, same release, later build): transfer events (`onEvent`, `task.created`), the `412` resend, `__INFORMER__.streams` (`list()` / `status()` / `discard()`), the listing and discard routes, and forwarding a staged stream to an integration (`context.<slot>.request()` with a handle as `data` / in `form`, or `into`). The version probe cannot tell that build from an earlier 2026.1.3, so feature-detect on the page with `typeof __INFORMER__.streams === 'object'`; a handler learns it the hard way (`request()` with a handle on an earlier build sends `{}` for it). The dev emulation of phase 2 needs plugin **2.12.0+**.
+> **2026.1.3+, the I5-13030 build** (phase 2, same release, later build): transfer events (`onEvent`, `task.created`), the `412` resend, `__INFORMER__.streams` (`list()` / `status()` / `discard()`), the listing and discard routes, and forwarding a staged stream to an integration (`context.<slot>.request()` with a handle as `data` / in `form`, or `into`). The version probe cannot tell that build from an earlier 2026.1.3, so feature-detect on the page with `typeof __INFORMER__.streams === 'object'`; a handler learns it the hard way — on an earlier build the handle's methods cannot cross the isolate boundary, so `request()` throws a `… could not be cloned` error rather than forwarding anything. The dev emulation of phase 2 needs plugin **2.12.0+**.
 
 ## The model
 
@@ -17,7 +17,7 @@ Bytes never enter the app's isolate. The page stages them, the handler holds a *
 | Page | Your app | `__INFORMER__.upload(file)` slices the file, `PUT`s chunks in parallel, retries, seals — and hands your route the resulting `id`. `__INFORMER__.downloadUrl(id, filename)` builds the save-as link for a download a route staged. |
 | Staging store | Informer (harness) | Chunks and staged downloads live in Redis (the platform's `updown` store) for `ttlSeconds`, scoped to the app **and** the user who created them. |
 | Handler | Your app's server code | `uploads.get(id)` / `downloads.create()` return plain metadata objects whose methods ask the host to move bytes: `COPY FROM STDIN` into a table, bind as a `bytea` parameter, stream a query into a download. |
-| Routes | Informer | `POST` / `PUT` / `GET` / `DELETE …/view/_uploads/…` and `GET …/view/_downloads/{id}/{filename?}` under the app's own `/view` subtree — inside the page CSP, covered by the view token. Origin mode serves them as `/_uploads/*` and `/_downloads/*` on the app origin. The helper picks the right base; handlers never see a URL. |
+| Routes | Informer | `POST` / `PUT` / `GET` / `DELETE …/view/_uploads/…` and `GET …/view/_downloads/{id}/{filename?}` under the app's own `/view` subtree — inside the page CSP, covered by the view token. Origin mode serves them as `/_uploads/*` and `/_downloads/*` on the app origin. The helper picks the right base; handlers never build one — the only URL a handler sees is `dl.url` on a download handle. |
 
 A 100 MB import costs nothing against the isolate's 128 MB heap; a million-row export streams Postgres → browser without being materialized. Measured on the demo app: a 100k-row CSV lands in a table through `copyInto` in ~450 ms and streams back out in ~2 s.
 
@@ -68,7 +68,7 @@ What the helper does: `POST …/_uploads` with `filename`, `size`, `contentType`
 
 - `task.id` is set as soon as the upload exists; `task.created` is a promise for that moment (it rejects with a create-time refusal such as a `413` over the cap, or a `429` over `maxStreamsPerUser`); `task.abort()` cancels and discards.
 - **Sealing is the authority on what landed.** If `_complete` answers `412` because a chunk the server acknowledged never became durable, the helper resends exactly the chunks it names (at most 50) and seals again; a second `412` fails the upload, resumable.
-- **Resume:** `__INFORMER__.upload(file, { resume: previousUploadId })` probes `GET …/_uploads/{id}` for `received` / `missing` (both arrays of chunk numbers) and sends only the missing chunks. It refuses unless the file matches both the **size and the fingerprint** the upload was created with — size alone would let two same-length files splice into one upload that completes without complaint.
+- **Resume:** `__INFORMER__.upload(file, { resume: previousUploadId })` probes `GET …/_uploads/{id}` for `received` / `missing` (both arrays of chunk numbers) and sends only the missing chunks. It refuses unless the size matches, and the fingerprint too whenever the upload was created with one (`__INFORMER__.upload()` always sends one) — size alone would let two same-length files splice into one upload that completes without complaint.
 - A failed upload **stays resumable**: only `abort()` discards; any other terminal failure carries `err.uploadId` so the page can offer "Retry" instead of starting over — except an upload the server already reclaimed (`err.code === 'upload_expired'`), which no resume could find. The TTL reclaims the bytes if nobody does.
 - `__INFORMER__.downloadUrl(id, filename)` → the same-origin URL for a download a route staged. The trailing filename is cosmetic (bookmarkable, save-as friendly); `Content-Disposition` comes from the stream's own filename.
 
@@ -102,7 +102,7 @@ await __INFORMER__.streams.discard(uploads[0]);                     // a handle 
 await __INFORMER__.streams.discard(downloadId, 'download');        // or a bare id plus its kind
 ```
 
-Behind it: `GET …/_uploads` and `GET …/_downloads` list the caller's own staged streams for this app (expired ones dropped; another user's never listed, whatever their app); `DELETE …/_downloads/{id}` discards a staged download nobody will claim (`204`; someone else's, or one already gone, `404`). A download that was served, discarded or expired is not listed — unless it was served with `?keep=true`, which leaves it staged and therefore listed.
+Behind it: `GET …/_uploads` and `GET …/_downloads` list the caller's own staged streams for this app (expired ones dropped; another user's never listed, whatever their app); each listed download carries the `url` that serves it, so a page can re-offer a staged file without rebuilding the link. `discard()` issues `DELETE …/_uploads/{id}` or `DELETE …/_downloads/{id}` — the latter frees a staged download nobody will claim (`204`; someone else's, or one already gone, `404`). A download that was served, discarded or expired is not listed — unless it was served with `?keep=true`, which leaves it staged and therefore listed.
 
 `list()` is the truthful source for `maxStreamsPerUser`: streams an earlier session staged and abandoned count against it until they expire, and this is where a page finds them to clear. It is **not** a way to compute how much of `maxStagedBytesPerUser` is left: a stream still open (an unsealed download, an upload being filled from an integration) is held against the byte cap at the ceiling it could still reach, while `size` reports only what has landed (`0` until it seals).
 
@@ -154,7 +154,7 @@ const [row] = await query(
 await upload.discard();
 ```
 
-Reading it back through SQL? Postgres' `encode(data, 'base64')` wraps lines at 76 characters, which the sandbox's strict base64 helpers reject — select `translate(encode(data, 'base64'), E'\n', '')`.
+Reading it back through SQL? Postgres' `encode(data, 'base64')` wraps lines at 76 characters, which the strict check on an `encoding: 'base64'` response body (and `respond()`) rejects as a malformed base64 body — select `translate(encode(data, 'base64'), E'\n', '')`. `base64Decode()` itself tolerates the wrapping.
 
 **Inline reads are the exception.** `text()` / `json()` / `base64()` / `extractText()` are for a config file, a small spreadsheet to inspect, a document to summarize — over `maxInlineBytes` (10 MB) they throw a `413` carrying `data.maxInlineBytes`. Anything headed for a table goes through `copyInto()`; anything headed for a column goes as a parameter.
 
