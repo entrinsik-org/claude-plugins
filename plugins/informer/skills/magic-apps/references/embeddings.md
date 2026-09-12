@@ -4,7 +4,7 @@
 >
 > **Not in this file:** migration mechanics and the dev-workspace lifecycle — see `persistence.md`. `query()` calling shape and parameter binding — see `server-routes.md`. `emit()` event plumbing — see `server-routes.md` / `agents.md`.
 >
-> **Availability:** Informer **2026.1.3+** (I5-12984). The folder, `embed()`, and the status/`_run` routes simply do not exist on older servers, and the CLI ships `embeddings/` only from `@entrinsik/vite-plugin-informer` **2.10.0+** (2.7.0, the release before it, never uploads the folder, so the use case silently does not exist on the server, and any `server/` file importing from it fails the deploy at bundle time with `import not found in app library`). An app that must also run on older servers **feature-detects on `platform.capabilities.embeddings`** (see Feature detection below), keeps its vector DDL out of numbered migrations or gates it with `-- requires: embeddings` (see `persistence.md`), and only states a floor (`requires: { informer: '>=…' }` in informer.yaml, see `informer-yaml.md`) when it cannot work without the feature.
+> **Availability:** Informer **2026.1.3+** (I5-12984). The folder, `embed()`, and the status/`_run` routes simply do not exist on older servers, and the CLI ships `embeddings/` only from `@entrinsik/vite-plugin-informer` **2.10.0+** (2.7.0, the release before it, never uploads the folder, so the use case silently does not exist on the server, and any `server/` file importing from it fails the deploy at bundle time with `import not found in app library`). The dev `embed()` opt-in needs plugin **2.12.0+** (see Feature detection). An app that must also run on older servers **feature-detects on `platform?.capabilities?.embeddings`** (see Feature detection below), keeps its vector DDL out of numbered migrations or gates it with `-- requires: embeddings` (see `persistence.md`), and only states a floor (`requires: { informer: '>=…' }` in informer.yaml, see `informer-yaml.md`) when it cannot work without the feature.
 
 Apps can maintain vector embeddings over their own data **declaratively**. You ship an `embeddings/` folder with one file per use case; the platform acts as an **embedding pump** that asks your app what's pending, chunks and embeds the content in billed batches, and hands the vectors back for your app to store in its own workspace tables. You never call an embedding provider yourself, and the platform never holds a copy of your corpus.
 
@@ -65,10 +65,10 @@ Each run drains the pending set in a loop: `GET` the next batch, chunk each row'
 
 ### `GET({ query, batch })`
 
-- `batch: { limit, revision }` — request at most `limit` rows; compare `revision` against what's stored beside your vectors.
+- `batch: { limit, revision }` — request at most `limit` rows; compare `revision` against what's stored beside your vectors. **Honour `limit`:** returning more rows than requested is a contract violation (422) that parks the use case — an omitted `LIMIT $1` on the pending-set query is the usual cause, and it would otherwise bill the whole table.
 - Return an array of rows shaped `{ id, content, metadata? }`.
 - **Return `[]` when drained.** Returning no body at all (a missing `return`) is an authoring error, not a drained corpus — the platform treats it as such rather than silently stopping.
-- A row whose `content` exceeds **1,000,000 characters**, or whose content produces no chunks at all (empty or whitespace-only), is reported in `failures` and skipped on later runs rather than chunked. Both are deterministic for that content, and tokenizing is synchronous work that would otherwise stall the server.
+- A row whose `content` exceeds **200,000 characters** (`MAX_CONTENT_CHARS` in the pump — the product doc's 1,000,000 is stale), or whose content produces no chunks at all (empty or whitespace-only), is reported in `failures` and skipped on later runs rather than chunked. Both are deterministic for that content, and tokenizing is synchronous work that would otherwise stall the server. So is a document that chunks into more than **2,000 chunks** (`too_many_chunks`): it is tombstoned, not stored in part — a low `maxTokens` over long documents silently drops them, and the fix is to raise `maxTokens`.
 
 ### `POST({ query, batch })`
 
@@ -179,7 +179,7 @@ export async function POST({ query, embed, request }) {
 
 Two things that bite if you skip them. `JSON.stringify(await embed(...))` stringifies the whole object, and Postgres rejects it as a malformed vector literal — destructure first. And an empty result after a model repoint is the guard working, not a bug: distinguish it from an empty corpus (count rows at any revision) before you show the user anything.
 
-A revision hashes **the use case's own config alongside the model**, so two use cases never share one, even on the same install. Searching two corpora therefore needs an `embed()` call per use case. Reusing one query vector across both is geometrically fine — same model, same space — but it leaves the second corpus with no revision to check against, which is the whole guard.
+A revision hashes **the use case's config alongside the model** — `chunking`, `maxTokens`, `overlapTokens`, and the explicit `revision` — not its name, so two use cases with the same config share one and two with different chunking do not. Search two corpora with an `embed()` call per use case anyway, so the revision you filter on is the one that produced the stored vectors. Reusing one query vector across both is geometrically fine — same model, same space — but it leaves the second corpus with no revision to check against, which is the whole guard.
 
 `embed()` is for query-time vectors, so it is bounded: at most **100,000 characters per call** and **100 calls per handler invocation**, and it is refused when the app's compute budget is exhausted. Embedding a corpus belongs in an `embeddings/` use case, where the work is batched and billed per slice.
 
@@ -195,29 +195,29 @@ So a use case showing **Retry scheduled** is healing on its own; one showing **L
 
 ## Feature detection
 
-- **In handler code:** `platform.capabilities.embeddings` on the handler bag. `embed` is **always a function** server-side and throws when the app type lacks the capability, so `typeof embed === 'function'` only tells an older server (no `embed` at all) from a newer one — check the capability flag to know whether a call will succeed.
-- **In the browser:** `window.__INFORMER__.platform.capabilities.embeddings`.
+- **In handler code:** `platform?.capabilities?.embeddings` on the handler bag — optional chaining, because releases before 2026.1.3 inject no `platform` at all, and a bare `platform.capabilities` throws there instead of reporting `false`; a missing `platform` means "older server", not "capability off". `embed` is **always a function** server-side and throws when the app type lacks the capability, so `typeof embed === 'function'` only tells an older server (no `embed` at all) from a newer one — check the capability flag to know whether a call will succeed.
+- **In the browser:** `window.__INFORMER__.platform?.capabilities?.embeddings`, for the same reason.
 - **As a floor:** `requires: { informer: '>=<version>' }` in `informer.yaml` refuses the deploy on an older server with a clear message, for an app that cannot work without the feature.
 
 Locally the Vite plugin's dev mirror reports `embeddings: false`: the pump and `embed()` need a real Informer, so an app sees in development exactly what it sees on an install without the feature. The dev `embed()` exists and throws a written explanation rather than being undefined, so the dev failure reads as the same lesson as the deployed one.
 
-**2026.1.3+** A project whose purpose is vector search opts in with `informer({ mock: { platform: { capabilities: { embeddings: true } } } })`. The descriptor then reports `embeddings: true` to the page and to handler code alike, and the dev bag's `embed()` posts to the deployed app's `POST /apps/{id}/embeddings/{name}/_embed` on the configured server — the same host function a deployed handler's `embed()` runs, so the vector, the revision and the billing are the deployed ones, and a search route can be exercised under `npm run dev` against the corpus the pump built there. It needs the app deployed at least once (the use case and its corpus live on the server) and `informer.id` in `package.json`, which `informer-init` writes; every call is billed to the app. The pump itself still never runs locally.
+**2026.1.3+ server, plugin 2.12.0+.** A project whose purpose is vector search opts in with `informer({ mock: { platform: { capabilities: { embeddings: true } } } })`. The descriptor then reports `embeddings: true` to the page and to handler code alike, and the dev bag's `embed()` posts to the deployed app's `POST /apps/{id}/embeddings/{name}/_embed` on the configured server — the same host function a deployed handler's `embed()` runs, so the **query vector, the revision and the billing are the deployed ones. The corpus is not:** `query()` still reads the dev workspace datasource, which the pump never writes to, so a dev search compares a deployed vector against local rows and finds nothing unless you seeded vectors there yourself. What the opt-in buys is exercising the handler end to end — the call, the shape, the revision filter — not the answer. It needs the app deployed at least once and `informer.id` in `package.json` (which `informer-init` writes), and the dev credentials (`INFORMER_API_KEY`, or `INFORMER_USER` / `INFORMER_PASS`) must have **write** access to that app — the route is gated by `permission.app.write` as a spend control, so a read-only login gets a 403. Every call is billed to the app. The pump itself still never runs locally.
 
 ## Watching the pump
 
-The App admin panel has an **Embeddings** tab (Data group): one row per use case with pump status (up to date / **indexed with gaps** / queued / retry scheduled / running / failed), chunking, schedule and event triggers, last run and next run, the effective revision, the last run's failed-docs count, a skipped-docs (tombstoned) count, the failed-runs count while a retry is backing off, the last error inline, and a **Run now** action. *Indexed with gaps* is the degraded state after a run that skipped or failed documents; a warning banner appears when the server has no resolvable embedding model. During development this is usually faster than curling the routes below, which expose the same data.
+The App admin panel has an **Embeddings** tab (Data group): one row per use case with pump status (never run / up to date / **indexed with gaps** / queued / retry scheduled / running / last run failed), chunking, schedule and event triggers, last run and next run, the effective revision, the last run's failed-docs count, a skipped-docs (tombstoned) count, the failed-runs count while a retry is backing off, the last error inline, and a **Run now** action. *Indexed with gaps* is the degraded state after a run that skipped or failed documents; a warning banner appears when the server has no resolvable embedding model. During development this is usually faster than curling the routes below, which expose the same data.
 
 ## Routes
 
 ### `GET /apps/{id}/embeddings`
 
-Returns `{ items: [...] }`: per use case the declared config (`description`, `chunking`, `on`, `cron`, `batchSize`), `revision` (config + resolved model; `null` when no embedding model resolves) and `configRevision` (the config-only half), `running`, `pending` (a poke is queued) with `nextRunAt` (in the future while a retry backs off) and `attempts` (consecutive failed runs), `tombstoned` (count of permanently failed documents), `lastRunAt`, `lastError`, and the last run's `lastFailed` / `lastSkipped` counts. Tombstone content hashes stay server-side.
+Returns `{ items: [...], modelError }`: `modelError` is non-null when the server cannot resolve an embedding model at all (every run will fail until one is configured — the banner in the admin tab); per use case the declared config (`description`, `chunking`, `on`, `cron`, `batchSize`), `revision` (config + resolved model; `null` when no embedding model resolves) and `configRevision` (the config-only half), `running`, `pending` (a poke is queued) with `nextRunAt` (in the future while a retry backs off) and `attempts` (consecutive failed runs), `tombstoned` (count of permanently failed documents), `lastRunAt`, `lastError`, and the last run's `lastFailed` / `lastSkipped` counts. Tombstone content hashes stay server-side.
 
 **Permission:** read access to the App — it's status metadata, like the dependencies listing.
 
 ### `POST /apps/{id}/embeddings/{name}/_run`
 
-Drains one use case immediately: claims the single-flight lease and executes the pump loop, returning `{ status: 'ok', useCase, processed, failed, skipped, batches, drained }`. Returns `{ status: 'already_running', useCase }` when a fresh lease is held; a lease older than 30 minutes (a crashed run) is reclaimed.
+Drains one use case immediately: claims the single-flight lease and executes the pump loop, returning `{ status: 'ok', useCase, processed, failed, skipped, blocked, batches, drained }`. `blocked` counts batches made entirely of tombstoned rows; unlike a capped run, a blocked one does **not** re-poke itself, so it stays put until the app's `GET` excludes those rows. Returns `{ status: 'already_running', useCase }` when a fresh lease is held; a lease older than 30 minutes (a crashed run) is reclaimed.
 
 Errors: 402 (compute budget exhausted), 404 (handlers not deployed), 422 (`GET`/`POST` broke the contract, including an error status the handler returned). **Any 4xx parks the use case** with the reason as `lastError`. A 5xx (502 handler timed out or threw, 503 no embedding model resolves, 500 provider error) means the run failed after claiming the lease; whether it re-pokes with backoff or parks is decided by cause, per Failed runs above — a non-retryable provider error surfaces as a 500 and parks.
 
@@ -225,11 +225,19 @@ Errors: 402 (compute budget exhausted), 404 (handlers not deployed), 422 (`GET`/
 
 This is your debugging loop during development: deploy, **Run now** in the admin panel's Embeddings tab (or `_run` here), read `lastError`, fix, repeat.
 
+### `POST /apps/{id}/embeddings/{name}/_embed`
+
+Embeds one query text with the use case's model, exactly as a deployed handler's `embed(name, text)` does, and returns `{ embedding, revision }`. Payload `{ text }`, at most 100,000 characters, embedded as sent (no trimming); unknown keys are stripped. This is what the dev opt-in above posts to.
+
+Errors: 400 (blank or over-length text), 402 (compute budget exhausted), 404 (no such app, or no such use case deployed), 502 (the provider failed — deliberately not a bare 500).
+
+**Permission:** `permission.app.write`, checked before the use-case lookup so names cannot be enumerated; every call bills the app.
+
 ## Deploy behavior & gotchas
 
 - `embeddings/` is uploaded and scanned like `server/` — `npm run deploy` is the whole setup, no manifest block (plugin 2.10.0+; see Availability above).
 - **It is a server-side folder.** Nothing in it is served to browsers, and any entry that is not a handler is reported as a deploy warning. An app that kept assets there before 2026.1.3 must move them.
-- `npm run dev` never runs the pump, and its `embed()` throws (see Feature detection). The search route works only against a deployed app.
+- `npm run dev` never runs the pump, and its `embed()` throws unless the project opts in (see Feature detection); either way the stored corpus is the deployed one, so a full search round-trip needs a deployed app.
 - Projection rows reconcile per deploy: config and revision rebuilt, run state on surviving rows preserved, removed files drop their row. **Your vector tables are never touched** — dropping a use case file leaves its data for your migrations to clean up.
 - `server/` and `webhooks/` share one route namespace: the same method and path in both fails the deploy with an error naming both files. **2026.1.3+** An `embeddings/` use case never collides with either — its pump handlers persist under their own method — so name it for the table it indexes: `embeddings/articles.js` beside `server/articles/index.js` is the expected shape.
 - **Pump handlers are never reachable through the app's own API surface or webhooks, and never appear in the app's `openapi.json`.** Only the pump invokes them. Don't try to call `GET`/`POST` from the frontend — put shared logic in a module both can import if you need it.
