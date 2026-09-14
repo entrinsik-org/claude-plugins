@@ -13,12 +13,12 @@ An Informer App is a custom HTML/JS/CSS application that runs inside Informer. I
 - Make authenticated requests to external APIs via integrations (Salesforce, etc.)
 - **Store and query its own data** in a dedicated Postgres workspace (with SQL migrations)
 - **Run server-side JavaScript handlers** in sandboxed V8 isolates (with direct DB access)
-- **Maintain vector embeddings** over its own data declaratively (platform embedding pump + pgvector) for semantic search (Informer 2026.1.3+)
-- **Move files and large result sets** (CSV imports, attachments, big exports) without the bytes touching the app's sandbox — staged uploads/downloads (2026.1.3+)
+- **Maintain vector embeddings** over its own data declaratively (platform embedding pump + pgvector) for semantic search (Informer 2026.1.4+)
+- **Move files and large result sets** (CSV imports, attachments, big exports) without the bytes touching the app's sandbox — staged uploads/downloads (2026.1.4+)
 - Render charts, tables, and interactive visualizations
 - Include a **built-in AI copilot** sidebar that can query your data and answer questions in context
 - Define **AI agents** that react to events, execute tools, and chain together for automated workflows
-- Push **live updates** to every open page over a WebSocket Informer owns for it, and take messages back from the page over the same socket (channels — 2026.1.3+, origin-mode servers)
+- Push **live updates** to every open page over a WebSocket Informer owns for it, and take messages back from the page over the same socket (channels — 2026.1.4+, origin-mode servers)
 
 Apps are stored in Informer libraries and served through the Informer UI. (You may see the term "Magic Report" in older documentation — Apps are the current name for the same concept.)
 
@@ -59,21 +59,21 @@ Customers run a spread of Informer versions, so every newer feature carries the 
 | Feature | Since | Reference |
 |---|---|---|
 | Bare `/api/{path}` app routes; per-app origins (origin mode) | 2026.1.2 | `references/server-routes.md` |
-| `platform` descriptor (`platform.version`, `platform.capabilities`) and the `requires:` manifest key | 2026.1.3 | `references/server-routes.md`, `references/informer-yaml.md` |
-| Live broadcast channels (`broadcast()`, `channels:`, `channels/` with `join` / `leave`, `@user/`) | 2026.1.3 | `references/channels.md` |
-| Channels phase 2: inbound `send()` + event exports, `joined`, wildcards, frame `seq` + replay, `connected`, `platform.originMode`, `on` required in `channels:` | 2026.1.3 (every released build; only unreleased previews carried phase 1 alone, with `platform.originMode` `undefined`) | `references/channels.md` |
-| Declarative embeddings (`embeddings/`, `embed()`, pgvector) | 2026.1.3 | `references/embeddings.md` |
-| Staged uploads/downloads (`uploads`, `downloads`, `__INFORMER__.upload()`) | 2026.1.3 | `references/streams.md` |
-| Streams phase 2 — transfer events (`onEvent`, `task.created`), `__INFORMER__.streams` list/status/discard, forwarding a stream to an integration (`data` / `form` / `into`) | 2026.1.3, the I5-13030 build | `references/streams.md` |
+| `platform` descriptor (`platform.version`, `platform.capabilities`) and the `requires:` manifest key | 2026.1.4 | `references/server-routes.md`, `references/informer-yaml.md` |
+| Live broadcast channels (`broadcast()`, `channels:`, `channels/` with `join` / `leave`, `@user/`) | 2026.1.4 | `references/channels.md` |
+| Channels phase 2: inbound `send()` + event exports, `joined`, wildcards, frame `seq` + replay, `connected`, `platform.originMode`, `on` required in `channels:` | 2026.1.4 (every released build; only unreleased previews carried phase 1 alone, with `platform.originMode` `undefined`) | `references/channels.md` |
+| Declarative embeddings (`embeddings/`, `embed()`, pgvector) | 2026.1.4 | `references/embeddings.md` |
+| Staged uploads/downloads (`uploads`, `downloads`, `__INFORMER__.upload()`) | 2026.1.4 | `references/streams.md` |
+| Streams phase 2 — transfer events (`onEvent`, `task.created`), `__INFORMER__.streams` list/status/discard, forwarding a stream to an integration (`data` / `form` / `into`) | 2026.1.4 (every released build; only unreleased previews carried phase 1 alone) | `references/streams.md` |
 | Warehouse loads (`load()`, the run ledger, `schedule()`, streaming ingest) | 2026.2.0 | `references/warehouse-etl.md` |
 | `semantics.yaml` and the semantic registry | 2026.2.0 | `references/semantics.md` |
 | App accounts and public serving (`accounts:`, `public: true`, `/_auth/*`) | 2026.2.0 | `references/accounts-and-login.md` |
 
 Features not listed have no floor recorded here; where a reference states one inline (the `openapi.json` endpoint needs 2026.1.1, for example), that line wins.
 
-**Learning the target version.** `GET /api/about` on the target server reports its build version: unauthenticated, unchanged across releases, and what the Vite plugin itself probes at deploy. From 2026.1.3 the running app also sees it as `window.__INFORMER__.platform.version` on the page and `platform.version` in every handler bag, with `platform.capabilities` for feature flags and (from the I5-13027 build) `platform.originMode` for whether apps serve from their own origins; below that `platform` is absent entirely, so feature-detect with optional chaining (`platform?.capabilities?.channels`). The Vite dev mock reports `version: 'dev'`, its own capability flags, and `originMode: true`. Record the answer as `requires: { informer: '>=<version>' }`: servers from 2026.1.3 refuse a deploy below it, and `@entrinsik/vite-plugin-informer` 2.10.0+ enforces it at deploy against older servers, which ignore the key themselves.
+**Learning the target version.** `GET /api/about` on the target server reports its build version: unauthenticated, unchanged across releases, and what the Vite plugin itself probes at deploy. From 2026.1.4 the running app also sees it as `window.__INFORMER__.platform.version` on the page and `platform.version` in every handler bag, with `platform.capabilities` for feature flags and (from the I5-13027 build) `platform.originMode` for whether apps serve from their own origins; below that `platform` is absent entirely, so feature-detect with optional chaining (`platform?.capabilities?.channels`). The Vite dev mock reports `version: 'dev'`, its own capability flags, and `originMode: true`. Record the answer as `requires: { informer: '>=<version>' }`: servers from 2026.1.4 refuse a deploy below it, and `@entrinsik/vite-plugin-informer` 2.10.0+ enforces it at deploy against older servers, which ignore the key themselves — except 2026.1.3, where neither side checks it (next paragraph).
 
-**The Vite plugin's floors.** Deploy support for every 2026.1.3 feature (`channels/` and `embeddings/` upload, the `requires:` gate, the `platform` mock, the streams emulation) arrived together in `@entrinsik/vite-plugin-informer` **2.10.0**; 2.8.0 and 2.9.0 were never published, and 2.7.0 is the release before it. The dev server caught up in two steps: **2.11.0** runs `channels/` handlers and the page's `send()` locally (`channels.md`), and **2.12.0** aligns that emulation with the server (wildcard gating, replay expiry, the send budget), adds the `embed()` opt-in (`embeddings.md`), and emulates the streams phase 2 surface — `__INFORMER__.streams`, transfer events, forwarding to an integration (`streams.md`). Install lines use `@latest`, which resolves to 2.12.0 or later. Against a server below 2026.1.3, 2.10.0+ leaves `channels/` and `embeddings/` on disk, because those releases would serve the folders as static files, and names every feature that would be inert, so a green deploy cannot pass for a working one.
+**The Vite plugin's floors.** Deploy support for every 2026.1.4 feature (`channels/` and `embeddings/` upload, the `requires:` gate, the `platform` mock, the streams emulation) arrived together in `@entrinsik/vite-plugin-informer` **2.10.0**; 2.8.0 and 2.9.0 were never published, and 2.7.0 is the release before it. The dev server caught up in two steps: **2.11.0** runs `channels/` handlers and the page's `send()` locally (`channels.md`), and **2.12.0** aligns that emulation with the server (wildcard gating, replay expiry, the send budget), adds the `embed()` opt-in (`embeddings.md`), and emulates the streams phase 2 surface — `__INFORMER__.streams`, transfer events, forwarding to an integration (`streams.md`). Install lines use `@latest`, which resolves to 2.12.0 or later. Against a server below 2026.1.3, 2.10.0+ leaves `channels/` and `embeddings/` on disk, because those releases would serve the folders as static files, and names every feature that would be inert, so a green deploy cannot pass for a working one. **2026.1.3 itself slips through:** 2.10.0 through 2.12.0 were cut while these features were slated for 2026.1.3 and still take it as their floor, but 2026.1.3 shipped as a hotfix without them. Against a 2026.1.3 server those releases upload both folders, which it serves as static files (channel authorization and workspace SQL readable from the App's view URL), warn about nothing, and skip the `requires:` check the server does not perform either. Read `GET /api/about` first, and never deploy an app with `channels/` or `embeddings/` to 2026.1.3.
 
 **Tagging inside a reference.** A whole feature states its floor in the reference's Availability block. A later addition to an existing feature carries the floor on its own row or sentence, bold, as `**2026.1.4+**`.
 
@@ -780,7 +780,7 @@ Load `references/webhooks.md` for: file-convention routing, the `?token=` issuan
 
 ## Embeddings — overview
 
-Apps can maintain **vector embeddings over their own data** declaratively (Informer **2026.1.3+**). Ship an `embeddings/` folder with one file per use case — `GET` and `POST` handlers plus an optional `config` — and the platform runs an **embedding pump**: it asks your `GET` what's pending, chunks and embeds the content in billed batches, and hands the vectors to your `POST` to store in your own workspace tables. The platform holds no copy of the corpus and no progress ledger — your `GET`'s anti-join against your own vector table is the watermark.
+Apps can maintain **vector embeddings over their own data** declaratively (Informer **2026.1.4+**). Ship an `embeddings/` folder with one file per use case — `GET` and `POST` handlers plus an optional `config` — and the platform runs an **embedding pump**: it asks your `GET` what's pending, chunks and embeds the content in billed batches, and hands the vectors to your `POST` to store in your own workspace tables. The platform holds no copy of the corpus and no progress ledger — your `GET`'s anti-join against your own vector table is the watermark.
 
 ```javascript
 // embeddings/tickets.js — both halves required; deploy scans the folder like server/
@@ -795,7 +795,7 @@ Load `references/embeddings.md` for: the use-case file contract (`config` strict
 
 ## Channels — overview
 
-Informer **2026.1.3+**, origin-mode servers only. Apps can push **live updates to every open page** over a WebSocket Informer owns for them, and take messages back from the page over the same socket. Name a channel (a relay of events you already `emit()`, or a gated one under `channels/`), subscribe on the page, and `broadcast()` from any server-side handler — no socket code, no credentials, no Redis in the App. **Requires an origin-mode server** (`app.appsBaseUrl`); read `window.__INFORMER__.platform.originMode` before the first `channel()` call and fall back to polling when it is not `true`. On a path-mode server the deploy warns (`channels_require_origin_mode`) and `__INFORMER__.channel()` throws `origin_mode_required`.
+Informer **2026.1.4+**, origin-mode servers only. Apps can push **live updates to every open page** over a WebSocket Informer owns for them, and take messages back from the page over the same socket. Name a channel (a relay of events you already `emit()`, or a gated one under `channels/`), subscribe on the page, and `broadcast()` from any server-side handler — no socket code, no credentials, no Redis in the App. **Requires an origin-mode server** (`app.appsBaseUrl`); read `window.__INFORMER__.platform.originMode` before the first `channel()` call and fall back to polling when it is not `true`. On a path-mode server the deploy warns (`channels_require_origin_mode`) and `__INFORMER__.channel()` throws `origin_mode_required`.
 
 ```yaml
 # informer.yaml — every emit('order_created') is also broadcast to `orders` (`on` is required; the block declares relays only)
@@ -857,7 +857,7 @@ export async function GET({ downloads }) {
 }
 ```
 
-Rule of thumb: **into a table → `copyInto()`; into a column → the handle as a parameter; into the isolate → only under 10 MB (`text()` / `json()` / `extractText()`).** Informer 2026.1.3+; older servers have no `uploads` / `downloads` in the bag, so feature-detect rather than assume.
+Rule of thumb: **into a table → `copyInto()`; into a column → the handle as a parameter; into the isolate → only under 10 MB (`text()` / `json()` / `extractText()`).** Informer 2026.1.4+; older servers have no `uploads` / `downloads` in the bag, so feature-detect rather than assume.
 
 Load `references/streams.md` for: the page helper's options (chunking, concurrency, retry, abort, resume + the fingerprint rule), the `_uploads` / `_downloads` route protocol and the six limits, `copyInto` options and identifier rules, `writeRows` / `write` / `end` / `dl.url` and the three delivery shapes, single-use downloads and `?keep`, the inline cap and the error table, which handler surfaces have streams (not channel handlers), the phase 2 surface (`onEvent` and `task.created`, the `412` resend, `__INFORMER__.streams`, the listing/discard routes, forwarding to an integration with a handle as `data` / `form` or `into` — header ownership and what a failure leaves behind), and the dev-server emulation gaps.
 

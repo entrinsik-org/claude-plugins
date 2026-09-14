@@ -17,7 +17,7 @@ first shipped it: one table in `SKILL.md` (Feature floors) and an Availability
 block at the top of its reference. Claude pins the target version first, reads
 the table against it, and offers the fallback for anything the target does not
 have. An app records its floor as `requires: { informer: '>=…' }` in
-`informer.yaml`; servers from 2026.1.3 refuse a deploy below it and older ones
+`informer.yaml`; servers from 2026.1.4 refuse a deploy below it and older ones
 ignore the key.
 
 Docs for a feature that has merged into an Informer release branch go straight

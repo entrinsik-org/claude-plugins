@@ -4,9 +4,9 @@
 >
 > **Not in this file:** the rest of the handler bag (`query`, `transaction`, `fetch`, `respond`, …) — see `server-routes.md`. Small files that fit a JSON field (base64 in, `base64Decode()` / `extractText(data, type)`) — see `server-routes.md`.
 >
-> **Availability:** Informer **2026.1.3+** (I5-12979). On older servers the handler bag has no `uploads` / `downloads` and the page has no `__INFORMER__.upload` — feature-detect (`if (!uploads)` in a handler, `typeof __INFORMER__.upload === 'function'` on the page) rather than compare versions; there is no `platform.capabilities` flag for streams. The page helper is injected by the server into every deployed app page, so it does not depend on the Vite plugin version; the **dev-server emulation** needs `@entrinsik/vite-plugin-informer` **2.10.0+** (see [Local development](#local-development)).
+> **Availability:** Informer **2026.1.4+** (I5-12979). On older servers the handler bag has no `uploads` / `downloads` and the page has no `__INFORMER__.upload` — feature-detect (`if (!uploads)` in a handler, `typeof __INFORMER__.upload === 'function'` on the page) rather than compare versions; there is no `platform.capabilities` flag for streams. The page helper is injected by the server into every deployed app page, so it does not depend on the Vite plugin version; the **dev-server emulation** needs `@entrinsik/vite-plugin-informer` **2.10.0+** (see [Local development](#local-development)).
 >
-> **2026.1.3+, the I5-13030 build** (phase 2, same release, later build): transfer events (`onEvent`, `task.created`), the `412` resend, `__INFORMER__.streams` (`list()` / `status()` / `discard()`), the listing and discard routes, and forwarding a staged stream to an integration (`context.<slot>.request()` with a handle as `data` / in `form`, or `into`). The version probe cannot tell that build from an earlier 2026.1.3, so feature-detect on the page with `typeof __INFORMER__.streams === 'object'`; a handler learns it the hard way — on an earlier build the handle's methods cannot cross the isolate boundary, so `request()` throws a `… could not be cloned` error rather than forwarding anything. The dev emulation of phase 2 needs plugin **2.12.0+**.
+> **2026.1.4+** (I5-13030, phase 2; every released build carries it, only unreleased preview builds had phase 1 alone): transfer events (`onEvent`, `task.created`), the `412` resend, `__INFORMER__.streams` (`list()` / `status()` / `discard()`), the listing and discard routes, and forwarding a staged stream to an integration (`context.<slot>.request()` with a handle as `data` / in `form`, or `into`). Feature-detect on the page with `typeof __INFORMER__.streams === 'object'`; a handler on a phase 1 build learns it the hard way — the handle's methods cannot cross the isolate boundary, so `request()` throws a `… could not be cloned` error rather than forwarding anything. The dev emulation of phase 2 needs plugin **2.12.0+**.
 
 ## The model
 
@@ -74,7 +74,7 @@ What the helper does: `POST …/_uploads` with `filename`, `size`, `contentType`
 
 Every helper works unchanged in path mode, on an app origin, and under the Vite dev server. Don't hand-roll the protocol with `fetch` — the helper owns geometry, retry, abort, and the base URL.
 
-### Watching a transfer (2026.1.3, I5-13030 build)
+### Watching a transfer (2026.1.4, I5-13030 build)
 
 `onEvent` receives one plain object per step, in order. A progress bar hides the fact that three chunks are usually in flight and land out of order; this is how a page shows it.
 
@@ -87,7 +87,7 @@ Every helper works unchanged in path mode, on an app origin, and under the Vite 
 
 A listener that throws does not fail the transfer it is watching; its error is rethrown on a fresh tick so it still reaches the console.
 
-### `__INFORMER__.streams` (2026.1.3, I5-13030 build)
+### `__INFORMER__.streams` (2026.1.4, I5-13030 build)
 
 What the staging area holds for the current user in this app. The helper owns the base URL for these routes, so a page asks here rather than deriving a prefix from `downloadUrl('')` and building the calls itself.
 
@@ -210,7 +210,7 @@ Rules that matter:
 - **Auto-seal.** A download left open when the handler returns is sealed for you — background work after `respond()` still produces a complete file.
 - **Cast dates in SQL** (`ordered_on::text`). The encoder stringifies what pg hands it, and a `DATE` arrives as a JS `Date`, which prints as a locale string.
 
-## Forwarding to an integration (2026.1.3, I5-13030 build)
+## Forwarding to an integration (2026.1.4, I5-13030 build)
 
 A staged stream can be the body of a `context.<slot>.request()` call, and an integration's response can land in one. Either way the host moves the bytes between the staging store and the upstream; the handler holds only handles. Works for **`target: integration` slots only** — `fetch()` and `target: app` slots do not take handles.
 
