@@ -255,7 +255,8 @@ Unreleased preview builds accepted such entries as inert declarations.
 `/` (`orders`, `orders/east`), ≤ 128 chars; a leading `@user/<username>`
 segment is also legal. Event names: letters, digits, `_`, `.`, `-`, ≤ 64 chars;
 `error` and `connected` are reserved. Anything else **fails the deploy** with
-`400 Invalid channels: block in informer.yaml: …`, every problem reported at once.
+`400 Invalid channels: block in informer.yaml: …`, every problem reported at once
+(a missing `on`, above, is reported on its own first).
 A wildcard key (`rooms/*`) passes the deploy but never receives relays: `npm run dev`
 flags it at boot, the server drops every relayed frame (`relay_dropped`).
 
