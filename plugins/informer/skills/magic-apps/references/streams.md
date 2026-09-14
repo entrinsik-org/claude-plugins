@@ -17,7 +17,7 @@ Bytes never enter the app's isolate. The page stages them, the handler holds a *
 | Page | Your app | `__INFORMER__.upload(file)` slices the file, `PUT`s chunks in parallel, retries, seals — and hands your route the resulting `id`. `__INFORMER__.downloadUrl(id, filename)` builds the save-as link for a download a route staged. |
 | Staging store | Informer (harness) | Chunks and staged downloads live in Redis (the platform's `updown` store) for `ttlSeconds`, scoped to the app **and** the user who created them. |
 | Handler | Your app's server code | `uploads.get(id)` / `downloads.create()` return plain metadata objects whose methods ask the host to move bytes: `COPY FROM STDIN` into a table, bind as a `bytea` parameter, stream a query into a download. |
-| Routes | Informer | `POST` / `PUT` / `GET` / `DELETE …/view/_uploads/…` and `GET …/view/_downloads/{id}/{filename?}` under the app's own `/view` subtree — inside the page CSP, covered by the view token. Origin mode serves them as `/_uploads/*` and `/_downloads/*` on the app origin. The helper picks the right base; handlers never build one — the only URL a handler sees is `dl.url` on a download handle. |
+| Routes | Informer | `POST` / `PUT` / `GET` / `DELETE …/view/_uploads/…`, `GET …/view/_downloads/{id}/{filename?}` and `DELETE …/view/_downloads/{id}`, plus the listings `GET …/view/_uploads` and `GET …/view/_downloads`, under the app's own `/view` subtree — inside the page CSP, covered by the view token. Origin mode serves them as `/_uploads/*` and `/_downloads/*` on the app origin. The helper picks the right base; handlers never build one — the only URL a handler sees is `dl.url` on a download handle. |
 
 A 100 MB import costs nothing against the isolate's 128 MB heap; a million-row export streams Postgres → browser without being materialized. Measured on the demo app: a 100k-row CSV lands in a table through `copyInto` in ~450 ms and streams back out in ~2 s.
 
@@ -104,7 +104,7 @@ await __INFORMER__.streams.discard(downloadId, 'download');        // or a bare 
 
 Behind it: `GET …/_uploads` and `GET …/_downloads` list the caller's own staged streams for this app (expired ones dropped; another user's never listed, whatever their app); each listed download carries the `url` that serves it, so a page can re-offer a staged file without rebuilding the link. `discard()` issues `DELETE …/_uploads/{id}` or `DELETE …/_downloads/{id}` — the latter frees a staged download nobody will claim (`204`; someone else's, or one already gone, `404`). A download that was served, discarded or expired is not listed — unless it was served with `?keep=true`, which leaves it staged and therefore listed.
 
-`list()` is the truthful source for `maxStreamsPerUser`: streams an earlier session staged and abandoned count against it until they expire, and this is where a page finds them to clear. It is **not** a way to compute how much of `maxStagedBytesPerUser` is left: a stream still open (an unsealed download, an upload being filled from an integration) is held against the byte cap at the ceiling it could still reach, while `size` reports only what has landed (`0` until it seals).
+`list()` is the truthful source for `maxStreamsPerUser`: streams an earlier session staged and abandoned count against it until they expire, and this is where a page finds them to clear. It is **not** a way to compute how much of `maxStagedBytesPerUser` is left: a stream still open (an unsealed download, an upload being filled from an integration) is held against the byte cap at the ceiling it could still reach, while its listed `size` is only the bytes written so far. (A page upload is simpler: it is held at, and lists, its declared size from the moment it is created.)
 
 ## The handler: `uploads.get(id)`
 
@@ -212,7 +212,7 @@ Rules that matter:
 
 ## Forwarding to an integration (2026.1.4, I5-13030 build)
 
-A staged stream can be the body of a `context.<slot>.request()` call, and an integration's response can land in one. Either way the host moves the bytes between the staging store and the upstream; the handler holds only handles. Works for **`target: integration` slots only** — `fetch()` and `target: app` slots do not take handles.
+A staged stream can be the body of a `context.<slot>.request()` call, and an integration's response can land in one. Either way the host moves the bytes between the staging store and the upstream; the handler holds only handles. Works for **`target: integration` slots only**. `fetch()` does not take handles, and a `target: app` slot does not refuse one either — the target's route receives a bare `{ __appStream, id }` it cannot resolve, because the stream belongs to the calling app.
 
 **Outbound — the handle as the body.** An upload handle in `data` is sent as the raw request body with the upload's `Content-Type` and a `Content-Length`. In `form`, the handle becomes a file part of a `multipart/form-data` body and the other fields are sent beside it.
 
@@ -224,9 +224,19 @@ await context.drive.request({ method: 'POST', url: '/upload/drive/v3/files?uploa
 await context.slack.request({ method: 'POST', url: '/api/files.upload', form: { channels: 'C123', title: upload.filename, file: upload } });
 ```
 
-`request()` returns what it always has — the parsed upstream body — and the upload is **not** consumed: an upstream failure throws the usual dependency error (`data.upstreamStatus` says what the upstream answered) and leaves the bytes staged, so the route or the page can retry with the same id. Call `discard()` once the push is known to have landed. A download handle is never a request body (`400`).
+`request()` returns what it always has — the parsed upstream body — and the upload is **not** consumed: a 4xx/5xx upstream throws the usual dependency error (`data.upstreamStatus` is that status), as does one that cannot be reached, and the bytes stay staged, so the route or the page can retry with the same id. **A `3xx` does not throw.** A call sending a staged body never follows a redirect, and the redirect resolves as an envelope — `{ status, body, headers: { location } }` — so an unchecked `await request(…)` followed by `discard()` deletes a file that never landed. Check first:
 
-**Header ownership.** The stream describes its own bytes, so `Content-Length` (and, for `form`, the generated multipart `Content-Type` with its boundary) belong to it: setting either on the call is a `400`, not a silent override — a stale length truncates the body to nothing and a boundary-less multipart type is unparseable upstream. Every other header is yours, including `Content-Type` for a raw `data` body when you want to relabel what you are sending.
+```javascript
+const res = await context.drive.request({ method: 'POST', url: '/upload/drive/v3/files?uploadType=media', data: upload });
+if (res?.status >= 300 && res?.status < 400) {
+    return { status: 502, body: { error: `upstream redirected to ${res.headers?.location}` } };   // still staged — retry against the final URL
+}
+await upload.discard();
+```
+
+A download handle is never a request body (`400`).
+
+**Header ownership.** The stream describes its own bytes, so `Content-Length` (and, for `form`, the generated multipart `Content-Type` with its boundary) belong to it: setting either on the call to a value other than the stream's is a `400`, not a silent override (restating the stream's own value is accepted) — a stale length truncates the body to nothing and a boundary-less multipart type is unparseable upstream. Every other header is yours, including `Content-Type` for a raw `data` body when you want to relabel what you are sending.
 
 **Inbound — `into`.** Without it, a binary upstream response comes back as a base64 envelope read whole into the isolate — there is no size cap on that path (`maxInlineBytes` does not apply), so a large file is a memory cost you pay in the handler. With `into`, the host streams the upstream body into a staged stream and seals it, `request()` resolves with the sealed handle instead, and `maxUploadBytes` bounds it:
 
@@ -255,7 +265,7 @@ What a failure leaves behind:
 - **Over `maxUploadBytes`** fails with `413` (`data.maxUploadBytes`) and never truncates — a download is put back empty and unsealed, so nothing half-written can be served; a fresh upload is discarded.
 - **A short body** — fewer bytes than the `Content-Length` the upstream declared — is refused the same way, `502` with `data.declaredBytes` / `data.receivedBytes`, rather than sealed as a complete but truncated file. An `into` request asks for the bytes uncompressed so that length describes what lands; set your own `Accept-Encoding` and a compressed upstream may deliver more than it declared, which is not a failure.
 - **A non-2xx upstream, or one that cannot be reached,** throws the usual dependency error and the target is released: your download is left exactly as it was — empty and unsealed, still yours to `end()` or `discard()` — and a fresh `'upload'` is discarded, so a failing call costs nothing against your staging allowance.
-- **A `3xx`** counts as no body delivered: `502` with `data.upstreamStatus`. Redirects are followed as usual on a plain `into` pull, but **not** when the same call is also sending a staged body (a stream cannot be replayed onto the redirect target) — address the final URL yourself then.
+- **A `3xx`** counts as no body delivered: `502`. `data.upstreamStatus` is that `502`, not the redirect — the 3xx is only in the message (`The upstream answered 302 with no body to stage…`), so a branch on `upstreamStatus === 302` never fires. Redirects are followed as usual on a plain `into` pull, but **not** when the same call is also sending a staged body (a stream cannot be replayed onto the redirect target) — address the final URL yourself then.
 
 ## Errors
 
@@ -273,14 +283,14 @@ try {
 
 | Status | Meaning | Payload |
 |---|---|---|
-| `400` | An `into` target that is neither a download handle nor `'upload'`, a download handle sent as a request body, or a header the stream owns set by the caller | |
+| `400` | An `into` target that is neither a download handle nor `'upload'`, a download handle sent as a request body, `data` and `form` both set, a staged stream on an invocation with no identified caller, or a header the stream owns set by the caller to a different value | |
 | `404` | No such stream, or it belongs to another app or user | |
 | `409` | The upload has not been sealed by the page yet, a chunk arrived after sealing, or an `into` target is already complete or already holds bytes | |
 | `412` | Sealing found missing chunks | `data.missing` (at most 50) — the helper resends just those, once |
 | `413` | Over `maxUploadBytes` (upload, download, or an `into` fill), `maxChunkBytes`, `maxInlineBytes`, or `maxStagedBytesPerUser` | `data.<limit>` |
 | `422` | A chunk's number or length disagrees with the declared geometry | |
 | `429` | The viewer already holds `maxStreamsPerUser` open streams in this app | `data.maxStreamsPerUser` |
-| `502` | An `into` upstream delivered a short body, or no body at all (a redirect) | `data.declaredBytes` / `data.receivedBytes`, or `data.upstreamStatus` |
+| `502` | An `into` upstream delivered a short body, no body at all (a redirect), or a body that could not be staged; or the upstream could not be reached | `data.declaredBytes` / `data.receivedBytes` on a short body; `data.upstreamStatus` is the `502` itself |
 
 ## Choosing the path
 
@@ -308,9 +318,10 @@ The Vite plugin (**2.10.0+**) stands in for the harness: an in-memory store behi
 | `extractText()` | **unavailable** — throws a named error |
 | forwarding streams host → upstream | the staged bytes ride the integration request route's base64 envelope, which holds at most ~37.5 MB (`DEV_FORWARD_MAX_BYTES`); a larger file throws a named error — test it against a deployment |
 | `into` fill | bounded by `maxUploadBytes` and gated at `< 300` as production is; refuses a download handle as the body and caller-set stream headers the same way |
+| a staged push never follows a redirect: without `into` the `3xx` resolves, with `into` it is a `502` | the push rides a plain base64 body, so redirects **are** followed; an `into` call that still meets a `3xx` throws with that status as both `statusCode` and `data.upstreamStatus` — test redirect handling against a deployment |
 
 Nothing persists across a dev-server restart.
 
 ## Not yet
 
-Deferred on the ticket: `upload.rows()` batch iteration in the handler, and `Range` on downloads. Forwarding a staged file to an integration shipped in the I5-13030 build (see [Forwarding to an integration](#forwarding-to-an-integration-202613-i5-13030-build)).
+Deferred on the ticket: `upload.rows()` batch iteration in the handler, and `Range` on downloads. Forwarding a staged file to an integration shipped in the I5-13030 build (see [Forwarding to an integration](#forwarding-to-an-integration-202614-i5-13030-build)).
