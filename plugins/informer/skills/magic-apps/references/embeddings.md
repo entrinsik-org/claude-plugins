@@ -4,7 +4,7 @@
 >
 > **Not in this file:** migration mechanics and the dev-workspace lifecycle — see `persistence.md`. `query()` calling shape and parameter binding — see `server-routes.md`. `emit()` event plumbing — see `server-routes.md` / `agents.md`.
 >
-> **Availability:** Informer **2026.1.4+** (I5-12984). The folder, `embed()`, and the status/`_run` routes simply do not exist on older servers, and the CLI ships `embeddings/` only from `@entrinsik/vite-plugin-informer` **2.10.0+** (2.7.0, the release before it, never uploads the folder, so the use case silently does not exist on the server, and any `server/` file importing from it fails the deploy at bundle time with `import not found in app library`). Plugin 2.10.0 through 2.12.0 take 2026.1.3 as the floor, but 2026.1.3 shipped as a hotfix without the feature: against a 2026.1.3 server they upload `embeddings/`, and that release serves the handlers and their SQL as static files, so never deploy an embeddings app there. The dev `embed()` opt-in needs plugin **2.12.0+** (see Feature detection). An app that must also run on older servers **feature-detects on `platform?.capabilities?.embeddings`** (see Feature detection below), keeps its vector DDL out of numbered migrations or gates it with `-- requires: embeddings` (see `persistence.md`), and only states a floor (`requires: { informer: '>=…' }` in informer.yaml, see `informer-yaml.md`) when it cannot work without the feature.
+> **Availability:** Informer **2026.1.4+** (I5-12984). The folder, `embed()`, and the status/`_run` routes simply do not exist on older servers, and the CLI ships `embeddings/` only from `@entrinsik/vite-plugin-informer` **2.10.0+** (2.7.0, the release before it, never uploads the folder, so the use case silently does not exist on the server, and any `server/` file importing from it fails the deploy at bundle time with `import not found in app library`). Plugin 2.10.0 through 2.12.0 take 2026.1.3 as the floor, but 2026.1.3 shipped as a hotfix without the feature: against a 2026.1.3 server they upload `embeddings/`, and that release serves the handlers and their SQL as static files to anyone who can open the App, so never deploy an embeddings app there. The dev `embed()` opt-in needs plugin **2.12.0+** (see Feature detection). An app that must also run on older servers **feature-detects on `platform?.capabilities?.embeddings`** (see Feature detection below), keeps its vector DDL out of numbered migrations or gates it with `-- requires: embeddings` (see `persistence.md`), and only states a floor (`requires: { informer: '>=…' }` in informer.yaml, see `informer-yaml.md`) when it cannot work without the feature.
 
 Apps can maintain vector embeddings over their own data **declaratively**. You ship an `embeddings/` folder with one file per use case; the platform acts as an **embedding pump** that asks your app what's pending, chunks and embeds the content in billed batches, and hands the vectors back for your app to store in its own workspace tables. You never call an embedding provider yourself, and the platform never holds a copy of your corpus.
 
@@ -36,7 +36,8 @@ export async function GET({ query, batch }) {
     SELECT t.id, t.subject || ' ' || t.body AS content
     FROM tickets t
     LEFT JOIN ticket_embeddings e ON e.ticket_id = t.id AND e.seq = 0
-    WHERE e.ticket_id IS NULL OR e.embedded_at < t.updated_at OR e.revision <> $2
+    WHERE (e.ticket_id IS NULL OR e.embedded_at < t.updated_at OR e.revision <> $2)
+      AND NOT t.embed_failed
     ORDER BY t.id
     LIMIT $1
   `, [batch.limit, batch.revision]);
@@ -57,11 +58,11 @@ export async function POST({ query, batch }) {
 }
 ```
 
-The three clauses in the `GET` `WHERE` are the whole freshness model: *never embedded* (`IS NULL`), *stale* (`embedded_at < updated_at`), and *config/model changed* (`revision <> $revision`). Write all three.
+The three clauses in the `GET` `WHERE` are the whole freshness model: *never embedded* (`IS NULL`), *stale* (`embedded_at < updated_at`), and *config/model changed* (`revision <> $revision`). Write all three, plus the exclusion of rows the pump reported as permanent failures (`embed_failed`, stamped by the snippet under Failures and tombstones) — without it the run parks (below).
 
 ## The pump contract
 
-Each run drains the pending set in a loop: `GET` the next batch, chunk each row's `content` by the configured profile, embed all chunks in batched provider calls, then `POST` the results. The loop stops when `GET` returns `[]` or fewer rows than `batchSize` (return a full page while work remains), when a batch yields no embeddable rows, or after 20 batches (`drained: false` in the result: the run re-poked itself so the next sweep continues). A batch whose rows were all tombstoned stops, and the app has to exclude them.
+Each run drains the pending set in a loop: `GET` the next batch, chunk each row's `content` by the configured profile, embed all chunks in batched provider calls, then `POST` the results. The loop stops when `GET` returns `[]` or fewer rows than `batchSize` (return a full page while work remains), when a batch yields no embeddable rows, or after 20 batches (`drained: false` in the result: the run re-poked itself so the next sweep continues). A batch that stores nothing — every row tombstoned or failed permanently, first time or not — stops the run as `blocked`. A page holding only documents this run already handled (stored, failed or skipped) is refused outright: a 422, `the pending set is not shrinking`, that parks, because every later batch would re-embed and re-bill the same rows. Both have one fix — `GET` must exclude what `POST` stored and what `failures` reported.
 
 ### `GET({ query, batch })`
 
@@ -77,17 +78,18 @@ Each run drains the pending set in a loop: `GET` the next batch, chunk each row'
 - `docs`: `[{ id, metadata, chunks: [{ seq, content, metadata, embedding }] }]` — grouped per document, so delete-and-replace per doc (as in the example above) is the natural idiom. `chunks[].embedding` is a **bare array**, ready to `JSON.stringify` into a `vector` literal.
 - `failures`: `[{ id, error, code, permanent, skipped? }]` — see below. `chunks[].metadata` is always an object; `headingPath` (the `prose` profile) is its only key today.
 
-**`POST` may be called more than once per `GET` batch.** Results are stored in slices bounded by chunk count (about 2,000 chunks), so a batch of large documents cannot exceed the sandbox's memory and already-embedded vectors are not lost to one failed call. Every call carries the same `revision`; `failures` rides the first call of a batch. The pump is at-least-once, so your `POST` had to be idempotent anyway — a correct upsert needs no change.
+**`POST` may be called more than once per `GET` batch.** Results are stored in slices bounded by chunk count (about 2,000 chunks), so a batch of large documents cannot exceed the sandbox's memory and already-embedded vectors are not lost to one failed call. Every call carries the same `revision` and the failures recorded since the previous call — possibly with `docs: []` — so handle `batch.failures` on every call, not just the first (the product doc's "first call" is stale). The pump is at-least-once, so your `POST` had to be idempotent anyway — a correct upsert needs no change.
 
 Store `batch.revision` beside each vector and include `<> $revision` in your `GET` query.
 
 ### Revision: one string, three triggers
 
-The `revision` the pump hands you couples your config (chunking profile, token budgets, `config.revision`) **to the resolved platform embedding model**. So a corpus-wide re-embed surfaces automatically as pending work when any of these change:
+The `revision` the pump hands you couples your config (chunking profile, `config.revision`, and the token budgets under `prose`/`code`) and the platform's chunker version **to the resolved platform embedding model**. So a corpus-wide re-embed surfaces automatically as pending work when any of these change:
 
 - you bump `config.revision`
-- you change the chunking profile or token budgets
+- you change the chunking profile, or the token budgets under `prose`/`code`
 - an admin repoints the platform embedding model
+- a server upgrade bumps the chunker version (`CHUNKER_VERSION`) — every corpus on the server re-embeds and re-bills
 
 No manual invalidation — the `revision <> $revision` clause in your `GET` finds everything.
 
@@ -102,6 +104,8 @@ for (const f of batch.failures) {
   }
 }
 ```
+
+Clear `embed_failed` when the row's content changes: a tombstone matches on content hash and revision, so edited content is attempted again, but only if your `GET` lets it through.
 
 ## Config
 
@@ -179,7 +183,7 @@ export async function POST({ query, embed, request }) {
 
 Two things that bite if you skip them. `JSON.stringify(await embed(...))` stringifies the whole object, and Postgres rejects it as a malformed vector literal — destructure first. And an empty result after a model repoint is the guard working, not a bug: distinguish it from an empty corpus (count rows at any revision) before you show the user anything.
 
-A revision hashes **the use case's config alongside the model** — `chunking`, `maxTokens`, `overlapTokens`, and the explicit `revision` — not its name, so two use cases with the same config share one and two with different chunking do not. Search two corpora with an `embed()` call per use case anyway, so the revision you filter on is the one that produced the stored vectors. Reusing one query vector across both is geometrically fine — same model, same space — but it leaves the second corpus with no revision to check against, which is the whole guard.
+A revision hashes **the use case's config alongside the model** — `chunking`, the explicit `revision`, the platform's chunker version, and `maxTokens` / `overlapTokens` only under `prose`/`code` — not its name, so two use cases with the same config share one and two with different chunking do not. Search two corpora with an `embed()` call per use case anyway, so the revision you filter on is the one that produced the stored vectors. Reusing one query vector across both is geometrically fine — same model, same space — but it leaves the second corpus with no revision to check against, which is the whole guard.
 
 `embed()` is for query-time vectors, so it is bounded: at most **100,000 characters per call** and **100 calls per handler invocation**, and it is refused when the app's compute budget is exhausted. Embedding a corpus belongs in an `embeddings/` use case, where the work is batched and billed per slice.
 
@@ -217,9 +221,9 @@ Returns `{ items: [...], modelError }`: `modelError` is non-null when the server
 
 ### `POST /apps/{id}/embeddings/{name}/_run`
 
-Drains one use case immediately: claims the single-flight lease and executes the pump loop, returning `{ status: 'ok', useCase, processed, failed, skipped, blocked, batches, drained }`. `blocked` counts batches made entirely of tombstoned rows; unlike a capped run, a blocked one does **not** re-poke itself, so it stays put until the app's `GET` excludes those rows. Returns `{ status: 'already_running', useCase }` when a fresh lease is held; a lease older than 30 minutes (a crashed run) is reclaimed.
+Drains one use case immediately: claims the single-flight lease and executes the pump loop, returning `{ status: 'ok', useCase, processed, failed, skipped, blocked, batches, drained }`. `blocked` is the row count of the batch that stopped the run because nothing in it was storable (every row tombstoned or failed permanently, first time or not); unlike a capped run, a blocked one does **not** re-poke itself, so it stays put until the app's `GET` excludes those rows. Returns `{ status: 'already_running', useCase }` when a fresh lease is held; a lease older than 30 minutes (a crashed run) is reclaimed.
 
-Errors: 402 (compute budget exhausted), 404 (handlers not deployed), 422 (`GET`/`POST` broke the contract, including an error status the handler returned). **Any 4xx parks the use case** with the reason as `lastError`. A 5xx (502 handler timed out or threw, 503 no embedding model resolves, 500 provider error) means the run failed after claiming the lease; whether it re-pokes with backoff or parks is decided by cause, per Failed runs above — a non-retryable provider error surfaces as a 500 and parks.
+Errors: 403 (no write access) and 404 (no such use case) are raised before the run and change nothing. From the run itself: 402 (compute budget exhausted), 404 (handlers not deployed), 422 (`GET`/`POST` broke the contract, including an error status the handler returned and the not-shrinking pending set, or pgvector is missing from the workspace database). **Any 4xx from the run parks the use case** with the reason as `lastError`. A 5xx (502 handler timed out or threw, 503 no embedding model resolves, 500 provider error) means the run failed after claiming the lease; whether it re-pokes with backoff or parks is decided by cause, per Failed runs above — a non-retryable provider error surfaces as a 500 and parks.
 
 **Permission:** `permission.app.write`. Running the pump triggers billed provider calls, so the gate is a spend control, not just a data guard. The platform sweep dispatches this route as the resolved app owner.
 
