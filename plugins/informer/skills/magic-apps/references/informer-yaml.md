@@ -132,11 +132,11 @@ access:
     - POST /api/models/go_everyday/_object   # raw API — stays in access
 ```
 
-## `requires:` (platform floor; Informer 2026.1.3+ enforces it, older releases ignore the key)
+## `requires:` (platform floor; Informer 2026.1.4+ enforces it, older releases ignore the key)
 
 ```yaml
 requires:
-  informer: '>=2026.1.3'   # semver range against the Informer build version
+  informer: '>=2026.1.4'   # semver range against the Informer build version
 ```
 
 Refuses the deploy on a server that does not satisfy the range, before
@@ -147,6 +147,11 @@ Unknown keys and non-semver ranges are refused. Use it only for an app that
 cannot work without a newer platform feature: **older releases never read
 this key**, so an app that should still install on them leaves it out and
 feature-detects at runtime (`platform.capabilities`, see `server-routes.md`).
+`@entrinsik/vite-plugin-informer` 2.10.0+ enforces the range itself at deploy,
+so a declared floor is honoured even against a server that cannot read it —
+except 2026.1.3. Plugin 2.10.0 through 2.12.0 take 2026.1.3 as the release that
+enforces the range server-side, but 2026.1.3 shipped as a hotfix without it, so
+against that release neither side checks the range.
 
 ## `env:` (environment variables)
 
@@ -214,7 +219,7 @@ couldn't be re-used across tenants anyway.)
 > plaintext through `GET` responses. Use the Environment tab (or declare keys
 > in `env:`) instead.
 
-## `channels:` (live channel relays; Informer 2026.1.3+, origin mode)
+## `channels:` (live channel relays; Informer 2026.1.4+, origin mode)
 
 Maps a live channel to the app events it should carry. Every `emit()` of a
 listed event still creates the durable app event (agents trigger as before)
@@ -230,19 +235,30 @@ channels:
     on: [order_created, order_shipped]
   payments:
     on: payment_received          # a single string is fine
-  presence: {}                    # named only — broadcast() to it from handlers
 ```
 
 | Field | Required | Description |
 |-------|----------|-------------|
 | `description` | no | Author-facing note, ≤ 500 chars |
-| `on` | no | Event name or list of event names to relay into this channel. Persisted as an array on `app.defn.channels` |
+| `on` | **yes** | Event name or non-empty list of event names to relay into this channel. Persisted as an array on `app.defn.channels` |
+
+**The block declares relays and nothing else.** It is not a channel registry
+and not access control: a channel nobody relays into needs no entry (an
+undeclared name is already subscribable — `broadcast()` to it from handlers),
+and a gated channel needs a `channels/` file, not an entry. An entry without
+`on` (a bare `presence:` key, description only, or `on: []`) **fails the
+deploy** (`channels.presence: "on" is required — list the events to relay
+into the channel; a channel with nothing to relay needs no declaration`).
+Unreleased preview builds accepted such entries as inert declarations.
 
 **Names.** Channel keys: segments of letters, digits, `_`, `.`, `-` joined by
 `/` (`orders`, `orders/east`), ≤ 128 chars; a leading `@user/<username>`
-segment is also legal. Event names: letters, digits, `_`, `.`, `-`, ≤ 64
-chars. Anything else **fails the deploy** with
-`400 Invalid channels: block in informer.yaml: …`.
+segment is also legal. Event names: letters, digits, `_`, `.`, `-`, ≤ 64 chars;
+`error` and `connected` are reserved. Anything else **fails the deploy** with
+`400 Invalid channels: block in informer.yaml: …`, every problem reported at once
+(a missing `on`, above, is reported on its own first).
+A wildcard key (`rooms/*`) passes the deploy but never receives relays: `npm run dev`
+flags it at boot, the server drops every relayed frame (`relay_dropped`).
 
 **Rules.**
 

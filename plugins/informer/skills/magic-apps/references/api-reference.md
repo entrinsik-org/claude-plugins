@@ -117,9 +117,8 @@ Execute a saved query.
 const result = await fetch(`/api/queries/${id}/_execute`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-        parameters: { startDate: '2024-01-01' }
-    })
+    // the saved query's inputs, by name
+    body: JSON.stringify({ startDate: '2024-01-01' })
 }).then(r => r.json());
 ```
 
