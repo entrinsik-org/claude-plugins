@@ -263,11 +263,13 @@ overlap your watermark window (`>=`) freely — the merge dedupes.
 
 **Datasource-slot walkers.** `pages` works over a `target: datasource` slot
 too — the walker fetches through `context.<slot>.query(...)` with a keyset
-cursor (`WHERE id > $cursor ORDER BY id LIMIT n`). Reach for it when the
-walk itself must be stateful (per-window child queries, watermark logic the
-splitter can't express); otherwise prefer the simpler `query:` forms — the
-pump streams and batches them, and multi-table SQL sources have the
-JOIN-split form (§4b).
+cursor bound as a param (`WHERE id > $cursor ORDER BY id LIMIT 500`,
+`params: { cursor }` with `cursor` declared under `inputs`; see
+`server-routes.md` → Datasource slots). Reach for
+it when the walk itself must be stateful (per-window child queries,
+watermark logic the splitter can't express); otherwise prefer the simpler
+`query:` forms — the pump streams and batches them, and multi-table SQL
+sources have the JOIN-split form (§4b).
 
 Before writing a walker for a specific integration, check
 `connector-gotchas.md` — hidden-inactive-row defaults, pagination quirks,

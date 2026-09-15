@@ -59,6 +59,7 @@ Customers run a spread of Informer versions, so every newer feature carries the 
 | Feature | Since | Reference |
 |---|---|---|
 | Bare `/api/{path}` app routes; per-app origins (origin mode) | 2026.1.2 | `references/server-routes.md` |
+| `params` with no declared `inputs` on a `target: datasource` slot's `query()` | 2026.1.3 | `references/server-routes.md` |
 | `platform` descriptor (`platform.version`, `platform.capabilities`) and the `requires:` manifest key | 2026.1.4 | `references/server-routes.md`, `references/informer-yaml.md` |
 | Live broadcast channels (`broadcast()`, `channels:`, `channels/` with `join` / `leave`, `@user/`) | 2026.1.4 | `references/channels.md` |
 | Channels phase 2: inbound `send()` + event exports, `joined`, wildcards, frame `seq` + replay, `connected`, `platform.originMode`, `on` required in `channels:` | 2026.1.4 (every released build; only unreleased previews carried phase 1 alone, with `platform.originMode` `undefined`) | `references/channels.md` |
@@ -355,7 +356,7 @@ The handler receives a `context` object where each `dependencies:` slot is a pro
 |---|---|---|
 | `dataset` | `search(esQuery)` / `fields()` | `POST /api/datasets/<uuid>/_search` / `GET /api/datasets/<uuid>/fields` |
 | `query` | `execute(params)` | `POST /api/queries/<uuid>/_execute` |
-| `datasource` | `query(payload)` | `POST /api/datasources/<uuid>/_query` |
+| `datasource` | `query({ language, payload, params, inputs, limit })` → rows | `POST /api/datasources/<uuid>/_query` |
 | `integration` | `request({ method, url, params, data })` | `POST /api/integrations/<uuid>/request` |
 | `app` | `request({ method, url, params, data })` | `<method> /api/apps/<uuid>/view/_/<url>` |
 
@@ -398,10 +399,14 @@ export async function GET({ context, request }) {
     // query → execute runs the saved query with optional parameters
     const summary = await context.monthly_summary.execute({ month: '2026-05' });
 
-    // datasource → query runs SQL against the underlying connection
+    // datasource → query runs native SQL against the bound datasource and
+    // returns the rows as a plain array. `$name` references declared under
+    // `inputs` bind `params` (see references/server-routes.md → Datasource slots).
     const events = await context.analytics.query({
-        sql: 'SELECT type, COUNT(*) AS n FROM events WHERE day = $1 GROUP BY type',
-        params: ['2026-05-12']
+        language: 'sql',
+        payload: 'SELECT type, COUNT(*) AS n FROM events WHERE day = $day GROUP BY type',
+        params: { day: '2026-05-12' },
+        inputs: { multiInput: { inputs: [{ name: 'day', component: { mdInputBox: {} } }] } }
     });
 
     // integration → request proxies to the external service. The options are

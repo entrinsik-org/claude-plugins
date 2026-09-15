@@ -78,7 +78,7 @@ App slots bind like every other target — read access to the target App is the 
 
 Before writing calls against the slot, fetch the target's contract (`GET /api/apps/{owner}:{name}/openapi.json`) and set up typed dev bindings — see `references/app-api.md`. A marketplace-destined consumer should declare `target: pack` (pin by marketplace slug + semver range) instead of `target: app`; the pack form is covered in the **marketplace-publishing** skill.
 
-**To run SQL over another App's data, don't use `target: app`.** Bind that App's **workspace datasource** through a `target: datasource` slot instead: every App has a first-class workspace Datasource, and binding it gives you the standard `query(payload)` surface with the datasource's own ownership and access rules.
+**To run SQL over another App's data, don't use `target: app`.** Bind that App's **workspace datasource** through a `target: datasource` slot instead: every App has a first-class workspace Datasource, and binding it gives you the standard `query({ language: 'sql', payload, params })` surface (see `server-routes.md` → Datasource slots) with the datasource's own ownership and access rules.
 
 ## Migrating an old `access:` app to `dependencies:`
 
@@ -546,7 +546,7 @@ The five typed-slot targets and what API surface each one's bound resource expos
 |----------|-------------|--------------|
 | `dataset` | `_search`, `fields` | `context.<slot>.search(esQuery)` / `.fields()` |
 | `query` | `_execute` | `context.<slot>.execute(params)` |
-| `datasource` | `_query` | `context.<slot>.query(payload)` |
+| `datasource` | `_query` | `context.<slot>.query({ language, payload, limit, params })` → an array of rows (see `server-routes.md` → Datasource slots) |
 | `integration` | `request` | `context.<slot>.request({ method, url, params, data })` (axios-shaped: `url` not `path`, `data` is the body) |
 | `app` | `request` (the target's `server/` routes) | `context.<slot>.request({ method, url, params, data })` (request-only — no SQL surface; see "`target: app` (app-to-app dependencies)" above) |
 

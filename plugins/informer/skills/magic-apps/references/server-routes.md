@@ -60,7 +60,7 @@ Each handler function receives a single context object with these properties:
 | `query` | `async (sql, params?) => rows` | Execute SQL against the app's workspace. Returns an array of row objects. |
 | `transaction` | `async (fn) => result` | Run `fn({ query })` in one DB transaction: commits when it resolves, rolls back if it throws. Does not nest. See [Using `transaction()`](#using-transaction). |
 | `fetch` | `async (path, options?) => { status, body }` | Make an authenticated API call through Informer (subject to the app's whitelist). |
-| `context` | `object` | Typed dep proxies keyed by slot name. Call deps as `context.<slotName>.<method>(args)`. Methods per `target`: `dataset` → `search(esQuery)` / `fields()`; `query` → `execute(params)`; `datasource` → `query(payload)`; `integration` → `request(opts)`. Throws boom 422 with `errorCode: 'dependency_unbound'` if the installer hasn't bound the slot yet, or `'dependency_broken'` if the bound target was deleted. Prefer this over raw `fetch()` — slots survive bundle export/import and resource renames; raw paths don't. |
+| `context` | `object` | Typed dep proxies keyed by slot name. Call deps as `context.<slotName>.<method>(args)`. Methods per `target`: `dataset` → `search(esQuery)` / `fields()`; `query` → `execute(params)`; `datasource` → `query({ language, payload, limit, params })`, which returns the rows (see [Datasource slots](#datasource-slots)); `integration` → `request(opts)`. Throws boom 422 with `errorCode: 'dependency_unbound'` if the installer hasn't bound the slot yet, or `'dependency_broken'` if the bound target was deleted. Prefer this over raw `fetch()` — slots survive bundle export/import and resource renames; raw paths don't. |
 | `respond` | `async (response) => void` | Send an early HTTP response while the handler continues running in the background. Accepts the same shape as a synchronous return — a response object (`{ status, headers?, body?, encoding? }`) or any plain value (wrapped as 200 JSON). See [Using `respond()`](#using-respond). |
 | `emit` | `async (event, payload) => void` | Emit an app event to trigger agents. Creates an `AppEvent` record and notifies the event dispatcher. |
 | `broadcast` | `async (channel, event, payload?, options?) => { ok: true, seq }` | Push a fire-and-forget frame to every open page subscribed to `channel` (origin-mode servers only); `seq` is the frame's number in that channel's sequence, and the server keeps recent frames for reconnecting pages unless `options` is `{ replay: false }` (typing, cursors). No DB row, no delivery report; rejects on a bad or wildcard channel name, a bad or reserved (`error`, `connected`) event, a payload over 64 KiB, or the App's rate limit. The live counterpart of `emit()` — see `channels.md`. **2026.1.4+** |
@@ -123,6 +123,37 @@ Webhook handlers use a narrower deny-list (signature headers and Bearer tokens a
 The handler's `context` object carries one property per `dependencies:` slot, with methods that proxy to the bound target. See "Accessing Your Dependencies" in SKILL.md — that's the canonical reference, with worked examples for all five target types (`dataset` / `query` / `datasource` / `integration` / `app`), the `dependency_unbound` / `dependency_broken` error pattern, and the rules for the frontend equivalents.
 
 The short version: in a handler, write `context.<slotName>.<method>(args)` — never raw `fetch('/api/datasets/<uuid>/...')`. Slots survive bundle export/import and resource renames; raw paths don't.
+
+### Datasource slots
+
+`context.<slot>.query()` sends its argument to the bound datasource's `_query` route and returns the rows as a plain array of objects keyed by column name — there is no `records` or `meta` wrapper.
+
+```javascript
+// server/cards.js
+export async function GET({ context, request }) {
+    return await context.kanban_db.query({
+        language: 'sql',
+        payload: 'SELECT id, title FROM card WHERE status = $status AND created_at::date >= $since ORDER BY id',
+        params: { status: request.query.status, since: request.query.since },
+        inputs: {
+            multiInput: {
+                inputs: [
+                    { name: 'status', component: { mdInputBox: {} } },
+                    { name: 'since', component: { mdInputBox: {} } }
+                ]
+            }
+        },
+        limit: 500
+    });
+}
+```
+
+- `language` is `'sql'` for relational datasources (Postgres, MSSQL, MySQL, DB2, Oracle, and an App's workspace datasource) and the datasource family's own language otherwise (`'u2'`, `'web'`, and `'informer'` for jBASE). `limit` caps the rows; leave it out for all of them.
+- SQL binds each `$name` reference declared under `inputs` to its value in `params`, escaping the value — never interpolate into the SQL yourself. Declare text with `component: { mdInputBox: {} }` and a number with `component: { mdInputBox: { type: 'number' } }`. An undeclared `$name`, a `:name` and `$1` are not bound.
+- Write `$name` even inside a template literal: `${name}` is JavaScript interpolation and pastes the raw value into the SQL. Never put `$name` inside a quoted string or a comment either — it is replaced there too, and the value can break out; put wildcards in the value instead (`title LIKE $q` with ``params: { q: `%${term}%` }``).
+- A `null`, `''` or `[]` value binds `NULL`, so test it with `IS NULL`. An array binds one value per item, so match a list with `IN ($ids)`.
+- On Postgres, MSSQL, MySQL, DB2, App and workspace datasources, write a literal `?` (the Postgres jsonb `?` operators, `'why?'`) as `\?`, or `\\?` inside a JavaScript string. It runs as a literal `?` bound or unbound, on every version; a bare `?` counts as a placeholder once anything binds (a `$name` or `${user.*}` reference). On Oracle and generic JDBC datasources `\?` is not an escape.
+- **2026.1.3+:** `params` with no declared `inputs` bind nothing. **Below 2026.1.3, never pass `params` without declaring their `inputs`** — the query fails without a usable error.
 
 ## Return Values
 
