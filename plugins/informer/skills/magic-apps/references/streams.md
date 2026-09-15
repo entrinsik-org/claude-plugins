@@ -74,8 +74,7 @@ What the helper does: `POST …/_uploads` with `filename`, `size`, `contentType`
 
 Every helper works unchanged in path mode, on an app origin, and under the Vite dev server. Don't hand-roll the protocol with `fetch` — the helper owns geometry, retry, abort, and the base URL.
 
-### Watching a transfer (2026.1.4, I5-13030 build)
-
+### Watching a transfer
 `onEvent` receives one plain object per step, in order. A progress bar hides the fact that three chunks are usually in flight and land out of order; this is how a page shows it.
 
 | Event | Fields | When |
@@ -87,8 +86,7 @@ Every helper works unchanged in path mode, on an app origin, and under the Vite 
 
 A listener that throws does not fail the transfer it is watching; its error is rethrown on a fresh tick so it still reaches the console.
 
-### `__INFORMER__.streams` (2026.1.4, I5-13030 build)
-
+### `__INFORMER__.streams`
 What the staging area holds for the current user in this app. The helper owns the base URL for these routes, so a page asks here rather than deriving a prefix from `downloadUrl('')` and building the calls itself.
 
 ```javascript
@@ -210,8 +208,7 @@ Rules that matter:
 - **Auto-seal.** A download left open when the handler returns is sealed for you — background work after `respond()` still produces a complete file.
 - **Cast dates in SQL** (`ordered_on::text`). The encoder stringifies what pg hands it, and a `DATE` arrives as a JS `Date`, which prints as a locale string.
 
-## Forwarding to an integration (2026.1.4, I5-13030 build)
-
+## Forwarding to an integration
 A staged stream can be the body of a `context.<slot>.request()` call, and an integration's response can land in one. Either way the host moves the bytes between the staging store and the upstream; the handler holds only handles. Works for **`target: integration` slots only**. `fetch()` does not take handles, and a `target: app` slot does not refuse one either — the target's route receives a bare `{ __appStream, id }` it cannot resolve, because the stream belongs to the calling app.
 
 **Outbound — the handle as the body.** An upload handle in `data` is sent as the raw request body with the upload's `Content-Type` and a `Content-Length`. In `form`, the handle becomes a file part of a `multipart/form-data` body and the other fields are sent beside it.
@@ -324,4 +321,4 @@ Nothing persists across a dev-server restart.
 
 ## Not yet
 
-Deferred on the ticket: `upload.rows()` batch iteration in the handler, and `Range` on downloads. Forwarding a staged file to an integration shipped in the I5-13030 build (see [Forwarding to an integration](#forwarding-to-an-integration-202614-i5-13030-build)).
+Deferred on the ticket: `upload.rows()` batch iteration in the handler, and `Range` on downloads. Forwarding a staged file to an integration has shipped (see [Forwarding to an integration](#forwarding-to-an-integration)).

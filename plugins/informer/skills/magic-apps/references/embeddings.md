@@ -37,7 +37,7 @@ export async function GET({ query, batch }) {
     FROM tickets t
     LEFT JOIN ticket_embeddings e ON e.ticket_id = t.id AND e.seq = 0
     WHERE (e.ticket_id IS NULL OR e.embedded_at < t.updated_at OR e.revision <> $2)
-      AND NOT t.embed_failed
+      AND t.embed_failed IS NOT TRUE
     ORDER BY t.id
     LIMIT $1
   `, [batch.limit, batch.revision]);
@@ -78,7 +78,7 @@ Each run drains the pending set in a loop: `GET` the next batch, chunk each row'
 - `docs`: `[{ id, metadata, chunks: [{ seq, content, metadata, embedding }] }]` — grouped per document, so delete-and-replace per doc (as in the example above) is the natural idiom. `chunks[].embedding` is a **bare array**, ready to `JSON.stringify` into a `vector` literal.
 - `failures`: `[{ id, error, code, permanent, skipped? }]` — see below. `chunks[].metadata` is always an object; `headingPath` (the `prose` profile) is its only key today.
 
-**`POST` may be called more than once per `GET` batch.** Results are stored in slices bounded by chunk count (about 2,000 chunks), so a batch of large documents cannot exceed the sandbox's memory and already-embedded vectors are not lost to one failed call. Every call carries the same `revision` and the failures recorded since the previous call — possibly with `docs: []` — so handle `batch.failures` on every call, not just the first (the product doc's "first call" is stale). The pump is at-least-once, so your `POST` had to be idempotent anyway — a correct upsert needs no change.
+**`POST` may be called more than once per `GET` batch.** Results are stored in slices bounded by chunk count (about 2,000 chunks), so a batch of large documents cannot exceed the sandbox's memory and already-embedded vectors are not lost to one failed call. Every call carries the same `revision` and the failures recorded since the previous call — possibly with `docs: []` — so handle `batch.failures` on every call, not just the first. The pump is at-least-once, so your `POST` had to be idempotent anyway — a correct upsert needs no change.
 
 Store `batch.revision` beside each vector and include `<> $revision` in your `GET` query.
 
