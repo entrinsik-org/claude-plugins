@@ -2,6 +2,15 @@
 
 Running a WASM library — especially one that uses a Web Worker (DuckDB-WASM, sql.js, ffmpeg.wasm, pdf.js, ONNX Runtime Web) — works inside a Magic App. How much ceremony it takes depends on **which serving mode** the deployment uses; the blob-worker recipe below works in BOTH, which is why it stays the recommended pattern for portable apps.
 
+## In a server-side handler
+
+Everything else in this file is about the **page**. A handler (`server/`, `webhooks/`, `tools/`, `mcp/`, `channels/`, a channel actor) runs in a V8 isolate with no network and no Workers, but `WebAssembly` is there:
+
+- **Bundle the bytes with the handler** — e.g. a module that exports the `.wasm` as base64, decoded with `base64Decode()`/`atob()` into a `Uint8Array`. Nothing can be fetched at run time.
+- **Every version:** `const module = new WebAssembly.Module(bytes); const instance = new WebAssembly.Instance(module, imports);`. V8 compiles lazily, so even a large module costs milliseconds.
+- **2026.1.4+:** `WebAssembly.compile()`, `instantiate()`, `compileStreaming()` and `instantiateStreaming()` settle at once (they use the synchronous constructors), rejecting with the same `CompileError` / `LinkError` on bad bytes — so libraries with an async init (wasm-bindgen's default export, Emscripten's `instantiate`) work unchanged. **Below 2026.1.4 those promises never settle** (isolated-vm never runs the V8 background task that finishes them): the handler waits to its timeout, the compute is billed, and a channel actor's call hangs outright. Target an older server → call the synchronous constructors, or pass a pre-compiled `WebAssembly.Module` to the library if it accepts one.
+- The handler limits still apply: the isolate's memory cap (128 MB; an actor's `memoryMb`) and its wall-clock timeout. An actor that instantiates once in `start()` and reuses the instance keeps the compile out of every call.
+
 ## Two serving modes, two origins
 
 **Per-app origins (App API v2 — Informer 2026.1.2+ with `appsBaseUrl` configured).** Each app serves from its own origin (`https://<label>.apps.…`). The frame has a REAL origin: plain `new Worker(bundledAssetUrl)` just works, and so do `localStorage`, IndexedDB, `BroadcastChannel`, and service workers. If your app targets only origin-mode deployments, you can skip the blob dance entirely — bundle the worker/wasm with Vite `?url` and construct directly.

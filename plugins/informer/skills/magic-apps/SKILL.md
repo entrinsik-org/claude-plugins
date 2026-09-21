@@ -49,7 +49,7 @@ This file is the orientation layer. Most topics have a dedicated reference under
 | Looking up the raw API surface behind the typed-slot proxy (still useful when something fails) | `references/api-reference.md` |
 | HTML/CSS/JS starter snippets, theme-variable patterns, CSS Modules for React | `references/app-templates.md` |
 | Public pages & anonymous API routes (`public: true`, `server/public/**`), the app's OWN sign-up/login (`accounts.issuers.local`, `/_auth/*`), password reset, OIDC/SSO (`/_auth/oidc/{name}`), "Sign in with Informer" (`/_auth/informer`), accepting other apps' users (`accounts.accept`), the unified `request.user` | `references/accounts-and-login.md` |
-| Running a WASM library or Web Worker in the sandbox (DuckDB-WASM, sql.js, ffmpeg.wasm, pdf.js, ONNX) — the blob-worker pattern, bundling wasm locally, `new Worker` failing with origin `'null'`, external extension fetches | `references/wasm-workers.md` |
+| Running a WASM library or Web Worker in the sandbox (DuckDB-WASM, sql.js, ffmpeg.wasm, pdf.js, ONNX) — the blob-worker pattern, bundling wasm locally, `new Worker` failing with origin `'null'`, external extension fetches; WASM inside a server-side handler or channel actor (bundled bytes, `new WebAssembly.Module`, async `instantiate` settling only on 2026.1.4+) | `references/wasm-workers.md` |
 
 The sections that **stay in this file** are the ones nearly every project touches: bootstrapping, local-dev essentials, the dep-access centerpiece, the small surfaces (App Context, HTML5 routing, App Roles, PDF Export). Everything else is one click away in `references/`.
 
@@ -65,6 +65,7 @@ Customers run a spread of Informer versions, so every newer feature carries the 
 | Channels phase 2: inbound `send()` + event exports, `joined`, wildcards, frame `seq` + replay, `connected`, `platform.originMode`, `on` required in `channels:` | 2026.1.4 (every released build; only unreleased previews carried phase 1 alone, with `platform.originMode` `undefined`) | `references/channels.md` |
 | Channel actors (`config.actor`, `tick`, snapshots), `request.member`, `__INFORMER__.serverNow()`, `send()` as a socket message, the `unavailable` code | 2026.1.4 (I5-13088; detect `platform.capabilities.channelActors` — without it an actor file runs as an ordinary handler; dev needs plugin 2.13.0+) | `references/channel-actors.md` |
 | Declarative embeddings (`embeddings/`, `embed()`, pgvector) | 2026.1.4 | `references/embeddings.md` |
+| Async `WebAssembly.compile()` / `instantiate()` settling in server-side handlers (the synchronous constructors work on every version) | 2026.1.4 (I5-13088) | `references/wasm-workers.md`, `references/server-routes.md` |
 | Staged uploads/downloads (`uploads`, `downloads`, `__INFORMER__.upload()`) | 2026.1.4 | `references/streams.md` |
 | Streams phase 2 — transfer events (`onEvent`, `task.created`), `__INFORMER__.streams` list/status/discard, forwarding a stream to an integration (`data` / `form` / `into`) | 2026.1.4 (every released build; only unreleased previews carried phase 1 alone) | `references/streams.md` |
 | Warehouse loads (`load()`, the run ledger, `schedule()`, streaming ingest) | 2026.2.0 | `references/warehouse-etl.md` |
@@ -1272,7 +1273,7 @@ The orientation above points to each file; this is the canonical list of what's 
 | `references/docs-html.md` | In-gallery `docs.html` page, in-app `?` help button, `README.md` fallback |
 | `references/api-reference.md` | Raw API surface behind the typed-slot proxy (useful for diagnostics) |
 | `references/app-templates.md` | HTML/CSS/JS starter snippets — charts, layouts |
-| `references/wasm-workers.md` | Running WASM / Web-Worker libs in the sandbox — why `new Worker(url)` fails on the opaque origin, the local-bundle + blob-worker pattern, handing wasm to the worker as a blob URL, external fetch targets as `data` Approved Resources, loading Informer data into the engine |
+| `references/wasm-workers.md` | Running WASM / Web-Worker libs in the sandbox — why `new Worker(url)` fails on the opaque origin, the local-bundle + blob-worker pattern, handing wasm to the worker as a blob URL, external fetch targets as `data` Approved Resources, loading Informer data into the engine, WASM in server-side handlers (synchronous constructors everywhere, async entry points on 2026.1.4+) |
 | `references/warehouse-etl.md` | Warehouse / ETL apps — the sync-route pattern, `load()` forms (replace / append / upsert with key + prune, multi-table `into`, `dryRun`, batch hooks), streaming ingest, `schedule()`, `automations:`, the run ledger and its SSE surface, what the warehouse UI must cover |
 | `references/connector-gotchas.md` | Per-connector traps for source walkers (QuickBooks, Salesforce, …) — hidden inactive rows, pagination quirks, incremental watermark fields, deletion detection |
 | `references/semantics.md` | `semantics.yaml` grammar (types / units / enum values, `decimals`, computed `expr`, `bins`), locale overlays, categories and links, the `exposure` policy, the resolved layers (tenant over vendor over scan) |

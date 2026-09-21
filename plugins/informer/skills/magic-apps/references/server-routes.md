@@ -614,7 +614,8 @@ Server handlers run in a sandboxed V8 isolate. This means:
 - **`log(message, data?)`** — structured logging with level methods (`log.info()`, `log.warn()`, `log.error()`, `log.debug()`). Writes to `app_log` in production; prints to console in dev mode.
 - **128 MB memory limit** — the isolate is killed if it exceeds this
 - **Wall-clock timeout** — defaults to 30s, configurable via `config.timeout`
-- **Ephemeral** — a fresh isolate is created for each request; no state persists between calls
+- **Ephemeral** — a fresh isolate is created for each request; no state persists between calls (a `channels/` file that declares `config.actor` keeps one per channel instead — see `channel-actors.md`)
+- **WebAssembly works** — bundle the `.wasm` bytes with the handler (for example base64 in a module, decoded to a `Uint8Array`) and compile them with `new WebAssembly.Module(bytes)` + `new WebAssembly.Instance(module, imports)`, which work on every version. **2026.1.4+**: the async entry points (`WebAssembly.compile`, `instantiate`, and their streaming forms) settle at once too, so a library with an async init (wasm-bindgen's default export, Emscripten's `instantiate`) works unchanged; **below 2026.1.4 they never settle** and the handler hangs to its timeout (billed), so call the synchronous constructors. There is no network to fetch a `.wasm` from: `instantiateStreaming` only takes a `Response` you built yourself. See `wasm-workers.md`
 
 ## Calling Server Routes from App Code
 
