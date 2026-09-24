@@ -61,6 +61,7 @@ Customers run a spread of Informer versions, so every newer feature carries the 
 |---|---|---|
 | Bare `/api/{path}` app routes; per-app origins (origin mode) | 2026.1.2 | `references/server-routes.md` |
 | `platform` descriptor (`platform.version`, `platform.capabilities`) and the `requires:` manifest key | 2026.1.4 | `references/server-routes.md`, `references/informer-yaml.md` |
+| `respond()` background work billed, capped (`app.routes.maxBackgroundPerApp`) and written to the Logs tab when it fails; `config.timeout` capped at `app.routes.maxTimeoutMs` | 2026.1.4 (I5-13088) | `references/server-routes.md` |
 | Live broadcast channels (`broadcast()`, `channels:`, `channels/` with `join` / `leave`, `@user/`) | 2026.1.4 | `references/channels.md` |
 | Channels phase 2: inbound `send()` + event exports, `joined`, wildcards, frame `seq` + replay, `connected`, `platform.originMode`, `on` required in `channels:` | 2026.1.4 (every released build; only unreleased previews carried phase 1 alone, with `platform.originMode` `undefined`) | `references/channels.md` |
 | Channel actors (`config.actor`, `tick`, snapshots), `request.member`, `__INFORMER__.serverNow()`, `send()` as a socket message, the `unavailable` code | 2026.1.4 (I5-13088; detect `platform.capabilities.channelActors` — without it an actor file runs as an ordinary handler; dev needs plugin 2.13.0+) | `references/channel-actors.md` |
