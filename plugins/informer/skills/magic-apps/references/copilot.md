@@ -1,20 +1,10 @@
 # Embedded copilots
 
-> **Availability:** the pattern on this page works on every 2026.1.x server: `POST /api/models/{model}/_chat`, its auto-grant for every App, and `system` + `dynamicSystem` all shipped in **2026.1.0**. Attaching Apps' `mcp/` tools with `appIds` (and the tool-approval flow they bring) is **2026.1.4+**. **The Informer GO copilot sidebar is retired in 2026.1.4**: `__INFORMER__.openChat()`, `showCopilot()` and `registerTool()` stay defined so old apps keep running, but they do nothing, and the first call on a page logs a console warning. Apps that used them must move to an embedded copilot before the server upgrades to 2026.1.4 (see [Migrating from the GO copilot sidebar](#migrating-from-the-go-copilot-sidebar)).
+> **Availability:** the pattern on this page works on every 2026.1.x server: `POST /api/models/{model}/_chat`, its automatic grant to every App, and `system` + `dynamicSystem` all shipped in **2026.1.0**. Attaching other Apps' `mcp/` tools with `appIds` (and the tool-approval flow they bring) needs **2026.1.4+**.
 
 An embedded copilot is a chat the App builds into its own UI and streams from Informer's model endpoint. It looks like the rest of the App, sees exactly what the user is looking at, acts through the App's own routes, and works wherever the App runs: a browser tab, the App's own origin, an installed PWA, or inside Informer GO. Nothing about it depends on a host page beside the App.
 
 The rules below come from Informer's own streaming chat App, including the fixes it learned the hard way. Each one prevents a failure a copilot otherwise ships with.
-
-## Migrating from the GO copilot sidebar
-
-| Retired call | Embedded equivalent |
-|---|---|
-| `registerTool({ name, description, schema, handler })` | A client tool: put `{ description, inputSchema }` in the `_chat` body's `tools` object, run it in `useChat`'s `onToolCall`, answer with `addToolOutput` ([Client tools](#client-tools-app-actions)). The handler usually becomes a call to one of the App's own `server/` routes. |
-| `openChat({ prompt, context, instructions })` | Open the App's own copilot panel and send `prompt` as the first user turn. Put `context` in a text part of that turn and `instructions` in `dynamicSystem` for that turn only. To hand off to a separate chat App instead, deep-link it: Informer's chat App accepts `?prompt=…&context=…&instructions=…`. |
-| `showCopilot()` | The App's own button or shortcut that opens its panel. |
-
-There is no platform chat to fall back to. An App that registered tools and never shows its own panel has no copilot after 2026.1.4.
 
 ## The shape of an embedded copilot
 
@@ -501,4 +491,4 @@ const result = { summary: asString(raw.summary), risks: asArray(raw.risks, raw, 
 
 ## Local development
 
-All three endpoints work under `vite dev`: the plugin proxies `/api` to the server with your credentials, and streams live. The plugin's `__INFORMER__` mock does not define the retired `openChat` / `registerTool` / `showCopilot`; an embedded copilot never needs them.
+All three endpoints work under `vite dev`: the plugin proxies `/api` to the server with your credentials, and streams live.
