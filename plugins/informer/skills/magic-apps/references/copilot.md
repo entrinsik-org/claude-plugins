@@ -1,687 +1,465 @@
-# Built-in App Copilot
+# Embedded copilots
 
-> **Load this reference when:** working on the in-app AI sidebar — activating it, opening it from app code with `openChat()`, registering tools (the "report bridge"), or calling the AI completion endpoints (`_chat`, `_completion`, `_object`) directly from app code.
->
-> **Not in this file:** event-driven AI agents — see `agents.md`. Server-side handler dispatch — see `server-routes.md`.
+> **Availability:** the pattern on this page works on every 2026.1.x server: `POST /api/models/{model}/_chat`, its auto-grant for every App, and `system` + `dynamicSystem` all shipped in **2026.1.0**. Attaching Apps' `mcp/` tools with `appIds` (and the tool-approval flow they bring) is **2026.1.4+**. **The Informer GO copilot sidebar is retired in 2026.1.4**: `__INFORMER__.openChat()`, `showCopilot()` and `registerTool()` stay defined so old apps keep running, but they do nothing, and the first call on a page logs a console warning. Apps that used them must move to an embedded copilot before the server upgrades to 2026.1.4 (see [Migrating from the GO copilot sidebar](#migrating-from-the-go-copilot-sidebar)).
 
-Every Informer App gets a **built-in AI copilot sidebar** — a chat panel that slides in from the right side of the app window.
+An embedded copilot is a chat the App builds into its own UI and streams from Informer's model endpoint. It looks like the rest of the App, sees exactly what the user is looking at, acts through the App's own routes, and works wherever the App runs: a browser tab, the App's own origin, an installed PWA, or inside Informer GO. Nothing about it depends on a host page beside the App.
 
-## How the Copilot Works
+The rules below come from Informer's own streaming chat App, including the fixes it learned the hard way. Each one prevents a failure a copilot otherwise ships with.
 
-- **Hidden by default**: The copilot button is suppressed for apps. The app must explicitly activate it (see below).
-- **Overlay mode** (default): The sidebar slides over the app content with a backdrop blur. Clicking outside the sidebar or pressing the X closes it.
-- **Pinned mode**: Users can click the pin icon to dock the sidebar. The app content shrinks to make room, and the sidebar stays open while the user works.
-- **Persistent chat**: Each app gets a persistent embedded chat session. Conversations are preserved across opens/closes — the user picks up where they left off.
+## Migrating from the GO copilot sidebar
 
-The copilot has the Informer API skill **automatically enabled** — the AI gets `apiCall` and `searchRoutes` tools without any extra configuration.
+| Retired call | Embedded equivalent |
+|---|---|
+| `registerTool({ name, description, schema, handler })` | A client tool: put `{ description, inputSchema }` in the `_chat` body's `tools` object, run it in `useChat`'s `onToolCall`, answer with `addToolOutput` ([Client tools](#client-tools-app-actions)). The handler usually becomes a call to one of the App's own `server/` routes. |
+| `openChat({ prompt, context, instructions })` | Open the App's own copilot panel and send `prompt` as the first user turn. Put `context` in a text part of that turn and `instructions` in `dynamicSystem` for that turn only. To hand off to a separate chat App instead, deep-link it: Informer's chat App accepts `?prompt=…&context=…&instructions=…`. |
+| `showCopilot()` | The App's own button or shortcut that opens its panel. |
 
-## Activating the Copilot
+There is no platform chat to fall back to. An App that registered tools and never shows its own panel has no copilot after 2026.1.4.
 
-The copilot button is hidden by default for apps. It activates automatically when tools are registered via `registerTool()`. You can also activate it explicitly or paint your own button:
+## The shape of an embedded copilot
 
-**Automatic** — registering any tool activates the copilot button:
-```javascript
-__INFORMER__.registerTool({ name: 'getContext', ... }); // button appears
-```
+1. **The browser streams the turn** from `POST /api/models/{model}/_chat`. Every App may call it: `_chat`, `_completion` and `_object` are granted automatically (as the viewing user), so they need no `access.apis` entry. Listing them anyway is fine if you want the surface explicit.
+2. **A static `system` prompt** describes the copilot's job and voice. **A per-turn `dynamicSystem`** carries what the user is looking at right now, assembled by one of the App's own routes just before each turn.
+3. **Client tools** are the App's actions: the model asks for one, the page runs it (usually by calling an App route), and the SDK sends the next step on its own, capped per turn.
+4. **Server tools** come from Informer: built-in `functions`, `toolkitIds`, and other Apps' `mcp/` tools via `appIds`.
+5. **The transcript is the App's data.** Store the AI SDK UIMessages as-is in the App's workspace, through its own routes.
 
-**Explicit** — show the platform button without registering tools:
-```javascript
-window.__INFORMER__?.showCopilot();
-```
+Call everything root-relative: `fetch('/api/…')`. The same build is served from the App's origin, from `/api/apps/{id}/view/…` and inside GO, and the session already carries the App's identity. A view-prefixed absolute URL is refused by GO cloud's `connect-src`.
 
-**Custom** — paint your own button and call `openChat()` directly. This gives you full control over where and when the copilot entry point appears:
-```javascript
-document.querySelector('#my-ai-btn').addEventListener('click', () => {
-    __INFORMER__.openChat({ prompt: 'Analyze current dashboard data' });
-});
-```
+## The transport (React)
 
-## Opening the Copilot from App Code
+Use the AI SDK: `ai` for the transport and helpers, `@ai-sdk/react` for `useChat`. Do not hand-roll the SSE parser in a React App. The endpoint speaks the AI SDK UI message stream, and `useChat` handles text, reasoning, tool parts and approvals for you.
 
-Apps can programmatically open the copilot with context. This lets users click a data point, insight, or button and land in a chat pre-loaded with relevant data and instructions.
+```tsx
+import { useMemo, useRef } from 'react';
+import { useChat } from '@ai-sdk/react';
+import {
+    DefaultChatTransport,
+    lastAssistantMessageIsCompleteWithToolCalls,
+    lastAssistantMessageIsCompleteWithApprovalResponses
+} from 'ai';
 
-**Important:** Your `instructions` should spell out which APIs to call. The app knows what data it's working with — tell the AI the specific datasets, integrations, or query endpoints to use.
+const MAX_AUTO_SENDS = 6;   // automatic continuations per user turn
 
-```javascript
-__INFORMER__.openChat({
-    prompt: 'Why did revenue spike in Q4?',
-    context: { revenue: 1250000, quarter: 'Q4' },
-    instructions: 'Use the Informer API to query the sales-data dataset (admin:sales-data) ' +
-        'for year-over-year Q4 trends. Use the Salesforce integration to pull Opportunity ' +
-        'records for pipeline context.'
-});
-```
+export function useCopilot({ model, system, getContext }) {
+    // Everything that may change between turns is read through a ref.
+    const live = useRef({ model, system });
+    live.current = { model, system };
+    const autoSends = useRef(0);
+    const addToolOutputRef = useRef(null);
 
-| Option | Type | Description |
-|--------|------|-------------|
-| `prompt` | `string` | Initial user message sent to the AI. If omitted, chat opens empty with context loaded. |
-| `context` | `object` | Data points injected into the AI's context — current state, filters, selected rows, etc. |
-| `instructions` | `string` | **Tell the AI which APIs to call.** Name specific datasets, integrations, queries, and what to focus on. |
-| `skills` | `string[]` | Additional resources to attach: `"dataset:owner:slug"`, `"library:id"` (optional). |
-
-The AI automatically receives:
-- **`apiCall`** — Make authenticated requests to any Informer API endpoint
-- **`searchRoutes`** — Discover available API endpoints and their parameters
-
-The app's identity (`id`, `name`, `url`) is automatically included as the chat's source — you don't need to pass it.
-
-**Example — chart click handler:**
-```javascript
-chart.on('click', (point) => {
-    __INFORMER__.openChat({
-        prompt: `Tell me about ${point.label}`,
-        context: {
-            field: point.field,
-            value: point.value,
-            filters: currentFilters
-        },
-        instructions: `Use the Informer API to search the sales-data dataset. ` +
-            `The user clicked on ${point.field}=${point.value}. ` +
-            `Analyze trends and related records.`
-    });
-});
-```
-
-**Example — insight card:**
-```javascript
-document.querySelector('.insight').addEventListener('click', () => {
-    __INFORMER__.openChat({
-        prompt: 'What should we do about this?',
-        context: {
-            insight: 'AWS spend trending 18% over budget',
-            currentSpend: 68400,
-            budget: 58000
-        },
-        instructions: 'The user is viewing a cost optimization insight. ' +
-            'Use the Informer API to query the cloud-costs dataset for detailed breakdown. ' +
-            'Suggest concrete actions to reduce spend.'
-    });
-});
-```
-
-**Dev mode:** `__INFORMER__.openChat()` and `showCopilot()` are not available in local Vite dev mode since there is no parent GO app. You can mock them for testing:
-
-```javascript
-if (!window.__INFORMER__?.openChat) {
-    window.__INFORMER__ = window.__INFORMER__ || {};
-    window.__INFORMER__.openChat = (opts) => console.log('openChat:', opts);
-}
-if (!window.__INFORMER__?.showCopilot) {
-    window.__INFORMER__ = window.__INFORMER__ || {};
-    window.__INFORMER__.showCopilot = () => console.log('showCopilot: copilot button would appear');
-}
-```
-
-## Registering Tools (Report Bridge)
-
-Apps can register tools that the copilot can call at runtime to get fresh data. This enables **bidirectional** communication — instead of sending a static snapshot via `openChat()`, the AI can ask the app for its current state on-demand.
-
-The most common tool is `getContext`, which returns the app's current filters, selections, and visible data.
-
-```javascript
-__INFORMER__.registerTool({
-    name: 'getContext',
-    description: 'Returns the current app state including active filters, selected data, and summary metrics.',
-    schema: {
-        type: 'object',
-        properties: {},
-        additionalProperties: false
-    },
-    handler: () => {
-        return {
-            filters: getCurrentFilters(),
-            selectedRows: getSelectedRows(),
-            metrics: getSummaryMetrics(),
-            view: getCurrentView()
-        };
-    }
-});
-```
-
-| Option | Type | Description |
-|--------|------|-------------|
-| `name` | `string` | **Required.** Tool name — exposed to the AI as `report_<name>` (e.g., `report_getContext`). |
-| `description` | `string` | What the tool does. The AI reads this to decide when to call it. |
-| `schema` | `object` | JSON Schema for the tool's input parameters. Use `{}` properties for no-arg tools. |
-| `handler` | `function` | **Required.** Called when the AI invokes the tool. Can return a value or a Promise. The return value is serialized to JSON and sent back to the AI. |
-
-**How it works:**
-1. App calls `registerTool()` during initialization (before user opens copilot)
-2. The handler stays local in the app; only metadata (name, description, schema) is sent to GO
-3. When the user opens the copilot, the AI sees `report_getContext` as an available tool
-4. If the AI calls it, GO sends a message back to the app, the handler runs, and the result is returned to the AI
-
-**Timing:** Tools must be registered before `openChat()` is called. Register them on page load or after your app initializes.
-
-**Cleanup:** Tools are automatically unregistered when the app page unloads (via `beforeunload`).
-
-**Example — dashboard with live filters:**
-```javascript
-// Register on page load
-__INFORMER__.registerTool({
-    name: 'getContext',
-    description: 'Get the current dashboard state: active filters, date range, and visible KPIs.',
-    schema: { type: 'object', properties: {} },
-    handler: () => ({
-        dateRange: { start: startDate, end: endDate },
-        region: selectedRegion,
-        department: selectedDepartment,
-        kpis: {
-            totalRevenue: revenueEl.textContent,
-            openDeals: dealsEl.textContent,
-            conversionRate: rateEl.textContent
-        }
-    })
-});
-
-// Later, user clicks "Ask AI"
-askButton.addEventListener('click', () => {
-    __INFORMER__.openChat({
-        prompt: 'Why is the conversion rate dropping?',
-        instructions: 'Use report_getContext to see the current dashboard state. ' +
-            'Then query the sales-data dataset (admin:sales-data) for trends.'
-    });
-});
-```
-
-**Example — tool with parameters:**
-```javascript
-__INFORMER__.registerTool({
-    name: 'getRowDetails',
-    description: 'Get detailed data for a specific row by its ID.',
-    schema: {
-        type: 'object',
-        properties: {
-            rowId: { type: 'string', description: 'The row ID to look up' }
-        },
-        required: ['rowId']
-    },
-    handler: (args) => {
-        const row = dataStore.getRow(args.rowId);
-        return row || { error: 'Row not found' };
-    }
-});
-```
-
-**Dev mode:** `registerTool()` is not available in local Vite dev mode. Mock it for testing:
-
-```javascript
-if (!window.__INFORMER__?.registerTool) {
-    window.__INFORMER__ = window.__INFORMER__ || {};
-    window.__INFORMER__.registerTool = (def) => console.log('registerTool:', def.name);
-}
-```
-
-## AI Completions from Apps
-
-Apps can call Informer's AI directly for inline insights, structured data extraction, or interactive chat. Use the `go_everyday` model slug for all requests. Three endpoints are available:
-
-| Endpoint | Response | Tools | Use Case |
-|----------|----------|-------|----------|
-| `_chat` | SSE stream | Yes | Interactive AI with tool calling |
-| `_completion` | SSE stream | No | Simple text generation |
-| `_object` | JSON | No | Structured data extraction |
-
-**Data access:** Add the endpoints to your `data-access.yaml`:
-```yaml
-apis:
-  - POST /api/models/go_everyday/_chat
-  - POST /api/models/go_everyday/_completion
-  - POST /api/models/go_everyday/_object
-```
-
-### Streaming Chat (`_chat`)
-
-The only endpoint that supports tools. Use this when the AI needs to call functions or when you want multi-turn conversations.
-
-```javascript
-const response = await fetch('/api/models/go_everyday/_chat', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-        messages: [
-            {
-                role: 'user',
-                parts: [{ type: 'text', text: 'Summarize the sales trend' }]
-            }
-        ],
-        system: 'You are a data analyst. Be concise.',
-        tools: {
-            getData: {
-                description: 'Fetch current sales data from the dashboard',
-                inputSchema: {
-                    type: 'object',
-                    properties: {
-                        metric: { type: 'string', description: 'Which metric to fetch' }
-                    },
-                    required: ['metric']
+    // Built ONCE. Rebuilding the transport mid-run aborts an in-flight tool loop.
+    const transport = useMemo(() => new DefaultChatTransport({
+        api: `/api/models/${model}/_chat`,
+        prepareSendMessagesRequest: async ({ messages, trigger, messageId, id }) => {
+            const { model, system } = live.current;
+            // Per-turn context is a nicety: if it fails, the turn still goes.
+            const ctx = await getContext(messages).catch(() => null);
+            return {
+                api: `/api/models/${model}/_chat`,
+                body: {
+                    id, messages, trigger, messageId,
+                    system,
+                    dynamicSystem: ctx?.dynamicSystem || undefined,
+                    tools: CLIENT_TOOLS,
+                    outputSize: 'medium'
                 }
-            }
+            };
         }
-    })
-});
+    }), []);  // eslint-disable-line react-hooks/exhaustive-deps
+
+    const chat = useChat({
+        transport,
+        throttle: 50,   // tokens arrive faster than frames; without this every token re-renders the tree
+        sendAutomaticallyWhen: (o) => {
+            // A hard ceiling: a tool loop that never settles must not bill a request every few seconds.
+            if (autoSends.current >= MAX_AUTO_SENDS) return false;
+            const go = lastAssistantMessageIsCompleteWithToolCalls(o) || lastAssistantMessageIsCompleteWithApprovalResponses(o);
+            if (go) autoSends.current += 1;
+            return go;
+        },
+        async onToolCall({ toolCall }) {
+            const output = await runClientTool(toolCall);   // see Client tools
+            if (output === undefined) return;               // a server tool: not ours to answer
+            addToolOutputRef.current?.({ tool: toolCall.toolName, toolCallId: toolCall.toolCallId, output });
+        }
+    });
+    // onToolCall is defined before `chat` exists, so it reaches addToolOutput through a ref.
+    addToolOutputRef.current = chat.addToolOutput;
+
+    // Busy spans the gap between tool steps: after a tool answers, the SDK sends the
+    // next request by itself, and treating that beat as "done" makes UI flash in and out.
+    const continuing = chat.status === 'ready' && chat.messages.length > 0 &&
+        (lastAssistantMessageIsCompleteWithToolCalls({ messages: chat.messages }) ||
+         lastAssistantMessageIsCompleteWithApprovalResponses({ messages: chat.messages }));
+    const busy = chat.status === 'submitted' || chat.status === 'streaming' || continuing;
+
+    const send = (text) => {
+        autoSends.current = 0;   // reset the ceiling on every user turn (and on approvals and edits)
+        chat.sendMessage({ parts: [{ type: 'text', text }] });
+    };
+
+    return { ...chat, busy, send };
+}
 ```
 
-**Message format — AI SDK UIMessage (not OpenAI format):**
+Two more rules:
 
-Messages must use the [AI SDK UIMessage format](https://ai-sdk.dev/docs/reference/ai-sdk-ui/use-chat#ui-messages) with a `parts` array. Do not use the OpenAI `{ role, content }` string format.
+- **Stop is `chat.stop()`**: wire it to a Stop button, to Escape while busy, and to leaving the screen.
+- **Do not wrap the App in `<StrictMode>`.** It double-mounts the transport (and any channel subscription) in development.
 
-```javascript
-// CORRECT — AI SDK UIMessage format (parts array)
-messages: [
-    {
-        role: 'user',
-        parts: [{ type: 'text', text: 'Your message here' }]
-    }
-]
+A vanilla (no-build) App has no `useChat`. Read the stream directly and run the tool loop yourself; see [Reading the stream without the AI SDK](#reading-the-stream-without-the-ai-sdk).
 
-// WRONG — OpenAI format (content string)
-messages: [
-    { role: 'user', content: 'Your message here' }
-]
+## The `_chat` request body
 
-// WRONG — system message in array (use the top-level `system` field instead)
-messages: [
-    { role: 'system', content: '...' },
-    { role: 'user', content: '...' }
-]
+| Field | Type | Notes |
+|---|---|---|
+| `messages` | `UIMessage[]` | **Required.** AI SDK UIMessages: `{ id, role, parts: [...] }`. Not the OpenAI `{ role, content }` shape, and no `system` role inside the array. |
+| `system` | `string` | The static prompt: the copilot's job, voice and rules. Keep it stable from turn to turn so the provider can cache it. |
+| `dynamicSystem` | `string` | Per-turn context: what is on screen, the user's name and timezone, "Now: …", a summary of earlier turns. |
+| `tools` | `object` | Client tools, **an object keyed by tool name**, each `{ description, inputSchema }` (JSON Schema). The server does not run these: the call streams to the page. The OpenAI array shape is rejected with a 400. |
+| `functions` | `string[]` | Built-in server functions, e.g. `datasetSearch`, `datasetLookupAndSearch`, `datasourceSqlTables`, `datasourceSqlColumns`, `searchResources`, `evaluateMath`. The server runs them. |
+| `toolkitIds` | `string[]` | Toolkits whose tools the server runs. |
+| `appIds` | `string[]` | **2026.1.4+.** Apps (uuid or `owner:slug`) whose `mcp/` tools the server runs as the user; unreadable ids add nothing. These tools can require approval ([Approvals](#approvals)). |
+| `webSearch` | `boolean` | Let the model search the web. |
+| `outputSize` | `string` | `small` / `medium` (default) / `large`. Caps reply length. |
+| `maxSteps` | `number` | Server-side tool rounds per request (default 20). With client tools the loop runs in the browser instead, through `sendAutomaticallyWhen`. |
+
+The server adds an `aiProgressMessage` parameter to every tool. The model fills it with a short "what I'm doing" line; show it on the tool card while the tool runs.
+
+## System prompt and per-turn context
+
+Split the prompt in two. `system` never changes within a conversation. `dynamicSystem` is rebuilt for every turn by one of the App's own routes, so it always reflects the current state.
+
+```js
+// server/copilot/context.js — POST /api/_server/copilot/context  { screen }
+export async function POST({ request, query }) {
+    const user = request.user;
+    if (!user) return { status: 401, body: { error: 'No user' } };
+    const blocks = [];
+    // What the user is looking at, as the App knows it. describeScreen is yours:
+    // look the record or view up here rather than trusting a large blob from the page.
+    const view = await describeScreen(query, request.body?.screen);
+    if (view) blocks.push(`What the user is looking at:\n${view}`);
+    blocks.push(`Now: ${new Date().toISOString()}${user.timezone ? ` (user timezone ${user.timezone})` : ''}. The person's name is ${user.displayName || user.username}.`);
+    return { dynamicSystem: blocks.join('\n\n') };
+}
 ```
 
-Part types: `{ type: 'text', text: '...' }` for text content. Assistant messages from previous turns may also contain `tool-invocation` and `tool-result` parts — pass these through as-is for multi-turn tool calling.
+On the page, `getContext` posts the current screen state and returns that object. A copilot with memory adds the remembered facts and a summary of earlier turns to the same string.
 
-**Inline tools format — this is NOT the OpenAI format:**
+## Client tools (App actions)
 
-The `tools` property is a **plain object keyed by tool name**, not an array. Each value has `description` and `inputSchema` (or `parameters`). Do not use the OpenAI `tools: [{ type: "function", function: { ... } }]` array format — the server will reject it with a 400.
+A client tool is how the copilot does something in the App: filter a view, open a record, draft a change. Define it once, send it on every turn, run it in `onToolCall`.
 
-```javascript
-// CORRECT — Informer format (object keyed by name)
-tools: {
-    searchSchema: {
-        description: 'Search tables and fields by keyword',
+```ts
+export const CLIENT_TOOLS = {
+    findOrders: {
+        description: 'Find orders matching a customer name or order number. Use before answering any question about a specific order.',
         inputSchema: {
             type: 'object',
-            properties: {
-                query: { type: 'string', description: 'Keyword to search for' }
-            },
-            required: ['query']
+            properties: { q: { type: 'string', description: 'Customer name or order number' } },
+            required: ['q']
         }
     },
-    runQuery: {
-        description: 'Execute a SQL query against the datasource',
-        inputSchema: {
-            type: 'object',
-            properties: {
-                sql: { type: 'string', description: 'The SQL query to run' }
-            },
-            required: ['sql']
-        }
-    }
-}
-
-// WRONG — OpenAI format (array with type/function wrappers)
-tools: [
-    { type: 'function', function: { name: 'searchSchema', parameters: { ... } } }
-]
-```
-
-The server automatically adds an `aiProgressMessage` string parameter to every tool — the AI fills this in to show progress to the user while the tool runs.
-
-**SSE response format (AI SDK UIMessage stream):**
-
-The `_chat` and `_completion` endpoints return an SSE stream (`text/event-stream`). Each event is a `data:` line containing a JSON object with a `type` field. The stream ends with `data: [DONE]`.
-
-Key event types:
-
-| Type | Description | Key Fields |
-|------|-------------|------------|
-| `text-delta` | Text content chunk | `delta` (string to append) |
-| `tool-input-start` | Tool call begins | `toolCallId`, `toolName` |
-| `tool-input-delta` | Tool input JSON chunk | `toolCallId`, `inputTextDelta` |
-| `tool-input-available` | Tool input complete | `toolCallId`, `toolName`, `input` (parsed args) |
-| `tool-output-available` | Tool result | `toolCallId`, `output` |
-| `tool-output-error` | Tool failed | `toolCallId`, `errorText` |
-| `finish-step` | Step complete | `usage`, `finishReason` |
-| `finish` | Stream complete | — |
-| `error` | Error occurred | `errorText` |
-
-For server-registered functions (via `functions`), the server executes tool calls automatically through `maxSteps` rounds. For inline tools (via `tools`), the server also executes them if their handler is registered server-side — otherwise the tool call appears in the stream.
-
-**Reading the SSE stream:**
-
-```javascript
-async function streamChat(messages, options = {}) {
-    const response = await fetch('/api/models/go_everyday/_chat', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ messages, ...options })
-    });
-
-    const reader = response.body.getReader();
-    const decoder = new TextDecoder();
-    let fullText = '';
-    let buffer = '';
-
-    while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split('\n');
-        buffer = lines.pop(); // keep incomplete line in buffer
-
-        for (const line of lines) {
-            if (!line.startsWith('data: ')) continue;
-            const payload = line.slice(6);
-            if (payload === '[DONE]') break;
-
-            try {
-                const event = JSON.parse(payload);
-                switch (event.type) {
-                    case 'text-delta':
-                        fullText += event.delta;
-                        onTextUpdate?.(fullText);
-                        break;
-                    case 'tool-input-available':
-                        onToolCall?.(event.toolName, event.input, event.toolCallId);
-                        break;
-                    case 'error':
-                        onError?.(event.errorText);
-                        break;
-                }
-            } catch {}
-        }
-    }
-
-    return fullText;
-}
-```
-
-**Complete example — SQL assistant with tool calling:**
-
-```javascript
-// Tool implementations — the frontend tool handlers proxy through
-// app server routes (server/tools/search-schema.js,
-// server/tools/run-query.js) that use context.<slot>.query(...) on
-// the bound datasource. The frontend never sees the datasource UUID.
-// See Accessing Your Dependencies in SKILL.md for why this matters.
-const toolHandlers = {
-    searchSchema: async ({ query }) => {
-        const resp = await fetch('/api/tools/search-schema', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ query })
-        });
-        return resp.json();
-    },
-    runQuery: async ({ sql }) => {
-        const resp = await fetch('/api/tools/run-query', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ sql })
-        });
-        return resp.json();
+    openOrder: {
+        description: 'Open an order in the app so the user can see it.',
+        inputSchema: { type: 'object', properties: { id: { type: 'string' } }, required: ['id'] }
     }
 };
 
-// Send chat request with inline tools
-const response = await fetch('/api/models/go_everyday/_chat', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-        messages: [
-            {
-                role: 'user',
-                parts: [{ type: 'text', text: 'Show me orders with customer and product info' }]
-            }
-        ],
-        system: 'You are a SQL assistant. Use searchSchema to discover tables before writing queries.',
-        tools: {
-            searchSchema: {
-                description: 'Search tables, fields, and relationships by keyword',
-                inputSchema: {
-                    type: 'object',
-                    properties: {
-                        query: { type: 'string', description: 'Keyword to search for' }
-                    },
-                    required: ['query']
-                }
-            },
-            runQuery: {
-                description: 'Execute a SQL query and return results',
-                inputSchema: {
-                    type: 'object',
-                    properties: {
-                        sql: { type: 'string', description: 'SQL query to execute' }
-                    },
-                    required: ['sql']
-                }
-            }
+async function runClientTool({ toolName, input }) {
+    try {
+        if (toolName === 'findOrders') {
+            // The App's own route does the data work: it reads dependencies through
+            // typed slots (context.<slot>), never raw platform endpoints from the page.
+            const res = await fetch('/api/_server/orders/search', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ q: input.q })
+            });
+            return res.ok ? { orders: await res.json() } : { error: `Search failed (${res.status})` };
         }
-    })
-});
-```
-
-**Using the AI SDK `useChat` hook (React — recommended):**
-
-The `_chat` endpoint streams the [AI SDK UI Message Stream Protocol](https://ai-sdk.dev/docs/ai-sdk-ui/stream-protocol). For React apps, the `useChat` hook from `@ai-sdk/react` handles SSE parsing, tool-call dispatch, and automatic resubmission — no manual stream reading needed.
-
-```bash
-npm install ai @ai-sdk/react
-```
-
-```tsx
-import { useRef } from 'react';
-import { useChat } from '@ai-sdk/react';
-import { DefaultChatTransport, lastAssistantMessageIsCompleteWithToolCalls } from 'ai';
-
-function NlQueryBar({ datasourceId }) {
-    // Ref to break the circular dependency: onToolCall needs addToolOutput,
-    // but addToolOutput comes from the useChat return value
-    const addToolOutputRef = useRef(null);
-
-    const { messages, sendMessage, addToolOutput, status } = useChat({
-        // Point the transport at the Informer _chat endpoint
-        transport: new DefaultChatTransport({
-            api: '/api/models/go_everyday/_chat',
-            // Pass tools and system prompt as extra body fields
-            body: {
-                system: 'You are a SQL assistant. Use searchSchema to find tables before writing queries.',
-                tools: {
-                    searchSchema: {
-                        description: 'Search tables, fields, and relationships by keyword',
-                        inputSchema: {
-                            type: 'object',
-                            properties: {
-                                query: { type: 'string', description: 'Keyword to search for' }
-                            },
-                            required: ['query']
-                        }
-                    }
-                }
-            },
-        }),
-
-        // Auto-resubmit when all tool results are filled in — this creates the tool-call loop
-        sendAutomaticallyWhen: lastAssistantMessageIsCompleteWithToolCalls,
-
-        // Execute tool calls client-side and feed results back
-        async onToolCall({ toolCall }) {
-            const emit = addToolOutputRef.current;
-            if (toolCall.toolName === 'searchSchema') {
-                const res = await fetch(`/api/datasources/${datasourceId}/_search-metadata`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ query: toolCall.input.query }),
-                });
-                const data = await res.json();
-                // IMPORTANT: `tool` (the tool name) is required alongside toolCallId and output
-                emit({ tool: 'searchSchema', toolCallId: toolCall.toolCallId, output: data });
-            }
-        },
-    });
-
-    // Sync the ref after hook returns — onToolCall reads from this ref
-    addToolOutputRef.current = addToolOutput;
-
-    const isLoading = status === 'submitted' || status === 'streaming';
-
-    return (
-        <input
-            placeholder="Describe what you want to query..."
-            disabled={isLoading}
-            onKeyDown={(e) => {
-                if (e.key === 'Enter') {
-                    sendMessage({
-                        parts: [{ type: 'text', text: e.target.value }],
-                    });
-                }
-            }}
-        />
-    );
+        if (toolName === 'openOrder') {
+            navigate(`/orders/${input.id}`);
+            return { opened: true };
+        }
+    } catch (e) {
+        return { error: e.message };   // return errors as data, never throw: the loop must continue
+    }
+    return undefined;                  // not a client tool
 }
 ```
 
-**Important patterns:**
+- **Return `{ error }` instead of throwing.** A thrown error stalls the turn; an error as output lets the model recover or explain.
+- **A tool can be presentational.** A `chart` tool can return `{ rendered: true }` and let the message render the chart from the tool part's `input`.
+- **Keep the ceiling.** Six automatic continuations per user turn. Reset it on each user send, approval and edit.
 
-- **`addToolOutputRef` pattern:** `onToolCall` is passed into `useChat` at hook init time, but it needs `addToolOutput` from the hook's return value. Use a ref that's synced after the hook call — the callback reads from the ref at execution time.
-- **`tool` parameter is required:** `addToolOutput` requires `{ tool, toolCallId, output }` — passing just `{ toolCallId, output }` will cause a TypeScript error. The `tool` value must be the tool name string (e.g. `'searchSchema'`).
+## Server tools
 
-**How the loop works:**
-1. `sendMessage()` sends the user message to `/api/models/go_everyday/_chat`
-2. The server streams back SSE events — `useChat` parses them into `messages` automatically
-3. When a `tool-input-available` event arrives, `onToolCall` fires with the parsed tool call
-4. You execute the tool locally and call `addToolOutput()` with the result
-5. `sendAutomaticallyWhen: lastAssistantMessageIsCompleteWithToolCalls` detects all tool calls have results and resubmits the conversation automatically
-6. The server generates the next response (which may have more tool calls or final text)
-7. The loop continues until the model produces a text-only response and `status` becomes `'ready'`
+Put Informer's own capabilities on the server side of the call: `functions` for built-ins, `toolkitIds` for toolkits, and **2026.1.4+** `appIds` for other Apps' `mcp/` tools. The server runs them and streams their parts back. `onToolCall` still fires for them; return `undefined` so the page doesn't answer a call that isn't its own.
 
-**Key `useChat` return values:**
+App tool names arrive as `app_<owner>_<slug>_<tool>_<hash>`. Decode one back into an app, a tool and a read-or-write kind before showing it to the user.
 
-| Value | Type | Description |
-|-------|------|-------------|
-| `messages` | `UIMessage[]` | Full conversation history with typed `parts` arrays |
-| `sendMessage` | `function` | Send a new user message (with `parts` or `text`) |
-| `addToolOutput` | `function` | Feed a tool result back: `{ tool, toolCallId, output }` — `tool` is the tool name string |
-| `status` | `string` | `'ready'` \| `'submitted'` \| `'streaming'` \| `'error'` |
-| `stop` | `function` | Abort the current stream |
-| `error` | `Error` | Last error, if any |
+### Approvals
 
-**Full `_chat` payload options:**
+An App's `mcp/` tool runs as the user, so unless it declares `needsApproval = false` the server stops and asks: on the first call by default, on every call with `needsApproval = true`. The stream then carries the tool part in state `approval-requested` with `part.approval.id`, and the turn waits.
 
-| Field | Type | Description |
-|-------|------|-------------|
-| `messages` | `array` | **Required.** AI SDK UIMessage format — each message has `role` and `parts: [{ type: 'text', text }]`. |
-| `system` | `string` | System prompt — sets the AI's behavior and context. Do NOT put system as a message; use this field. |
-| `tools` | `object` | Inline tool definitions — **object keyed by name**, each with `description` and `inputSchema`. |
-| `functions` | `string[]` | Built-in server function names to enable: `"evaluateMath"`, `"webSearch"`, etc. |
-| `toolkitIds` | `string[]` | Server-side toolkit IDs to attach. |
-| `maxSteps` | `number` | Max tool-calling round trips (default: 20). |
-| `outputSize` | `string` | `"small"`, `"medium"` (default), or `"large"` — controls max output length. |
-
-### Simple Completion (`_completion`)
-
-Fastest path for one-shot text generation. No tools, no multi-turn.
-
-```javascript
-const response = await fetch('/api/models/go_everyday/_completion', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-        prompt: 'Write a one-sentence summary of this data: ' + JSON.stringify(chartData)
-    })
-});
-
-// Same SSE stream format as _chat — parse text-delta events
-const text = await streamChat([], { prompt: '...' });
+```ts
+// On the tool card's buttons:
+chat.addToolApprovalResponse({ id: part.approval.id, approved: true });
+chat.addToolApprovalResponse({ id: part.approval.id, approved: false, reason: 'The user declined' });
 ```
 
-| Field | Type | Description |
-|-------|------|-------------|
-| `prompt` | `string` | **Required.** The text prompt (converted to a user message internally). |
-| `messages` | `array` | Optional prior messages for context (UIMessage format with `parts`). |
+`lastAssistantMessageIsCompleteWithApprovalResponses` then sends the next request, which is why it sits in `sendAutomaticallyWhen`. On the card, show the intent first (`input.aiProgressMessage`), then the arguments as labelled values, with the raw call behind a Details toggle. If the App keeps standing answers ("always allow"), apply them in an effect the moment a request appears, and paint an auto-approved card as running from its first frame so no prompt flashes.
 
-### Structured Output (`_object`)
+## Rendering the reply
 
-Returns a JSON object matching a schema. Not streaming — returns a single JSON response.
+Streaming markdown looks broken unless the page manages it. The rules:
 
-```javascript
-const response = await fetch('/api/models/go_everyday/_object', {
+- **Throttle** `useChat` at 50 ms. **Memoise** each message on its message object and streaming flag.
+- **Render per block**, one sanitized HTML string per top-level block (DOMPurify; links limited to http(s)/mailto with `target=_blank rel=noopener`).
+- **Pace only the live last block.** The reveal runs on its own clock, releasing whole sentences or lines while the stream is live, with a short stall fallback. Text before a tool call is not paced: it may never end in a sentence break and would sit held back for the whole turn. On a hidden tab, show everything at once, since browsers starve `requestAnimationFrame` there.
+- **Memoise on the text being rendered, not the text received.** Close unbalanced `**`, `*` and backticks in the last paragraph, and keep single-paragraph list items tight so items already on screen don't reflow.
+- **Fade new words by colour, not opacity.** Opacity re-rasterises glyphs and nudges them.
+- **Highlight code and typeset maths only once a block has settled.**
+- **Merge consecutive text parts.** The stream splits text around tool calls and citations; those seams are not paragraph breaks.
+- **Give each tool card and status line one root element for its whole life**, and the same size in every state. "Thinking…" and the reply's first line share one row height, so nothing jumps.
+- **Park the sent prompt at the top of the view** and let the reply grow under it. Scroll by gliding, not jumping, and follow the bottom only while busy and pinned there.
+
+## Errors and session loss
+
+Show `chat.error` inline with a retry that regenerates the turn, and say what went wrong in plain words:
+
+```ts
+function describe(err) {
+    const m = String(err?.message || err);
+    if (/402|budget|credit/i.test(m)) return 'This copilot is out of AI budget for now. An admin can raise it under AI settings.';
+    if (/401|403/.test(m)) return 'Your session has expired. Reload to sign in again.';
+    if (/Failed to fetch|network/i.test(m)) return 'Lost the connection while answering.';
+    return 'Something went wrong answering that.';
+}
+// "Try again":
+chat.clearError(); chat.regenerate();
+```
+
+A session can end mid-use, and every request then fails quietly one by one. Route every App fetch through one helper that fires a single signed-out event on a 401, and show one "You're signed out" screen with a Sign in action. To probe whether the session is still alive, fetch an App route with `redirect: 'manual'`: an ended session answers with a redirect to sign in, and `manual` turns that into a plain failed response instead of a CORS error. An installed PWA also needs its service worker to serve the cached shell on an off-origin redirect, or the standalone window goes blank.
+
+## Persisting the conversation
+
+The wire format is the storage format: store each UIMessage's `parts` as JSONB, keyed by the id the page minted.
+
+```sql
+-- migrations/001-conversations.sql
+CREATE TABLE conversations (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    owner text NOT NULL,
+    title text,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    updated_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE TABLE messages (
+    conversation_id uuid NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+    id text NOT NULL,           -- the UIMessage id minted on the page
+    seq int NOT NULL,           -- 1-based position in the transcript
+    role text NOT NULL,
+    parts jsonb NOT NULL,       -- UIMessage parts, as sent
+    PRIMARY KEY (conversation_id, id)
+);
+```
+
+- **The page saves the whole array** with one `PUT /api/_server/conversations/:id/messages`: once when the user sends (so a reload mid-stream keeps the turn) and again in `useChat`'s `onFinish`, including aborts and errors.
+- **The route replaces the transcript**: delete rows not in the list (this covers edit-and-resend), upsert the rest, and only rewrite a row whose parts actually changed.
+- **Respond first, then work.** `await respond({ ok: true })`, then title the conversation, summarise it, or index it in the same handler; give the route `export const config = { timeout: 120000 }`. Make the title write race-safe: `UPDATE … SET title = $2 WHERE id = $1 AND title IS NULL`.
+- **Create the conversation row alongside the first turn**, not before it, and have `prepareSendMessagesRequest` await it. The prompt then appears the instant the user sends.
+
+When the copilot needs more than a transcript:
+
+- **Memory across conversations.** After a settled turn with at least four new messages, one `_object` call proposes facts to add or update, capped at two new ones. Most conversations teach nothing durable, so an empty answer is normal. Filter what comes back in code too (drop activity logs, ticket ids and anything long): a prompt alone will not hold that line. Keep a watermark of the last message already mined.
+- **Silent compaction.** Past roughly 160k characters of text, summarise all but the most recent 14 messages with one `_object` call, folding in any earlier summary. Store the summary and the position it covers; send the summary in `dynamicSystem` and drop the covered messages from `_chat`. Never show the summary to the user.
+- **Recall over past chats.** Declare `embeddings/` for messages and search them by vector, falling back to Postgres full-text search when `platform.capabilities.embeddings` is off. Gate the pgvector migration with `-- requires: embeddings` so it is skipped rather than failing where the extension is absent.
+- **Multi-tab sync.** Broadcast changes on `@user/<username>` channels and invalidate the matching queries. Channels exist only in origin mode, so gate on `platform.originMode`. Tag every write with a per-tab id so a tab ignores its own echo, and adopt a transcript another tab changed only while this one is idle.
+
+## Calling the model from a server route
+
+Use `_object` from `server/` handlers. It answers with buffered JSON, so it behaves the same in production and under the Vite plugin's `fetch` emulation, which mis-parses a `text/event-stream` body. Never consume a stream in a route. Use the bag's `fetch` with a path relative to the API root:
+
+```js
+// server/_lib/ai.js
+export async function generateObject(fetch, { prompt, schema, outputSize = 'small', model = 'go_everyday' }) {
+    const res = await fetch(`models/${model}/_object`, {
+        method: 'POST',
+        body: { messages: [{ role: 'user', parts: [{ type: 'text', text: prompt }] }], schema, outputSize }
+    });
+    if (res.status !== 200) throw new Error(`_object failed (${res.status})`);
+    const raw = res.body;
+    // Some paths wrap the result as { object }; accept both.
+    return raw && typeof raw === 'object' && raw.object && typeof raw.object === 'object' ? raw.object : raw;
+}
+```
+
+Small models drift from schemas, so normalise the output before using it ([Defensive parsing](#defensive-parsing-for-_object)). The call is metered to the App.
+
+## Streaming in production
+
+Tokens stream live through the App proxy when the server sets `appProxyStreaming: true`, and Informer cloud does. On a server without it, each reply arrives whole when the model finishes. A paced reveal (see [Rendering the reply](#rendering-the-reply)) keeps that looking smooth, so build the reveal regardless. In local dev the Vite plugin sends `/api` straight to the server, so replies always stream there.
+
+## Choosing a model
+
+`go_everyday` is a sound default slug. For a picker, list `GET /api/chat-models` (it answers a HAL collection: read `_embedded['inf:model']`, and accept a bare array too) rather than hard-coding tiers. `GET /api/ai-budget` reports the current user's AI budget (weekly and session windows, turns left per tier), if the App wants to show it before a 402 does. Both need `access.apis` entries: they are not auto-granted.
+
+## Endpoint reference
+
+Three endpoints, all granted to every App:
+
+| Endpoint | Response | Tools | Use |
+|---|---|---|---|
+| `_chat` | UI message stream (SSE) | Client and server tools | The copilot |
+| `_completion` | UI message stream (SSE) | None | One-shot text |
+| `_object` | JSON | None | Structured output; the one to use from routes |
+
+### Message and tool formats
+
+Messages are AI SDK UIMessages with a `parts` array. Do not send the OpenAI shape, and do not put a system message in the array:
+
+```js
+// CORRECT
+messages: [{ id: 'm1', role: 'user', parts: [{ type: 'text', text: 'Why did Q4 spike?' }] }]
+// WRONG — OpenAI content string (validates, then fails deep inside the server)
+messages: [{ role: 'user', content: 'Why did Q4 spike?' }]
+```
+
+Assistant messages carry tool parts typed `tool-<toolName>`, with `toolCallId`, `state`, `input` and, once answered, `output`. Send prior assistant messages back exactly as they came.
+
+`tools` is an object keyed by name. The OpenAI array (`[{ type: 'function', function: {...} }]`) is rejected with a 400.
+
+### Reading the stream without the AI SDK
+
+The stream is `text/event-stream` with CRLF framing: events are separated by `\r\n\r\n`, each has an `id:` line and a `data:` line of JSON with a `type`. There is no `[DONE]` sentinel; the stream ends when the body closes.
+
+| `type` | Meaning | Fields |
+|---|---|---|
+| `text-delta` | Text chunk | `delta` |
+| `tool-input-available` | A tool call is ready | `toolCallId`, `toolName`, `input` |
+| `tool-output-available` | A server tool returned | `toolCallId`, `output` |
+| `tool-output-error` | A tool failed | `toolCallId`, `errorText` |
+| `tool-approval-request` | A server tool needs approval | `approvalId`, `toolCallId` |
+| `finish-step` / `finish` | A step / the stream ended | |
+| `error` | Stream error | `errorText` |
+
+A vanilla App runs the tool loop itself. `tool-input-available` fires for every tool call, including the ones the server runs (`functions`, `toolkitIds`, `appIds`), which are followed by their own `tool-output-available`. After the stream ends, append the assistant message with **every** call as a `tool-<name>` part in state `output-available` (the server's output for its tools, your output for yours), run only your own, and post again if you ran any. Keep the same six-step ceiling.
+
+```js
+async function readStream(res, onText) {
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '', text = '';
+    const calls = [], serverOutputs = {};
+    while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        let cut;
+        while ((cut = buffer.search(/\r?\n\r?\n/)) >= 0) {
+            const raw = buffer.slice(0, cut);
+            buffer = buffer.slice(cut).replace(/^\r?\n\r?\n/, '');
+            const data = raw.split(/\r?\n/).filter(l => l.startsWith('data:')).map(l => l.slice(5).trimStart()).join('\n');
+            if (!data) continue;
+            let e; try { e = JSON.parse(data); } catch { continue; }
+            if (e.type === 'text-delta') { text += e.delta; onText(text); }
+            else if (e.type === 'tool-input-available') calls.push(e);
+            else if (e.type === 'tool-output-available') serverOutputs[e.toolCallId] = e.output;
+            else if (e.type === 'error') throw new Error(e.errorText);
+        }
+    }
+    return { text, calls, serverOutputs };
+}
+
+// crypto.randomUUID exists only in a secure context; plain-http servers have none.
+const newId = () => globalThis.crypto?.randomUUID?.() ?? Date.now().toString(36) + Math.random().toString(36).slice(2);
+
+async function turn(messages, onText, step = 0) {
+    const res = await fetch('/api/models/go_everyday/_chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ messages, system: SYSTEM, tools: CLIENT_TOOLS })
+    });
+    if (!res.ok) throw new Error(`${res.status}`);
+    const { text, calls, serverOutputs } = await readStream(res, onText);
+    const parts = text ? [{ type: 'text', text }] : [];
+    let ranMine = false;
+    for (const c of calls) {
+        const mine = Object.hasOwn(CLIENT_TOOLS, c.toolName) && !(c.toolCallId in serverOutputs);
+        const output = mine ? await runClientTool(c) : serverOutputs[c.toolCallId];
+        if (mine) ranMine = true;
+        parts.push({ type: `tool-${c.toolName}`, toolCallId: c.toolCallId, state: 'output-available', input: c.input, output });
+    }
+    const next = [...messages, { id: newId(), role: 'assistant', parts }];
+    if (!ranMine || step + 1 >= 6) return next;
+    return turn(next, onText, step + 1);
+}
+```
+
+This loop does not answer approvals. A vanilla App that attaches `appIds` must handle `tool-approval-request`: show the call, then resend with that tool part in state `approval-responded` carrying `approval: { id, approved, reason? }`. Otherwise, attach only Apps whose tools declare `needsApproval = false`.
+
+### `_completion`
+
+```js
+await fetch('/api/models/go_everyday/_completion', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ prompt: 'One sentence on this trend: ' + JSON.stringify(series) })
+});
+```
+
+Fields: `prompt` (required) and optional prior `messages`. It does **not** take `outputSize`. The response is the same stream as `_chat`: read `text-delta` events.
+
+### `_object`
+
+```js
+const res = await fetch('/api/models/go_everyday/_object', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
-        messages: [
-            {
-                role: 'user',
-                parts: [{
-                    type: 'text',
-                    text: `Analyze this data and extract insights:\n${JSON.stringify(salesData)}`
-                }]
-            }
-        ],
+        messages: [{ role: 'user', parts: [{ type: 'text', text:
+            `Summarise these orders.\n${JSON.stringify(rows)}\n\nRespond with JSON: { "summary": "<text>", "risks": ["<risk>"] }` }] }],
         schema: {
             type: 'object',
-            properties: {
-                summary: { type: 'string', description: 'One paragraph overview' },
-                trend: { type: 'string', enum: ['up', 'down', 'flat'] },
-                topMetric: { type: 'string' },
-                recommendations: {
-                    type: 'array',
-                    items: { type: 'string' }
-                }
-            },
-            required: ['summary', 'trend', 'recommendations']
-        }
+            properties: { summary: { type: 'string' }, risks: { type: 'array', items: { type: 'string' } } },
+            required: ['summary', 'risks']
+        },
+        outputSize: 'small'
     })
 });
-
-const insights = await response.json();
-// { summary: "...", trend: "up", topMetric: "Revenue", recommendations: ["...", "..."] }
+const raw = await res.json();   // the object itself; normalise before use
 ```
 
-| Field | Type | Description |
-|-------|------|-------------|
-| `messages` | `array` | **Required.** Messages to analyze (UIMessage format with `parts`). |
-| `schema` | `object` | **Required.** JSON Schema defining the output structure. |
-| `outputSize` | `string` | `"small"`, `"medium"` (default), or `"large"` — controls max output length. Supported on servers >= 2025.2.x with the I5-12415 fix. |
+Fields: `messages` and `schema` (both required), and `outputSize`.
 
-**Dev mode:** All three endpoints work in local dev mode — the Vite proxy handles authentication automatically.
+### Defensive parsing for `_object`
 
-### Defensive Parsing for `_object` Responses
+`go_everyday` is a Haiku-class model and drifts from schemas. Expect:
 
-The `_object` endpoint uses `go_everyday` (Haiku-class) which sometimes deviates from the provided JSON schema. Common failure modes:
+- array fields returned as a bare string (`risks: "text"`);
+- array items scattered into top-level keys (`item_1`, `risks_1`, …);
+- enum values that are slightly off, and numbers as strings.
 
-- **Array fields returned as strings** — e.g. `risks: "some text"` instead of `risks: ["some text"]`
-- **Array items scattered into top-level keys** — e.g. `item_1: "...", item_2: "..."` instead of a proper array
-- **Enum values slightly off** — missing or novel labels
-- **Numbers as strings** — e.g. `score: "75"` instead of `score: 75`
+Never call `.map()` on a field without checking its type. Normalise first, and repeat the shape as a JSON example in the prompt text, so the model gets two signals:
 
-Always normalize `_object` responses before using them. Never call `.map()` or access array methods on a response field without checking its type first. Write a normalizer function that:
-
-1. Validates each field's type and coerces when possible (`typeof x === 'string'` → wrap in array)
-2. Collects scattered `item_N` keys back into arrays
-3. Clamps numeric ranges
-4. Falls back to sensible defaults for missing/malformed fields
-
-**Reinforce the schema in the prompt text itself** — include a concrete JSON example showing the exact shape you expect. This gives the model two signals (prompt + schema) and significantly reduces drift:
-
-```javascript
-const resp = await fetch('/api/models/go_everyday/_object', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-        messages: [{
-            role: 'user',
-            parts: [{
-                type: 'text',
-                // Include explicit JSON shape example at the end of the prompt
-                text: `Analyze this data...\n\nRespond with JSON only: { "summary": "<text>", "items": ["<item1>", "<item2>"] }`
-            }]
-        }],
-        schema: { /* formal schema here */ }
-    })
-});
-
-const raw = await resp.json();
-// NEVER use raw directly — always normalize first
-const result = normalize(raw);
+```js
+const asString = (v, max = 400) => (typeof v === 'string' ? v : v == null ? '' : String(v)).trim().slice(0, max);
+function asArray(v, raw, key) {
+    if (Array.isArray(v)) return v;
+    if (typeof v === 'string' && v.trim()) return [v];
+    if (raw && typeof raw === 'object') {
+        const scattered = Object.keys(raw).filter(k => k.startsWith(`${key}_`) || /^item_\d+$/.test(k)).map(k => raw[k]);
+        if (scattered.length) return scattered;
+    }
+    return [];
+}
+const result = { summary: asString(raw.summary), risks: asArray(raw.risks, raw, 'risks').map(r => asString(r, 160)) };
 ```
+
+## Local development
+
+All three endpoints work under `vite dev`: the plugin proxies `/api` to the server with your credentials, and streams live. The plugin's `__INFORMER__` mock does not define the retired `openChat` / `registerTool` / `showCopilot`; an embedded copilot never needs them.

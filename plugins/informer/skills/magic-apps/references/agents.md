@@ -2,7 +2,7 @@
 
 > **Load this reference when:** declaring agents in `informer.yaml`, writing tool files under `tools/`, emitting events from server routes or other agent tools (agent chaining), scheduling agents via cron, or working with the agent REST API.
 >
-> **Not in this file:** the in-app sidebar copilot — see `copilot.md`. Server route handlers (which often emit events) — see `server-routes.md`. The sandbox helpers (`query`, `fetch`, `emit`, `notify`, `email`, `log`) are documented in detail in `server-routes.md`; agent tools use the same sandbox. Live frames to open pages (`broadcast()`, and relaying `emit()`-ed events to a channel via the `channels:` block) — see `channels.md`.
+> **Not in this file:** an interactive copilot the user chats with inside the App — see `copilot.md`. Server route handlers (which often emit events) — see `server-routes.md`. The sandbox helpers (`query`, `fetch`, `emit`, `notify`, `email`, `log`) are documented in detail in `server-routes.md`; agent tools use the same sandbox. Live frames to open pages (`broadcast()`, and relaying `emit()`-ed events to a channel via the `channels:` block) — see `channels.md`.
 
 Apps can define **agents** — AI-powered workflows that listen for events, execute tools, and chain together to automate complex tasks. Agents are declared in `informer.yaml`, run server-side in isolated V8 sandboxes, and have access to the app's workspace database, API whitelist, and custom tools.
 
