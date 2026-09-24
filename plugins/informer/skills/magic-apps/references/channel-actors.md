@@ -83,7 +83,9 @@ if (!live) {
     match.on('error', err => {
         if (err.code === 'unavailable') showReconnecting();   // its server went away; the page resubscribes on its own
     });
-    window.addEventListener('keydown', e => ready && match.send('input', { dy: e.key === 'ArrowUp' ? -1 : 1 }));
+    const dyFor = e => (e.key === 'ArrowUp' ? -1 : e.key === 'ArrowDown' ? 1 : null);   // any other key is not input
+    window.addEventListener('keydown', e => { if (ready && !e.repeat && dyFor(e) !== null) match.send('input', { dy: dyFor(e) }); });
+    window.addEventListener('keyup', e => { if (ready && dyFor(e) !== null) match.send('input', { dy: 0 }); });
 }
 ```
 
@@ -107,7 +109,7 @@ The deploy refuses (400, naming the file) a `config.actor` that is not an object
 | `start` | The server, once, before anything else | `restored` — the kept snapshot, or `undefined` |
 | `join` | Each connection's subscribe (and a send from a page this actor has not admitted) | `request`. Must return exactly `true` |
 | `joined` | Each connection, after admission | `request` |
-| `leave` | Once, when a page's last connection is gone | `request` (the one it joined with) |
+| `leave` | Once, when a page's last connection is gone | `request` — the departing connection's; a member swept after its server died gets the one it joined with |
 | `<event>` | A page's `send(event, payload)` | `payload`, `request`; the return value answers the `send()` |
 | `tick` | The server, `config.actor.tick` times a second | `dt` (seconds since the last tick), `frame` (its number, from 1) |
 | `snapshot` | The server, every `snapshotMs`, and before a stop it should come back from | — ; return plain JSON |
@@ -124,6 +126,7 @@ The deploy refuses (400, naming the file) a `config.actor` that is not an object
 - `join` and `joined` run for **every connection**, so a page that reconnects runs them again: make both idempotent (`??=`, "already here?").
 - `leave` runs **once**, when the page's last connection goes — including a page whose server died and never said goodbye (the owner drops that server's members once its heartbeat lapses and runs their `leave`). A reconnect is never a departure followed by an arrival.
 - **An actor never holds a member its own `join` did not admit.** A page whose actor restarted (idle, redeploy, crash, lifetime) is put through `join` again by its next `send()`, without the page doing anything; a `join` that refuses answers that `send()` with `send_refused`.
+- Every `send()` on an actor channel is checked against the **current** deploy before it travels: the export must exist and `config.roles` must admit the socket now. A redeploy that adds an export makes it sendable without resubscribing; one that adds a role this page lacks refuses its sends (403 `app_channel_role_required` → `send_refused`).
 - A `join` that refuses the only page on a fresh actor stops it within a second, so refused joins do not hold the App's actor slots.
 - A wildcard cannot join an actor: `match/*` names a family of channels and an actor is one of them (403 `app_channel_actor_wildcard` → `join_refused`).
 - Joins on an actor channel spend a token from the same per-user bucket as its sends (`actors.inboundRate`), since a join may start an actor (audited `join_rate_limited`).
@@ -159,11 +162,11 @@ The first join (or a `send()` after a restart) starts one on the current deploy.
 | `timeout` | a call ran past `callTimeoutMs`, or unawaited work used that much CPU between calls | **no** | dropped | 500 |
 | `crashed` | the sandbox died (out of memory, for one) | **no** | dropped | 500 |
 
-A graceful stop lets the call in flight finish, then runs `stop({ reason })` within `actors.stopTimeoutMs` (5 s); page calls still waiting are refused and retried on the next actor, and the next actor for the channel starts only once this one has stopped. A hung call answers its caller 504 (`handler_failed`); a result over `actors.maxResultBytes` (128 KB of JSON) is refused unparsed (413, `send_refused`). Every stop writes the reason to the Logs tab, and one request-list row per actor run (method `ACTOR`, path `channel:<name>`, user `_actor`) shows how long it lived and why it ended.
+A graceful stop lets the call in flight finish, then runs `stop({ reason })` within `actors.stopTimeoutMs` (5 s); page calls still waiting are refused and retried on the next actor, and the next actor for the channel starts only once this one has stopped. A hung call answers its caller 504 (`handler_failed`); a result over `actors.maxResultBytes` (128 KiB of JSON) is refused unparsed (413, `send_refused`). An abnormal stop — `timeout`, `crashed`, `budget`, `meter_failed` — writes why to the Logs tab ("Stopped: …"); a graceful one (`idle`, `lifetime`, `redeploy`, `shutdown`, `lease_lost`) writes nothing there. Every run leaves one request-list row (method `ACTOR`, path `channel:<name>`, user `_actor`) that shows how long it lived and why it ended, so the request list is where every reason is.
 
 ## Snapshots
 
-An actor's state lives in its sandbox's memory. Export `snapshot()` to carry it across a redeploy, a shutdown or a lost server: return what a new actor needs to carry on (plain JSON, at most `actors.maxSnapshotBytes`, 256 KB) and the next `start()` receives it as `restored`.
+An actor's state lives in its sandbox's memory. Export `snapshot()` to carry it across a redeploy, a shutdown or a lost server: return what a new actor needs to carry on (plain JSON, at most `actors.maxSnapshotBytes`, 256 KiB) and the next `start()` receives it as `restored`.
 
 - Taken every `snapshotMs`, between calls like any call (billed as compute), and once more before a `lifetime`, `redeploy`, `shutdown` or `meter_failed` stop.
 - **Redeploy:** the actor keeps a snapshot, runs `stop({ reason: 'redeploy' })`, and — if it exports `snapshot` and has members — starts again at once on the new code from it. Its pages stay subscribed and are carried in, each through the new code's `config.roles` and `join`; one the new code refuses is out until it subscribes again. An actor without `snapshot()` just stops; the next join or `send()` starts it fresh on the new code.
@@ -180,7 +183,7 @@ A server that dies loses its actors. Until the lease lapses, a subscribe or `sen
 
 ## Billing
 
-The time an actor **works** (inside calls, or the sandbox's own CPU clock when work ran on after a call returned, whichever is more) is app compute at the per-second rate, like any handler's — the Usage tab shows it as method `ACTOR`. The time it **waits** between calls costs only the memory it holds, billed by the GB-hour of `memoryMb` plus the isolate's overhead (`actors.idleCreditsPerGbHour`, 0.25) — method `ACTOR_IDLE`. A 32 MB actor waiting an hour costs about 0.009 credits. Both are recorded every `meterEveryMs` (10 s), which is also when the budget is checked; an App out of compute has its actors stopped (`budget`), and a new one refuses to start with 402 (`budget_exhausted` on the page). A tick is work: 60 ticks a second of real computation is 60 small calls a second, billed.
+The time an actor **works** (inside calls, or the sandbox's own CPU clock when work ran on after a call returned, whichever is more) is app compute at the per-second rate, like any handler's, recorded as app-compute usage with method `ACTOR`. The time it **waits** between calls costs only the memory it holds, billed by the GB-hour of `memoryMb` plus the isolate's overhead (`actors.idleCreditsPerGbHour`, 0.25) — method `ACTOR_IDLE`. A 32 MB actor waiting an hour costs about 0.009 credits. The meter runs every `meterEveryMs` (10 s) and checks the budget each time, but writes a row only as usage builds up: an `ACTOR` row once 10 s of working time has accumulated (or five minutes have passed with any), an `ACTOR_IDLE` row once 0.001 credits has (about one every seven minutes for that 32 MB actor), and a last round-up when the actor stops. An App out of compute has its actors stopped (`budget`), and a new one refuses to start with 402 (`budget_exhausted` on the page). A tick is work: 60 ticks a second of real computation is 60 small calls a second, billed.
 
 ## Limits
 
@@ -203,7 +206,7 @@ Server settings under `app.channels.actors` (`config-factory.js`); an administra
 | `snapshotMs` / `maxSnapshotMs` | 5000 / 60000 | Default snapshot cadence, and its ceiling |
 | `snapshotTtlMs` / `maxSnapshotBytes` | 900000 / 262144 | How long a snapshot is kept, and its size ceiling |
 | `idleCreditsPerGbHour` | 0.25 | What waiting costs |
-| `meterEveryMs` | 10000 | How often compute is recorded and the budget checked |
+| `meterEveryMs` | 10000 | How often the meter runs and the budget is checked; rows are written as usage accumulates ([Billing](#billing)) |
 | `leaseMs` | 15000 | The lease naming the server that runs an actor |
 
 ## On the page
@@ -217,22 +220,22 @@ Nothing about subscribing changes: `__INFORMER__.channel(name).on(...)` / `.send
 | 504 `app_channel_actor_timeout` (hung, or dropped unrun) | `handler_failed` | `handler_failed` |
 | 413 `app_channel_result_too_large` | — | `send_refused` |
 | 403 `app_channel_join_refused` | `join_refused` | `send_refused` (the restarted actor's `join` refused this page) |
-| 429 — the App is at its actor cap (`app_channel_actor_limit`), or the user is past `actors.inboundRate` | `rate_limited` | `rate_limited` |
+| 429 — the App or this server is at its actor cap (`app_channel_actor_limit`), or the user is past `actors.inboundRate` | `rate_limited` | `rate_limited` |
 | 402 | `budget_exhausted` | `budget_exhausted` |
 
 **`__INFORMER__.serverNow()`** (also `channel.serverNow()`, every channel page on a 2026.1.4+ server) is the server's clock in ms as closely as the page can tell: `Date.now()` corrected by the quickest socket round trip, sampled three times when the socket comes up and again from every `send()` reply. Use it wherever pages must agree on a moment — a countdown the actor starts, a race clock, a deadline — by broadcasting the server's `Date.now()` and comparing against `serverNow()` on the page. Before the socket is up it is the page's own clock.
 
 ## What the operator sees
 
-- **Logs tab, `channel` source:** every stop with its reason ("Stopped: …"), `stop() did not finish`, an oversize snapshot, the first throw of each export per window, and the counted codes `actor_limit`, `actor_busy`, `join_rate_limited` alongside the ordinary channel codes (`channels.md`).
-- **Channels tab / `GET /api/apps/{id}/channels`:** each handler row carries its `actor` config (or `null`), and `actors` lists the actors running on the server that answered: channel, state, members, pages, tick rate, ticks run and skipped, calls, snapshots, whether it was restored, when it started.
-- **Usage:** `ACTOR` and `ACTOR_IDLE` app-compute rows; **request list:** one `ACTOR` row per run.
+- **Logs tab, `channel` source:** the abnormal stops (`timeout`, `crashed`, `budget`, `meter_failed`) with their reason ("Stopped: …") — a graceful stop shows only in the request list — `stop() did not finish`, an oversize snapshot, the first throw of each export per window, and the counted codes `actor_limit`, `actor_busy`, `join_rate_limited` alongside the ordinary channel codes (`channels.md`).
+- **`GET /api/apps/{id}/channels`** (the Channels tab does not render these yet): each handler row carries its `actor` config (or `null`), and `actors` lists the actors running on the server that answered: channel, state, members, pages, tick rate, ticks run and skipped, calls, snapshots, whether it was restored, when it started.
+- **Usage:** app-compute rows whose `method` is `ACTOR` or `ACTOR_IDLE` — they count in the App's usage totals; the Usage tab does not break them out by method; **request list:** one `ACTOR` row per run.
 
 ## Local development
 
 `npm run dev` with plugin **2.13.0+** runs actors in the dev server: one module instance per concrete channel, calls one at a time, `tick()` on a real timer, the idle stop, `request.member` per page, `join` on every admission (including a send after a restart), and `config.actor` checked at load with the deploy's own wording. A page that closes or reloads leaves its channels. `snapshot()` is kept in memory: editing a file under `channels/`, `shared/`, `lib/` or `server/` restarts the running actors that keep snapshots on the new code from them, each page admitted again by the new `join` — a game in progress survives the edit. `serverNow()` is the page's own clock (the same machine). Actors stop when the dev server closes.
 
-What dev does not have: the cluster and leases (`unavailable` never happens), billing and the budget stop, the actor cap, the queue limit, and the broadcast limits. Every page is the same `mock.user`, but each tab is its own `request.member`, so two tabs *can* stand in for two players.
+What dev does not have: the cluster and leases (`unavailable` never happens), billing and the budget stop, the actor cap, the queue limit, and the broadcast rate limits (the 64 KiB frame cap is enforced, and so is the actor `inboundRate` bucket, 30/s, burst 60). Every page is the same `mock.user`, but each tab is its own `request.member`, so two tabs *can* stand in for two players.
 
 ## Gotchas
 

@@ -4,9 +4,9 @@ Running a WASM library — especially one that uses a Web Worker (DuckDB-WASM, s
 
 ## In a server-side handler
 
-Everything else in this file is about the **page**. A handler (`server/`, `webhooks/`, `tools/`, `mcp/`, `channels/`, a channel actor) runs in a V8 isolate with no network and no Workers, but `WebAssembly` is there:
+Everything else in this file is about the **page**. A handler (`server/`, `webhooks/`, `tools/`, `mcp/`, `channels/`, a channel actor) runs in a V8 isolate with no Workers and no way to load bytes from outside, but `WebAssembly` is there:
 
-- **Bundle the bytes with the handler** — e.g. a module that exports the `.wasm` as base64, decoded with `base64Decode()`/`atob()` into a `Uint8Array`. Nothing can be fetched at run time.
+- **Bundle the bytes with the handler** — e.g. a module that exports the `.wasm` as base64, decoded with `base64Decode()`/`atob()` into a `Uint8Array`. Nothing can arrive at run time: the sandbox `fetch` (where a handler has one — an actor has none) answers a plain `{ status, body }`, never binary.
 - **Every version:** `const module = new WebAssembly.Module(bytes); const instance = new WebAssembly.Instance(module, imports);`. V8 compiles lazily, so even a large module costs milliseconds.
 - **2026.1.4+:** `WebAssembly.compile()`, `instantiate()`, `compileStreaming()` and `instantiateStreaming()` settle at once (they use the synchronous constructors), rejecting with the same `CompileError` / `LinkError` on bad bytes — so libraries with an async init (wasm-bindgen's default export, Emscripten's `instantiate`) work unchanged. **Below 2026.1.4 those promises never settle** (isolated-vm never runs the V8 background task that finishes them): the handler waits to its timeout, the compute is billed, and a channel actor's call hangs outright. Target an older server → call the synchronous constructors, or pass a pre-compiled `WebAssembly.Module` to the library if it accepts one.
 - The handler limits still apply: the isolate's memory cap (128 MB; an actor's `memoryMb`) and its wall-clock timeout. An actor that instantiates once in `start()` and reuses the instance keeps the compile out of every call.
