@@ -347,57 +347,96 @@ The stream is `text/event-stream` with CRLF framing: events are separated by `\r
 | `finish-step` / `finish` | A step / the stream ended | |
 | `error` | Stream error | `errorText` |
 
-A vanilla App runs the tool loop itself. `tool-input-available` fires for every tool call, including the ones the server runs (`functions`, `toolkitIds`, `appIds`), which are followed by their own `tool-output-available`. After the stream ends, append the assistant message with **every** call as a `tool-<name>` part in state `output-available` (the server's output for its tools, your output for yours), run only your own, and post again if you ran any. Keep the same six-step ceiling.
+A vanilla App runs the tool loop itself. `tool-input-available` fires for every tool call, including the ones the server runs (`functions`, `toolkitIds`, `appIds`), which are followed by their own `tool-output-available`, or `tool-output-error` when they fail. After the stream ends, append the assistant message with **every** call as a `tool-<name>` part: state `output-available` with the output (the server's for its tools, yours for yours), or state `output-error` with `errorText` for a server tool that failed, so the model sees the failure instead of an empty result. Run only your own tools, and post again if you ran any. Keep the same six-step ceiling.
+
+Three things the reader has to handle that `useChat` handles for you:
+
+- **A refusal is JSON, not a stream.** Check `res.ok` before reading; a 4xx/5xx body is `{ statusCode, error, message }`. Keep the status on the error, so the page can say "out of AI budget" for a 402 or "session expired" for a 401 (see [Errors and session loss](#errors-and-session-loss)).
+- **Stop has to abort the request.** Pass an `AbortController`'s `signal` to `fetch`; aborting ends the read with an `AbortError`. Keep the text that already arrived as the reply rather than discarding it.
+- **An `error` event can arrive mid-stream,** after text has already been shown. Surface it where the reply was going, and offer Try again.
 
 ```js
+// Reads one _chat response. Resolves with what arrived; on Stop (an aborted
+// signal) it resolves with the partial text and `aborted: true` instead of throwing.
 async function readStream(res, onText) {
     const reader = res.body.getReader();
     const decoder = new TextDecoder();
     let buffer = '', text = '';
-    const calls = [], serverOutputs = {};
-    while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-        let cut;
-        while ((cut = buffer.search(/\r?\n\r?\n/)) >= 0) {
-            const raw = buffer.slice(0, cut);
-            buffer = buffer.slice(cut).replace(/^\r?\n\r?\n/, '');
-            const data = raw.split(/\r?\n/).filter(l => l.startsWith('data:')).map(l => l.slice(5).trimStart()).join('\n');
-            if (!data) continue;
-            let e; try { e = JSON.parse(data); } catch { continue; }
-            if (e.type === 'text-delta') { text += e.delta; onText(text); }
-            else if (e.type === 'tool-input-available') calls.push(e);
-            else if (e.type === 'tool-output-available') serverOutputs[e.toolCallId] = e.output;
-            else if (e.type === 'error') throw new Error(e.errorText);
+    const calls = [], serverOutputs = {}, serverErrors = {};
+    try {
+        while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            buffer += decoder.decode(value, { stream: true });
+            let cut;
+            while ((cut = buffer.search(/\r?\n\r?\n/)) >= 0) {
+                const raw = buffer.slice(0, cut);
+                buffer = buffer.slice(cut).replace(/^\r?\n\r?\n/, '');
+                const data = raw.split(/\r?\n/).filter(l => l.startsWith('data:')).map(l => l.slice(5).trimStart()).join('\n');
+                if (!data) continue;
+                let e; try { e = JSON.parse(data); } catch { continue; }
+                if (e.type === 'text-delta') { text += e.delta; onText(text); }
+                else if (e.type === 'tool-input-available') calls.push(e);
+                else if (e.type === 'tool-output-available') serverOutputs[e.toolCallId] = e.output;
+                else if (e.type === 'tool-output-error') serverErrors[e.toolCallId] = e.errorText;
+                else if (e.type === 'error') throw Object.assign(new Error(e.errorText), { text });
+            }
         }
+    } catch (err) {
+        if (err.name === 'AbortError') return { text, calls, serverOutputs, serverErrors, aborted: true };
+        throw err;
     }
-    return { text, calls, serverOutputs };
+    return { text, calls, serverOutputs, serverErrors, aborted: false };
 }
 
 // crypto.randomUUID exists only in a secure context; plain-http servers have none.
 const newId = () => globalThis.crypto?.randomUUID?.() ?? Date.now().toString(36) + Math.random().toString(36).slice(2);
 
-async function turn(messages, onText, step = 0) {
+async function turn(messages, onText, signal, step = 0) {
     const res = await fetch('/api/models/go_everyday/_chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ messages, system: SYSTEM, tools: CLIENT_TOOLS })
+        body: JSON.stringify({ messages, system: SYSTEM, tools: CLIENT_TOOLS }),
+        signal
     });
-    if (!res.ok) throw new Error(`${res.status}`);
-    const { text, calls, serverOutputs } = await readStream(res, onText);
+    if (!res.ok) {
+        // A refusal is JSON ({ statusCode, error, message }), not a stream.
+        const body = await res.json().catch(() => null);
+        throw Object.assign(new Error(body?.message || `HTTP ${res.status}`), { status: res.status });
+    }
+    const { text, calls, serverOutputs, serverErrors, aborted } = await readStream(res, onText);
     const parts = text ? [{ type: 'text', text }] : [];
     let ranMine = false;
     for (const c of calls) {
-        const mine = Object.hasOwn(CLIENT_TOOLS, c.toolName) && !(c.toolCallId in serverOutputs);
+        if (c.toolCallId in serverErrors) {
+            parts.push({ type: `tool-${c.toolName}`, toolCallId: c.toolCallId, state: 'output-error', input: c.input, errorText: serverErrors[c.toolCallId] });
+            continue;
+        }
+        const mine = !aborted && Object.hasOwn(CLIENT_TOOLS, c.toolName) && !(c.toolCallId in serverOutputs);
+        if (!mine && !(c.toolCallId in serverOutputs)) continue;   // stopped before it ran: leave it out
         const output = mine ? await runClientTool(c) : serverOutputs[c.toolCallId];
         if (mine) ranMine = true;
         parts.push({ type: `tool-${c.toolName}`, toolCallId: c.toolCallId, state: 'output-available', input: c.input, output });
     }
     const next = [...messages, { id: newId(), role: 'assistant', parts }];
-    if (!ranMine || step + 1 >= 6) return next;
-    return turn(next, onText, step + 1);
+    if (aborted || !ranMine || step + 1 >= 6) return next;
+    return turn(next, onText, signal, step + 1);
 }
+
+// Wiring: one controller per user turn, so Stop cancels the turn and every step after it.
+let controller = null;
+async function send(text) {
+    controller = new AbortController();
+    const messages = [...history, { id: newId(), role: 'user', parts: [{ type: 'text', text }] }];
+    try {
+        history = await turn(messages, renderReply, controller.signal);
+    } catch (err) {
+        showError(err.status, err.message);   // 402 → out of AI budget; 401/403 → session expired
+    } finally {
+        controller = null;
+    }
+}
+stopButton.onclick = () => controller?.abort();
 ```
 
 This loop does not answer approvals. A vanilla App that attaches `appIds` must handle `tool-approval-request`: show the call, then resend with that tool part in state `approval-responded` carrying `approval: { id, approved, reason? }`. Otherwise, attach only Apps whose tools declare `needsApproval = false`.
