@@ -1,10 +1,12 @@
 # Channels (Live Broadcast to Open Pages, and Back)
 
-> **Load this reference when:** pushing live updates from the server to every open page of an App — `broadcast(channel, event, payload, options?)` from a route/webhook/tool/channel handler, the `channels:` relay block in `informer.yaml`, gated channels under `channels/` (`join` / `joined` / `leave` / event exports, `config.roles`), the `@user/<username>` private channel, wildcard subscriptions (`rooms/*`), the page-side `__INFORMER__.channel(name, { since }).on(event, fn)` / `.send(event, payload)` API, frame `seq`, replay after a reconnect, `connected`, `replay_gap`. Also load it when a user asks for "real-time", "live", "push", "WebSocket", "presence", "typing indicator", "chat", "cursor", "stop polling", or "send from the page over the socket".
+> **Load this reference when:** pushing live updates from the server to every open page of an App — `broadcast(channel, event, payload, options?)` from a route/webhook/tool/channel handler, the `channels:` relay block in `informer.yaml`, gated channels under `channels/` (`join` / `joined` / `leave` / event exports, `config.roles`), the `@user/<username>` private channel, wildcard subscriptions (`rooms/*`), the page-side `__INFORMER__.channel(name, { since }).on(event, fn)` / `.send(event, payload)` API, frame `seq`, replay after a reconnect, `connected`, `replay_gap`, `request.member`, `__INFORMER__.serverNow()`, `unavailable`. Also load it when a user asks for "real-time", "live", "push", "WebSocket", "presence", "typing indicator", "chat", "cursor", "stop polling", or "send from the page over the socket".
 >
-> **Not in this file:** durable events and agents (`emit()`) — see `agents.md`. The rest of the handler bag (`query`, `fetch`, `respond`, …) — see `server-routes.md`. Origin mode itself (`app.appsBaseUrl`, per-app hostnames) — see `accounts-and-login.md`.
+> **Not in this file:** channel actors (`config.actor`: one live sandbox per channel, `tick()`, state kept between messages, snapshots) — see `channel-actors.md`. Durable events and agents (`emit()`) — see `agents.md`. The rest of the handler bag (`query`, `fetch`, `respond`, …) — see `server-routes.md`. Origin mode itself (`app.appsBaseUrl`, per-app hostnames) — see `accounts-and-login.md`.
 >
 > **Availability:** Informer **2026.1.4+** (I5-12980 phase 1, I5-13027 phase 2), on an origin-mode server. Phase 1 is broadcast, relay, `join`/`leave`, `@user/`. Phase 2 adds inbound `send()`, the `joined` export, wildcards, `seq` + replay, `connected`, `platform.originMode`, and requires `on` in the `channels:` block; a **released** 2026.1.4 server always carries phase 2 (only unreleased preview builds had phase 1 alone, where `platform.originMode` is `undefined`). Feature-detect in two parts: `platform?.capabilities?.channels` (an App has them, a Magic Report does not) and `platform?.originMode` (this server serves Apps on their own origins). Older servers have no `broadcast` in the bag and no `__INFORMER__.channel`; a path-mode server of any version deploys the app with a warning and `channel()` throws `origin_mode_required`. Below the floor, poll the route you would have broadcast from. Deploying `channels/` needs `@entrinsik/vite-plugin-informer` **2.10.0+** (2.7.0, the release before it, never uploads the folder, so its gates never reach the server and every channel is open). Never deploy a `channels/` app to 2026.1.3: plugin 2.10.0 through 2.12.0 take that hotfix release for the floor and upload the folder, which it serves as static files to anyone who can open the App (see The Vite plugin's floors in `SKILL.md`). Dev support for phase 2 needs plugin **2.11.0+**; **2.12.0** is what makes the emulation match the server (see [Local development](#local-development)).
+>
+> **2026.1.4+** (I5-13088, with channel actors; detect with `platform?.capabilities?.channelActors`): `request.member` in every channel handler, `send()` sent as a socket message instead of a request, `__INFORMER__.serverNow()`, and the page's `unavailable` code. Actors themselves are in `channel-actors.md`.
 
 A **channel** is a named place a page subscribes to (`orders`, `orders/east`, `rooms/*`, `@user/jane`). A server-side handler calls `broadcast(channel, event, payload)`; every subscriber of that channel on every server in the cluster gets the frame a moment later. A subscribed page can answer with `channel.send(event, payload)`, which runs a handler of the App's on the server. The App never opens a socket, mints a credential, or touches Redis: it names a channel on the page and broadcasts to it from the server.
 
@@ -17,7 +19,7 @@ A **channel** is a named place a page subscribes to (`orders`, `orders/east`, `r
 | Socket | Informer (harness) | The page fetches `/_socket` on the App's own origin, trades its session for a 5-minute socket credential, and opens **one** WebSocket shared by every channel on the page. Lazy — nothing connects until the first `on()`. `send()` and the replay read travel over the same socket. |
 | Channel names | The App | Declared in `informer.yaml` (`channels:` relay) and/or gated by a handler file under `channels/`. A name that appears nowhere still works (see [Open channels](#open-channels)). |
 | Frames | The App's server code | `broadcast(channel, event, payload)` from any server-side surface. One Redis publish, fanned out cluster-wide, numbered per channel (`seq`), kept briefly for replay. No DB row, no delivery report. |
-| Inbound | The App's `channels/` file | `send(event, payload)` runs the export named after the event, as the viewer. The subscription is the authorization. |
+| Inbound | The App's `channels/` file | `send(event, payload)` runs the export named after the event, as the viewer — or calls the channel's actor, when the file declares `config.actor` (`channel-actors.md`). The subscription is the authorization (on an actor channel, re-checked against the current deploy on every `send()`). |
 | Fan-out | Informer | Filters every frame by tenant + App, so a socket only ever sees its own App's channels. |
 
 ### Channels need origin mode
@@ -115,11 +117,13 @@ Deploy stores each file as an app_route row with the synthetic method `CHANNEL`,
 
 | Export | Runs | Contract |
 |---|---|---|
-| `config` | At deploy | `{ roles?: string[], timeout?: number }`. A `config` that can't be parsed **fails the deploy** (same rule as a route's). `roles`: subscriber must hold at least one, checked before `join` runs. `timeout`: wall-clock cap in ms for every export in the file, never above the server's `joinTimeoutMs` (default 5000) |
+| `config` | At deploy | `{ roles?: string[], timeout?: number, actor?: object }`. A `config` that can't be parsed **fails the deploy** (same rule as a route's). `actor` makes the file a [channel actor](channel-actors.md) (**2026.1.4+**). `roles`: subscriber must hold at least one, checked before `join` runs. `timeout`: wall-clock cap in ms for every export in the file, never above the server's `joinTimeoutMs` (default 5000) |
 | `join` | When a socket subscribes to a name this file matches, **before** it is admitted | Must return **exactly `true`** to admit. Anything else — `1`, a row, `undefined`, a thrown error — refuses with `join_refused` on the page |
 | `joined` | A moment **after** that socket is admitted | Return value ignored. A `joined` that throws or times out never affects the subscription (audited `joined_failed`). The place to announce presence: a broadcast from here reaches the joiner too |
 | `leave` | When that socket unsubscribes, calls `close()`, or disconnects | Return value ignored. **Never throws through** — a failing `leave` is logged at warn and the unsubscribe proceeds |
 | `<event>` (any other valid event name) | When a subscribed page calls `send(event, payload)` | Runs as the viewer with the message as `payload`; whatever it returns resolves the page's `send()` (`null` when it returned nothing) |
+
+**A file that declares `config.actor`** (**2026.1.4+**) keeps one live sandbox per concrete channel instead of one per message: module state survives between calls, `start` / `tick` / `stop` / `snapshot` exports are called by the server, and `join` / `joined` / `leave` / events run inside it one at a time — see `channel-actors.md`. Everything below about gating still applies to it.
 
 Every export is optional, but the file must export something. **A file with no `join` export admits everyone** the socket-level checks let through (still subject to `config.roles`). No `leave` → nothing runs on leave. No export named `typing` → `send('typing', …)` is refused with `send_refused`.
 
@@ -133,6 +137,7 @@ Every scanner problem fails the deploy — a file skipped with a warning would l
 | Not valid JavaScript | **Deploy fails** |
 | Two files mapping to the same channel pattern | **Deploy fails** |
 | Unparseable `config` | **Deploy fails** |
+| A `config.actor` the deploy refuses (unknown key, a `tick` rate with no `tick` export, …) — **2026.1.4+** | **Deploy fails** (see `channel-actors.md`) |
 
 ### Worked example
 
@@ -185,7 +190,9 @@ Every export receives the shared handler bag — `context`, `query`, `transactio
 |---|---|---|
 | `channel` | `object` | `channel.name` — the subscribed name (`orders/east`, or `orders/*` for a wildcard); `channel.params` — from `[segment]` files (`{ region: 'east' }`, `{ region: '*' }`); `channel.broadcast(event, payload, options?)` — sugar for `broadcast(channel.name, event, payload, options)` |
 | `payload` | any | `null` for `join`, `joined` and `leave`. For an event export, the message the page passed to `send()` (`null` when it passed nothing) |
-| `request` | `object` | `request.user` — `{ username, displayName, email, timezone }` of the subscriber, taken from the socket credential, never from the message; `request.roles` — their role IDs. **No `body`, `headers`, `params`, or `query`** — a subscription is not an HTTP request; the route params are on `channel.params` |
+| `request` | `object` | `request.user` — `{ username, displayName, email, timezone }` of the subscriber, taken from the socket credential, never from the message; `request.roles` — their role IDs; `request.member` (**2026.1.4+**) — the page (below). **No `body`, `headers`, `params`, or `query`** — a subscription is not an HTTP request; the route params are on `channel.params` |
+
+**`request.member`** (**2026.1.4+**) names the page the subscriber is on: one browser tab, the same for every connection that page makes (reconnects included), different for another tab even of the same person. It is an opaque string that says nothing about the user, server or socket. Key per-tab state by it where two tabs of one person must not be mixed up (two players on one laptop, a seat that should survive a dropped connection). An ordinary handler runs `join` and `leave` per connection, so a reconnect runs both again; a channel actor runs `leave` once per page.
 
 `joined`, `leave`, and event exports get the same `channel.params` object that matched at join time. Every run is capped by `min(config.timeout, joinTimeoutMs)` and metered as compute (`route: 'channel:<name>'`). `log()` calls land in the App's Logs tab with `source: 'channel'`, alongside the operator warnings the server writes for refused joins, rate-limited broadcasts, dropped relays, and failed inbound handlers.
 
@@ -208,7 +215,7 @@ Then the handler layer:
 
 ### Inbound messages: `send()` on the server side
 
-`channel.send(event, payload)` on the page is a request **over the app socket** to `POST /api/apps/{id}/channels/_send` (never plain HTTP — over HTTP it is 403 `app_channel_socket_required`). The server takes a token from the **user's** inbound bucket first (`inboundRate`: 10/s, burst 30, per user per App, shared by all of that person's tabs — spent before anything is looked up, so a refused `send()` costs a token too, and a socket that joined nothing cannot drive the App lookup on refusals alone), then checks that the socket currently holds the channel, that the event is valid and not reserved, that the covering file exports it (an event named `config`, `join`, `joined` or `leave` is refused by name — the relay drives those exports itself), checks the compute budget, and runs the export. **The subscription is the authorization**: whatever `join` and `config.roles` admitted may send, and nothing else can; there is no separate permission to declare.
+`channel.send(event, payload)` on the page travels **over the app socket**, never plain HTTP. **2026.1.4+** (I5-13088) sends it as a socket message of its own (the wire shape is the harness's, not an API to bind a hand-rolled client to), answered from the socket's credentials with no request lifecycle per message; the `POST /api/apps/{id}/channels/_send` route it used before still answers for any client that posts over the socket (over HTTP it is 403 `app_channel_socket_required`). The checks are the same either way. The server takes a token from the **user's** inbound bucket first (`inboundRate`: 10/s, burst 30, per user per App, shared by all of that person's tabs; an actor channel draws on the separate `actors.inboundRate` bucket, 30/s, burst 60 — spent before anything is looked up, so a refused `send()` costs a token too, and a socket that joined nothing cannot drive the App lookup on refusals alone), then checks that the socket currently holds the channel, that the event is valid and not reserved, that the covering file exports it (an event named `config`, `join`, `joined` or `leave` is refused by name — the relay drives those exports itself), checks the compute budget, and runs the export. **The subscription is the authorization**: whatever `join` and `config.roles` admitted may send, and nothing else can; there is no separate permission to declare. On an actor channel (**2026.1.4+**) the export and `config.roles` are re-read from the current deploy on every `send()`, so a redeploy that adds an export makes it sendable without resubscribing, and one that adds a role the viewer lacks refuses their sends (403 `app_channel_role_required` → `send_refused`).
 
 | Server answer | When | On the page |
 |---|---|---|
@@ -220,7 +227,7 @@ Then the handler layer:
 | 504 `app_channel_send_timeout` | The export ran past its cap | `handler_failed` |
 | 500 `app_channel_send_failed` | The export threw | `handler_failed` |
 
-A message body over 128 KiB is refused before any handler runs. Each inbound run is recorded as a `SEND` invocation row under `channel:<name>#<event>` and counted as **Sends · 30d** in the Channels tab; a thrown export is audited `send_failed`, a rate-limited one `send_rate_limited`.
+A message body over 128 KiB is refused before any handler runs. Each inbound run of an ordinary handler is recorded as a `SEND` invocation row (a call into a channel actor is not; the actor's run gets one row when it stops) under `channel:<name>#<event>` and counted as **Sends · 30d** in the Channels tab; a thrown export is audited `send_failed`, a rate-limited one `send_rate_limited`.
 
 ## Broadcasting from the server
 
@@ -359,7 +366,8 @@ orders.close();   // unsubscribe the socket path and drop every handler
 | `on(event, fn)` | Registers `fn(payload, frame)` for frames whose `event` matches. Returns an unsubscribe function for that one handler. The first `on()` on the page loads the socket client, fetches `/_socket`, connects, and subscribes; later channels share the connection |
 | `on('connected', fn)` | `fn({ replayed })` after every successful subscribe and re-subscribe, once any replay is done. A listener added while the channel is already up hears it once, asynchronously, with `{ replayed: 0 }` |
 | `on('error', fn)` | `fn(err)`; `err.code` is one of the codes below. Without an error handler, errors go to `console.warn` |
-| `send(event, payload?)` | Sends a message to the App over the socket; resolves with the handler's return value (`null` when it returned nothing). Rejects with `code` `rate_limited`, `send_refused`, `budget_exhausted`, `handler_failed`, or `disconnected` |
+| `send(event, payload?)` | Sends a message to the App over the socket; resolves with the handler's return value (`null` when it returned nothing). Rejects with `code` `rate_limited`, `send_refused`, `budget_exhausted`, `handler_failed`, `disconnected`, or (actor channels, **2026.1.4+**) `unavailable` |
+| `serverNow()` (**2026.1.4+**) | The server's clock, also as `__INFORMER__.serverNow()` — see [The server's clock](#the-servers-clock) |
 | `close()` | Unsubscribes and drops all handlers. Idempotent. `on()` after `close()` throws (`code: 'disconnected'`); `send()` after `close()` rejects the same way |
 
 The frame envelope every subscriber receives:
@@ -377,6 +385,22 @@ The frame envelope every subscriber receives:
 ```
 
 An exception inside one handler is logged (`[Informer] channel handler failed`) and does not stop the others. `seq` is contiguous per channel (1, 2, 3 …), so a page holding two frames can tell whether anything was sent between them.
+
+### The server's clock
+
+**2026.1.4+** (I5-13088). `__INFORMER__.serverNow()` (and `channel.serverNow()`) is the server's clock in milliseconds, as closely as the page can tell: `Date.now()` corrected by the offset from the quickest round trip the socket has made — three samples when the socket comes up, then one from every `send()` reply. Use it wherever pages must agree on a moment: a countdown the server starts, a race clock, a deadline. Broadcast the server's `Date.now()` and compare against `serverNow()`, never against the page's own clock. Before the socket is up it returns the page's clock; in dev it is the page's clock (same machine). Feature-detect with `typeof __INFORMER__.serverNow === 'function'`.
+
+```javascript
+const race = __INFORMER__.channel('race/main');
+race.on('countdown', ({ startAt }) => {                 // startAt: the server's Date.now() at the start
+    const tick = () => {
+        const left = Math.ceil((startAt - race.serverNow()) / 1000);
+        banner.textContent = left > 0 ? String(left) : 'GO!';
+        if (left > 0) requestAnimationFrame(tick);
+    };
+    tick();
+});
+```
 
 ### Sequence numbers and replay
 
@@ -403,6 +427,7 @@ Without `since`, a first subscribe starts from now and replays nothing. A replay
 | `rate_limited` | On subscribe: this socket holds `maxChannelsPerSocket` (20) subscriptions, or the App has `maxSubscribersPerApp` (500) across the cluster. On `send()`: the user is over `inboundRate` (10/s, burst 30). | `close()` channels you no longer need; combine channels (a wildcard is one subscription). A refused subscribe is retried with backoff on its own; a rate-limited `send()` is not — slow down |
 | `disconnected` | The socket dropped or couldn't be established (credential refused, client failed to load). Every open channel receives it once per drop. Also the rejection of a `send()` before the channel is up or after `close()` | Nothing required — the shim reconnects on its own and **replays what it missed**. Only act on `replay_gap` |
 | `replay_gap` | After a reconnect (or a `since`), frames were sent that the server no longer buffers; `err.channel` names the concrete channel | Re-fetch that channel's state from a server route. Live frames continue |
+| `unavailable` (**2026.1.4+**) | The channel's [actor](channel-actors.md) is on a server that just went away or stopped answering (its lease lapses within `actors.leaseMs`), on a subscribe or a `send()`; on a `send()`, also an actor whose call queue is full. A `send()` refused this way may still have reached the actor if its server stopped mid-call | Nothing for a subscribe — it is retried with backoff on its own. Retry a `send()` shortly |
 | `send_refused` | The server declined a `send()`: not subscribed, no export of that name (a lifecycle name counts as none), or a reserved/invalid event. Also returned without a round trip for a reserved/invalid event name or a wildcard channel | Fix the event name or the handler file; do not retry the same message |
 | `origin_mode_required` | Thrown by `channel()` itself on a path-mode server | Check `platform.originMode` first and fall back to polling a server route |
 | `channels_disabled` | Thrown by `channel()` itself when an admin turned channels off | Same fallback. Nothing the App does will change it |
@@ -501,6 +526,8 @@ Server defaults under `app.channels` (`config-factory.js`). An admin can change 
 | `replay` | `{ frames: 50, ttlMs: 60000 }` | Frames kept per channel for reconnecting pages, and for how long |
 | `joinTimeoutMs` | 5000 | Hard ceiling for every channel handler run (`join`, `joined`, `leave`, event exports), whatever `config.timeout` says |
 
+Channel actors have their own limits under `app.channels.actors` (actor caps, tick rate, memory, idle and lifetime, their own inbound and broadcast buckets) — see `channel-actors.md`.
+
 The socket credential from `/_socket` lives 5 minutes; the shim re-mints it on every reconnect, so the App never handles it.
 
 ## What the operator sees (App **Logs** tab, `channel` source)
@@ -525,6 +552,9 @@ Channel activity is too chatty to log per event, so every refusal and drop is co
 | `broadcast_failed` | Pub/sub refused the frame; nobody received it |
 | `budget_exhausted` | App compute budget spent |
 | `budget_check_failed` | Budget unreadable, so the frame was let through rather than lost |
+| `actor_limit` (**2026.1.4+**) | A subscribe was refused because starting another actor would pass `actors.maxPerApp` or `actors.maxPerServer` |
+| `actor_busy` (**2026.1.4+**) | A call was refused with the actor's queue full |
+| `join_rate_limited` (**2026.1.4+**) | Joins on an actor channel exceeded the user's `actors.inboundRate` |
 | `relay_dropped` | An `emit()` could not be relayed to its channel, or a published frame's fan-out to one server's subscribers failed (they missed it) |
 
 The **Channels** tab of the same panel carries the live counters (subscribers now; broadcasts / deliveries / rate-limited over 60m; joins / refusals / leaves / sends over 30d) and the server's limits, including `inboundRate` and `replay` on phase 2 servers.
@@ -538,7 +568,8 @@ The **Channels** tab of the same panel carries the live counters (subscribers no
 - **`channels/` handlers run locally.** A subscribe runs the covering file's `join` (with `config.roles` checked against `mock.roles`), then `joined`; an unsubscribe runs `leave`; `send()` runs the event-named export and resolves with its return value, metered per user at the production default. `request.user` is `mock.user`, `request.roles` is `mock.roles`. The `@user/` ownership check and wildcard gating behave as on the server (2.12.0+). The terminal shows `[app-channel] join("rooms/lobby") admitted|refused (<code>)` and `send("rooms/lobby", "typing") handled`.
 - `__INFORMER__.channel()` on the dev page has the production surface: `on()`, `on('connected')`, `send()`, `close()`, `since`, replay after a dropped dev socket, `replay_gap`, wildcards. Frames ride **Vite's own dev WebSocket** (`import.meta.hot`) — no second socket, nothing to configure. `frame.tenant` is `'dev'`, `frame.appId` is the mocked App id.
 - `__INFORMER__.platform.originMode` is `true` in dev; `informer({ mock: { platform: { originMode: false } } })` exercises the path-mode fallback.
-- **No timers in the sandbox — but dev has them.** Deployed handlers have no `setTimeout` / `setInterval`. Under `npm run dev` handlers load into Node through `ssrLoadModule` and nothing hides the timers, so a timer that works locally throws a `ReferenceError` after deploy. A "tick every second" loop cannot live in a route, and a loop of `broadcast()` calls runs back-to-back against `broadcastRate`. Drive periodic broadcasts from a scheduled agent, a webhook, or the page's own timer calling a route.
+- **No timers in the sandbox — but dev has them.** Deployed handlers have no `setTimeout` / `setInterval`. Under `npm run dev` handlers load into Node through `ssrLoadModule` and nothing hides the timers, so a timer that works locally throws a `ReferenceError` after deploy. A "tick every second" loop cannot live in a route, and a loop of `broadcast()` calls runs back-to-back against `broadcastRate`. For a steady cadence on a channel, declare a channel actor with `config.actor.tick` (**2026.1.4+**, `channel-actors.md`): the server calls its `tick()` for you. Otherwise drive periodic broadcasts from a scheduled agent, a webhook, or the page's own timer calling a route.
+- **Channel actors run locally** with plugin **2.13.0+** (one module instance per channel, `tick()` on a timer, the idle stop, `request.member` per tab, snapshots kept across edits) — see `channel-actors.md`. On 2.12.0 and earlier an actor file runs as an ordinary handler in dev.
 - `informer.yaml` and `channels/` are validated at dev-server boot: an entry without `on`, a bad name, a stray or reserved export, two files on one channel print as `[informer] …` so you see at boot what the deploy would 400 on.
 - `__INFORMER__.user` defaults to `{ username: 'dev', displayName: 'Local Developer' }`; override with `mock.user`.
 
@@ -563,7 +594,9 @@ What dev does **not** do: no compute budget, no per-App broadcast rate, no `enab
 - **Frames over 64 KiB are rejected, not truncated.** Broadcast the changed row (or just its id and let the page fetch), never a table.
 - **Subscribe to the exact name the server broadcasts to, or to a wildcard above it.** `orders/east` is not `orders`; `orders/*` hears both `orders/east` and `orders/east/rush`, never `orders` itself.
 - **Gating a prefix with literal files blocks wildcards over it** until a `[param]` file at that depth covers the wildcard and its `join` answers the `'*'` case — and any gated file nested deeper than that blocks it regardless.
-- **`channel.params`, not `request.params`.** A channel handler's `request` is `{ user, roles }` only; route params live on `channel.params`, and there is no `respond`.
+- **Per-tab state is keyed by `request.member`, not the username** (**2026.1.4+**): two tabs of one person are two members.
+- **State between messages, or anything on a clock, is an actor's job** (`channel-actors.md`); an ordinary handler starts from nothing on every message.
+- **`channel.params`, not `request.params`.** A channel handler's `request` is `{ user, roles }` only (plus `member` on 2026.1.4+); route params live on `channel.params`, and there is no `respond`.
 - **`seq` restarts** when a channel's counter key expires (30 days idle) or Redis is flushed; the page copes per channel, but a flush restarts every channel at once.
 - **Older skill/docs examples use `/api/_server/...`** for route calls; the bare `/api/...` spelling is current (see `server-routes.md`). Both reach the same route.
 - **`maxSubscribersPerApp` fails open.** If redis is unreachable the cap admits everyone (with a server warning) rather than refusing all subscribes.
@@ -578,6 +611,8 @@ my-app/
     tickets/
       [id]/
         typing.js         → tickets/:id/typing
+    match/
+      [id].js             → match/:id as a channel actor (config.actor; start / tick / stop / snapshot) — 2026.1.4+
   server/
     orders/
       [id]/

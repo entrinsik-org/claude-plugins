@@ -80,7 +80,7 @@ Webhook handlers receive the **same bag as server routes** (see `server-routes.m
 | `emit(event, payload?)` | Fire app events (trigger agents) |
 | `broadcast(channel, event, payload?, options?)` | Push a fire-and-forget frame to every open page subscribed to `channel` — the natural way to tell dashboards a webhook landed (origin-mode servers only). Resolves `{ ok: true, seq }`; pass `{ replay: false }` for frames not worth replaying to a reconnecting page. See `channels.md`. |
 | `notify(user, message)` / `email(to, message)` | Enqueue a push notification / email |
-| `respond(response)` | Send early response while handler continues in background. Same shape as handler return: plain value (wrapped as 200 JSON), `{ status, body }`, or `{ status, headers, body, encoding: 'base64' }` for binary. |
+| `respond(response)` | Send early response while handler continues in background. Same shape as handler return: plain value (wrapped as 200 JSON), `{ status, body }`, or `{ status, headers, body, encoding: 'base64' }` for binary. **2026.1.4+** the work after it is billed, capped by `app.routes.maxBackgroundPerApp`, and logged to the Logs tab when it fails — see `server-routes.md`. |
 | `crypto` | `hmac`, `hash`, `randomUUID`, `randomBytes`, `timingSafeEqual`, `verifyHmac`, `encrypt`/`decrypt` (AES-256-GCM), `verify` — all async. Use `verifyHmac` for signature checks. See `server-routes.md`. |
 | `markdown(text)` | Convert markdown text to HTML (async). Uses `marked`. |
 | `extractText(data, contentType)` | Extract plain text from a base64 file (PDF, Excel, Word, text/*), async. Throws on unsupported types. See `server-routes.md`. |
