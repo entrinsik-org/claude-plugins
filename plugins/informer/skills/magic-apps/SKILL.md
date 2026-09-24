@@ -1,6 +1,6 @@
 ---
 name: magic-apps
-description: Building Informer Apps with local Vite development. Covers the dev/publish workflow, the centerpiece "Accessing Your Dependencies" model (typed slots + three patterns), and the orientation map for deeper topics (server routes, webhooks, persistence, declarative vector embeddings, widgets, copilot sidebar, event-driven AI agents, live broadcast channels over WebSockets (and messages back from the page: send(), joined, wildcards, replay), staged uploads/downloads for files and large result sets (and forwarding them to integrations, transfer events, what a viewer has staged), PDF export, informer.yaml schema, app-to-app/pack API integration and openapi.json contracts, and the UI quality bar every screen must meet: mobile-first responsive layout, no layout shift, TanStack Query freshness after every action, sortable table headers, vertical rhythm, bright distinct icons with the full icon asset set) — each routes to a reference file under `references/` so the front door stays loadable on every trigger.
+description: Building Informer Apps with local Vite development. Covers the dev/publish workflow, the centerpiece "Accessing Your Dependencies" model (typed slots + three patterns), and the orientation map for deeper topics (server routes, webhooks, persistence, declarative vector embeddings, widgets, embedded AI copilots built into the App's own UI, event-driven AI agents, live broadcast channels over WebSockets (and messages back from the page: send(), joined, wildcards, replay), staged uploads/downloads for files and large result sets (and forwarding them to integrations, transfer events, what a viewer has staged), PDF export, informer.yaml schema, app-to-app/pack API integration and openapi.json contracts, and the UI quality bar every screen must meet: mobile-first responsive layout, no layout shift, TanStack Query freshness after every action, sortable table headers, vertical rhythm, bright distinct icons with the full icon asset set) — each routes to a reference file under `references/` so the front door stays loadable on every trigger.
 ---
 
 # Informer App Development
@@ -16,7 +16,7 @@ An Informer App is a custom HTML/JS/CSS application that runs inside Informer. I
 - **Maintain vector embeddings** over its own data declaratively (platform embedding pump + pgvector) for semantic search (Informer 2026.1.4+)
 - **Move files and large result sets** (CSV imports, attachments, big exports) without the bytes touching the app's sandbox — staged uploads/downloads (2026.1.4+)
 - Render charts, tables, and interactive visualizations
-- Include a **built-in AI copilot** sidebar that can query your data and answer questions in context
+- Build an **embedded AI copilot** into its own UI: a streaming chat that sees what the user is looking at and acts through the App's own routes
 - Define **AI agents** that react to events, execute tools, and chain together for automated workflows
 - Push **live updates** to every open page over a WebSocket Informer owns for it, and take messages back from the page over the same socket (channels — 2026.1.4+, origin-mode servers)
 
@@ -37,7 +37,7 @@ This file is the orientation layer. Most topics have a dedicated reference under
 | Declaring SEMANTICS for a workspace database — `semantics.yaml` (structure: types/units/enum values + quick-dev inline labels, `decimals`, computed `expr`, `bins`), `semantics.<locale>.yaml` strings-only overlays, categories and declared links, the `exposure` policy (open vs curated sources), description-vs-COMMENT channels, how customer overlays layer on top after install | `references/semantics.md` |
 | Writing a walker against a SPECIFIC integration (QuickBooks, Salesforce, …) — per-connector traps: hidden inactive rows, pagination quirks, incremental watermark fields, deletion detection | `references/connector-gotchas.md` |
 | Declaring `widgets:` in `informer.yaml`, building self-contained HTML cards under `public/widgets/`, iframe quirks | `references/widgets.md` |
-| Activating the in-app copilot, `openChat()` / `registerTool()`, AI completion endpoints (`_chat` / `_completion` / `_object`), `useChat` hook patterns | `references/copilot.md` |
+| Building an AI copilot or chat into the App, any LLM call (`_chat` / `_completion` / `_object`), `useChat` / `DefaultChatTransport`, client tools and tool approvals, calling a model from a `server/` route | `references/copilot.md` |
 | Declaring `agents:` in `informer.yaml`, writing `tools/*.js`, `emit()` chaining, cron, toolkits/assistants integration, agent REST API | `references/agents.md` |
 | Live updates to open pages and messages back from them — "real-time" / "push" / "stop polling" / presence / typing / chat / cursors; `broadcast(channel, event, payload, { replay })` from a handler, the `channels:` relay block (`on` required), gated channels under `channels/` (`join` / `joined` / `leave` / event exports, `config.roles`), `@user/<username>`, wildcards (`rooms/*`), `__INFORMER__.channel(name, { since }).on(event, fn)` / `.send(event, payload)`, `connected`, frame `seq` and replay after a reconnect, `replay_gap`, `platform.originMode`, `origin_mode_required` | `references/channels.md` |
 | Moving FILES or large result sets — CSV/Excel import into a workspace table, an attachment into a `bytea` column, a big CSV/JSON/JSONL export, "upload" / "download" / "save as" / "import"; `__INFORMER__.upload(file)` on the page, `uploads.get(id)` → `copyInto()` / bytea parameter / `text()`, `downloads.create()` → `fromQuery()` / `writeRows()` / `return dl` / `dl.url`, the 10 MB inline cap; watching a transfer (`onEvent`, `task.created`), `__INFORMER__.streams` list/status/discard, forwarding a staged file to an integration (`context.<slot>.request()` with a handle as `data` / in `form`, or `into`) | `references/streams.md` |
@@ -63,6 +63,7 @@ Customers run a spread of Informer versions, so every newer feature carries the 
 | Live broadcast channels (`broadcast()`, `channels:`, `channels/` with `join` / `leave`, `@user/`) | 2026.1.4 | `references/channels.md` |
 | Channels phase 2: inbound `send()` + event exports, `joined`, wildcards, frame `seq` + replay, `connected`, `platform.originMode`, `on` required in `channels:` | 2026.1.4 (every released build; only unreleased previews carried phase 1 alone, with `platform.originMode` `undefined`) | `references/channels.md` |
 | Declarative embeddings (`embeddings/`, `embed()`, pgvector) | 2026.1.4 | `references/embeddings.md` |
+| `_chat` `appIds` (other Apps' `mcp/` tools, run server-side) and the tool-approval flow | 2026.1.4 | `references/copilot.md` |
 | Staged uploads/downloads (`uploads`, `downloads`, `__INFORMER__.upload()`) | 2026.1.4 | `references/streams.md` |
 | Streams phase 2 — transfer events (`onEvent`, `task.created`), `__INFORMER__.streams` list/status/discard, forwarding a stream to an integration (`data` / `form` / `into`) | 2026.1.4 (every released build; only unreleased previews carried phase 1 alone) | `references/streams.md` |
 | Warehouse loads (`load()`, the run ledger, `schedule()`, streaming ingest) | 2026.2.0 | `references/warehouse-etl.md` |
@@ -1072,21 +1073,24 @@ platform APIs — the app's own routes are their surface.
 Load `references/accounts-and-login.md` for the full route table, manifest
 shapes, and limits before building any of this.
 
-## Built-in App Copilot — overview
+## Embedded copilots — overview
 
-Every Informer App gets a **built-in AI copilot sidebar** — a chat panel that slides in from the right side of the app window. Hidden by default; activates automatically when the app calls `registerTool()`, or explicitly via `showCopilot()`, or via a paint-your-own button that calls `openChat({ prompt, context, instructions })`.
+An App's copilot is a chat it builds into its **own UI**: it streams from `POST /api/models/{model}/_chat` (granted to every App automatically, no `access.apis` entry needed), sends a static `system` prompt plus a per-turn `dynamicSystem` describing what the user is looking at, and acts through **client tools** that call the App's own routes. It works in a browser tab, on the App's own origin, as an installed PWA and inside Informer GO.
 
-```javascript
-__INFORMER__.openChat({
-    prompt: 'Why did revenue spike in Q4?',
-    context: { revenue: 1250000, quarter: 'Q4' },
-    instructions: 'Use the Informer API to query the sales-data dataset for year-over-year Q4 trends.'
-});
+```tsx
+const transport = useMemo(() => new DefaultChatTransport({
+    api: '/api/models/go_everyday/_chat',
+    prepareSendMessagesRequest: async ({ messages, id, trigger, messageId }) => ({
+        body: { id, messages, trigger, messageId, system: SYSTEM, dynamicSystem: await currentContext(), tools: CLIENT_TOOLS }   // currentContext: your own route
+    })
+}), []);   // built once: rebuilding it mid-run aborts a tool loop
+// sendAutomaticallyWhen continues after tool calls, capped at 6 per user turn; the full hook is in copilot.md
+const chat = useChat({ transport, throttle: 50, sendAutomaticallyWhen, onToolCall });
 ```
 
-Apps can also call Informer's AI directly via three endpoints (use the `go_everyday` model slug): `_chat` (SSE stream, supports tools), `_completion` (SSE stream, simple text), `_object` (JSON, structured output). All three accept `outputSize` (`small` / `medium` / `large`) on current servers.
+Three endpoints, all granted to every App: `_chat` (UI message stream, client and server tools), `_completion` (stream, one-shot text; no `outputSize`), `_object` (JSON, structured output; the one to call from `server/` routes). Live token streaming through the App proxy needs the server's `appProxyStreaming: true`, which Informer cloud sets; elsewhere replies arrive whole, so pace the reveal.
 
-Load `references/copilot.md` for: full `openChat()` / `showCopilot()` / `registerTool()` reference, the report-bridge bidirectional pattern, AI SDK UIMessage format (parts arrays, not OpenAI), the inline tools object-keyed-by-name format, SSE event types and stream parsing, the `useChat` React hook pattern with `addToolOutputRef`, defensive parsing for `_object` Haiku drift, dev-mode mocks.
+Load `references/copilot.md` for: the `useChat` transport and body, client tools with the continuation ceiling, server tools and approvals, streaming-markdown rendering rules, errors and session loss, persisting UIMessages, the server-route `_object` recipe, the model list, the vanilla stream reader, and defensive `_object` parsing.
 
 ## Agents — overview
 
@@ -1248,7 +1252,7 @@ The orientation above points to each file; this is the canonical list of what's 
 | `references/embeddings.md` | The `embeddings/` folder — declarative vector embeddings via the platform pump (`config` + `GET`/`POST` contract), revision/re-embed semantics, tombstoned failures, pgvector columns + `embed(name, text)` search, status/`_run` routes |
 | `references/ui-quality.md` | The six UI non-negotiables in depth — mobile-first layout, layout-shift prevention (skeletons, reserved dimensions, stable dialogs), TanStack Query freshness rules, sortable tables / AG Grid Community, spacing and vertical rhythm, icon brightness and where each icon surface comes from (gallery, tab, home-screen tile, marketplace, PWA manifest) |
 | `references/widgets.md` | `widgets:` declaration, self-contained HTML template, iframe constraints, SVG charts without libraries |
-| `references/copilot.md` | `openChat()` / `showCopilot()` / `registerTool()`, AI completion endpoints (`_chat` / `_completion` / `_object`), `useChat` hook pattern, defensive `_object` parsing |
+| `references/copilot.md` | Embedded copilots on `_chat` — `useChat` transport, client tools and approvals, rendering, persistence, server-route `_object` calls, endpoint reference |
 | `references/agents.md` | `agents:` declaration, `tools/*.js`, event chaining via `emit()`, cron lifecycle, toolkits/assistants, agent REST API |
 | `references/channels.md` | Live broadcast to open pages and `send()` back — origin-mode requirement and `platform.originMode`, `channels:` relay block (`on` required), `channels/` handlers (`config` / `join` / `joined` / `leave` / event exports, the channel bag), `broadcast()` + error table + `{ replay: false }`, `@user/<username>`, wildcards, the `__INFORMER__.channel()` client API (`since`, `connected`, `send()`, error codes, reconnect + replay, `replay_gap`), `broadcast()` vs `emit()`, limits (`inboundRate`, `replay`), dev-mode coverage (plugin 2.11.0+, server parity from 2.12.0) |
 | `references/streams.md` | Staged uploads/downloads — `__INFORMER__.upload()` on the page, `uploads.get(id)` → `copyInto()` / bytea parameter / inline reads under the 10 MB cap, `downloads.create()` → `fromQuery()` / `writeRows()` / `return dl` / `dl.url`, the six limits, transfer events and `__INFORMER__.streams`, forwarding to an integration (`data` / `form` / `into`), error table, dev-server emulation gaps |
@@ -1265,4 +1269,4 @@ The orientation above points to each file; this is the canonical list of what's 
 
 ## Terminology Note
 
-Informer Apps were previously called "Magic Reports". The underlying technology is the same — the rename reflects their broader role as full applications with built-in AI copilots, not just static reports. The deploy tool automatically detects which API your server supports (`/api/apps` or the legacy `/api/reports`) and uses the correct one.
+Informer Apps were previously called "Magic Reports". The underlying technology is the same — the rename reflects their broader role as full applications, not just static reports. The deploy tool automatically detects which API your server supports (`/api/apps` or the legacy `/api/reports`) and uses the correct one.
