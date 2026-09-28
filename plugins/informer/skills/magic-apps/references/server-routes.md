@@ -60,7 +60,7 @@ Each handler function receives a single context object with these properties:
 | `query` | `async (sql, params?) => rows` | Execute SQL against the app's workspace. Returns an array of row objects. |
 | `transaction` | `async (fn) => result` | Run `fn({ query })` in one DB transaction: commits when it resolves, rolls back if it throws. Does not nest. See [Using `transaction()`](#using-transaction). |
 | `fetch` | `async (path, options?) => { status, body }` | Make an authenticated API call through Informer (subject to the app's whitelist). Not in a channel actor, where it throws — `channel-actors.md`. |
-| `context` | `object` | Typed dep proxies keyed by slot name. Call deps as `context.<slotName>.<method>(args)`. Methods per `target`: `dataset` → `search(esQuery)` / `fields()`; `query` → `execute(params)`; `datasource` → `query(payload)`; `integration` → `request(opts)`. Throws boom 422 with `errorCode: 'dependency_unbound'` if the installer hasn't bound the slot yet, or `'dependency_broken'` if the bound target was deleted. Prefer this over raw `fetch()` — slots survive bundle export/import and resource renames; raw paths don't. Empty in a channel actor. |
+| `context` | `object` | Typed dep proxies keyed by slot name. Call deps as `context.<slotName>.<method>(args)`. Methods per `target`: `dataset` → `search(esQuery)` / `fields()`; `query` → `execute(params)`; `datasource` → `query({ language: 'sql', payload: '<query text>' })`, returning an array of rows (no bound parameters: validate request input before it goes in the text); `integration` → `request(opts)`. Throws boom 422 with `errorCode: 'dependency_unbound'` if the installer hasn't bound the slot yet, or `'dependency_broken'` if the bound target was deleted. Prefer this over raw `fetch()` — slots survive bundle export/import and resource renames; raw paths don't. Empty in a channel actor. |
 | `respond` | `async (response) => void` | Send an early HTTP response while the handler continues running in the background. Accepts the same shape as a synchronous return — a response object (`{ status, headers?, body?, encoding? }`) or any plain value (wrapped as 200 JSON). See [Using `respond()`](#using-respond). **2026.1.4+** throws once `app.routes.maxBackgroundPerApp` (10) of the App's handlers are still running after `respond()` on this server. |
 | `emit` | `async (event, payload) => void` | Emit an app event to trigger agents. Creates an `AppEvent` record and notifies the event dispatcher. |
 | `broadcast` | `async (channel, event, payload?, options?) => { ok: true, seq }` | Push a fire-and-forget frame to every open page subscribed to `channel` (origin-mode servers only); `seq` is the frame's number in that channel's sequence, and the server keeps recent frames for reconnecting pages unless `options` is `{ replay: false }` (typing, cursors). No DB row, no delivery report; rejects on a bad or wildcard channel name, a bad or reserved (`error`, `connected`) event, a payload over 64 KiB, or the App's rate limit. The live counterpart of `emit()` — see `channels.md`. Inside a channel actor a broadcast to its **own** channel resolves `{ ok: true, queued: true, seq: null }` — `channel-actors.md`. **2026.1.4+** |
@@ -328,7 +328,7 @@ body: JSON.stringify({ query: { match_all: {} } })
 body: { query: { match_all: {} } }
 ```
 
-**3. Don't `new URL(request.url)`.** The sandbox doesn't ship a full origin/host on `request.url`. The fields you'd extract are already parsed:
+**3. Don't `new URL(request.url)`.** The sandbox doesn't ship a full origin/host on `request.url`, and the isolate is plain V8 with no `URL` class at all, so `new URL(...)` throws a `ReferenceError` on any input. The fields you'd extract are already parsed:
 
 ```javascript
 // WRONG — request.url may not be a fully-qualified URL; URL() can throw
@@ -339,6 +339,8 @@ const status = url.searchParams.get('status');
 const status = request.query.status;
 const orderId = request.params.id;
 ```
+
+To split an absolute URL you hold (`request.app.baseUrl`, a HAL `_links.self.href`), use a pattern: `/^(https?:\/\/[^/?#]+)/i.exec(url)?.[1]` gives the origin. A `try { new URL(...) } catch` fallback hides the `ReferenceError` and silently takes the fallback every time.
 
 **4. Plain-text upstream responses break the dev `apiFetch` body parser.** In dev mode, the Vite plugin's `apiFetch` reads the upstream body with `resp.json()` first and only falls back to `resp.text()` on failure — but `resp.json()` already consumes the stream, so the fallback throws "Body already read" and the call appears to fail silently. If you're proxying through an upstream that returns `text/plain`, parse it in the handler and return JSON, rather than passing the raw body through.
 

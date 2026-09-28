@@ -359,7 +359,7 @@ The handler receives a `context` object where each `dependencies:` slot is a pro
 |---|---|---|
 | `dataset` | `search(esQuery)` / `fields()` | `POST /api/datasets/<uuid>/_search` / `GET /api/datasets/<uuid>/fields` |
 | `query` | `execute(params)` | `POST /api/queries/<uuid>/_execute` |
-| `datasource` | `query(payload)` | `POST /api/datasources/<uuid>/_query` |
+| `datasource` | `query({ language, payload })` | `POST /api/datasources/<uuid>/_query` |
 | `integration` | `request({ method, url, params, data })` | `POST /api/integrations/<uuid>/request` |
 | `app` | `request({ method, url, params, data })` | `<method> /api/apps/<uuid>/view/_/<url>` |
 
@@ -402,10 +402,17 @@ export async function GET({ context, request }) {
     // query → execute runs the saved query with optional parameters
     const summary = await context.monthly_summary.execute({ month: '2026-05' });
 
-    // datasource → query runs SQL against the underlying connection
+    // datasource → query runs one statement on the bound datasource. The
+    // payload is the body of POST /api/datasources/<uuid>/_query:
+    // { language, payload }, where `payload` is the query text. It returns an
+    // array of row objects. There are no bound parameters on a one-off query,
+    // so validate anything from the request (a whitelist, or parseInt for a
+    // number) before it goes in the text; for real parameters bind a saved
+    // query (`target: query`) and call execute() instead.
+    const day = /^\d{4}-\d{2}-\d{2}$/.test(request.query.day) ? request.query.day : '2026-05-12';
     const events = await context.analytics.query({
-        sql: 'SELECT type, COUNT(*) AS n FROM events WHERE day = $1 GROUP BY type',
-        params: ['2026-05-12']
+        language: 'sql',
+        payload: `SELECT type, COUNT(*) AS n FROM events WHERE day = '${day}' GROUP BY type`
     });
 
     // integration → request proxies to the external service. The options are
