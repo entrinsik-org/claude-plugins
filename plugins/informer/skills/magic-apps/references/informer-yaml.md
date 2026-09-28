@@ -546,7 +546,7 @@ The five typed-slot targets and what API surface each one's bound resource expos
 |----------|-------------|--------------|
 | `dataset` | `_search`, `fields` | `context.<slot>.search(esQuery)` / `.fields()` |
 | `query` | `_execute` | `context.<slot>.execute(params)` |
-| `datasource` | `_query` | `context.<slot>.query(payload)` |
+| `datasource` | `_query` | `context.<slot>.query({ language, payload })` |
 | `integration` | `request` | `context.<slot>.request({ method, url, params, data })` (axios-shaped: `url` not `path`, `data` is the body) |
 | `app` | `request` (the target's `server/` routes) | `context.<slot>.request({ method, url, params, data })` (request-only — no SQL surface; see "`target: app` (app-to-app dependencies)" above) |
 
