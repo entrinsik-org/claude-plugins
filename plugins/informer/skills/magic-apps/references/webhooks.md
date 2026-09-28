@@ -85,10 +85,10 @@ Webhook handlers receive the **same bag as server routes** (see `server-routes.m
 | `markdown(text)` | Convert markdown text to HTML (async). Uses `marked`. |
 | `extractText(data, contentType)` | Extract plain text from a base64 file (PDF, Excel, Word, text/*), async. Throws on unsupported types. See `server-routes.md`. |
 | `log(message, data?)` | Structured logging. Also `log.info()`/`log.warn()`/`log.error()`/`log.debug()`. Writes to `app_log`. See "Using `log()`" in `server-routes.md`. |
-| `base64Decode(encoded)` | Decode base64 to UTF-8 string (async). Handles multi-byte characters correctly. |
-| `base64Encode(string)` | Encode UTF-8 string to base64 (async). |
-| `base64UrlDecode(encoded)` | Decode base64url to UTF-8 string (async). Ideal for Gmail API payloads. |
-| `base64UrlEncode(string)` | Encode UTF-8 string to base64url (async). |
+| `base64Decode(encoded)` *(global — call by name, not on the handler argument)* | Decode base64 to UTF-8 string (async). Handles multi-byte characters correctly. |
+| `base64Encode(string)` *(global — call by name, not on the handler argument)* | Encode UTF-8 string to base64 (async). |
+| `base64UrlDecode(encoded)` *(global — call by name, not on the handler argument)* | Decode base64url to UTF-8 string (async). Ideal for Gmail API payloads. |
+| `base64UrlEncode(string)` *(global — call by name, not on the handler argument)* | Encode UTF-8 string to base64url (async). |
 | `env` | App environment variables — decrypted values from the app's Environment (set in the **Admin → Environment** tab, or declared as keys in `informer.yaml` `env:`). Encrypted at rest; never returned by any API. |
 
 Webhook routes also provide `request.rawBody` — the original request body as a string, preserving the exact bytes sent by the caller. Use this for HMAC signature verification (not `request.body`, which is parsed JSON).

@@ -59,7 +59,7 @@ Each handler function receives a single context object with these properties:
 |----------|------|-------------|
 | `query` | `async (sql, params?) => rows` | Execute SQL against the app's workspace. Returns an array of row objects. |
 | `transaction` | `async (fn) => result` | Run `fn({ query })` in one DB transaction: commits when it resolves, rolls back if it throws. Does not nest. See [Using `transaction()`](#using-transaction). |
-| `fetch` | `async (path, options?) => { status, body }` | Make an authenticated API call through Informer (subject to the app's whitelist). Not in a channel actor, where it throws — `channel-actors.md`. |
+| `fetch` | `async (path, options?) => { status, body }` | Make an authenticated API call through Informer (subject to the app's whitelist). A JSON body comes back parsed and a `text/*` body as a string; a successful binary response (any other content type: images including SVG, PDF, zip) comes back as a base64 envelope — see pitfall 5 under [Using `fetch()`](#using-fetch). Not in a channel actor, where it throws — `channel-actors.md`. |
 | `context` | `object` | Typed dep proxies keyed by slot name. Call deps as `context.<slotName>.<method>(args)`. Methods per `target`: `dataset` → `search(esQuery)` / `fields()`; `query` → `execute(params)`; `datasource` → `query({ language: 'sql', payload: '<query text>' })`, returning an array of rows (no bound parameters: validate request input before it goes in the text); `integration` → `request(opts)`. Throws boom 422 with `errorCode: 'dependency_unbound'` if the installer hasn't bound the slot yet, or `'dependency_broken'` if the bound target was deleted. Prefer this over raw `fetch()` — slots survive bundle export/import and resource renames; raw paths don't. Empty in a channel actor. |
 | `respond` | `async (response) => void` | Send an early HTTP response while the handler continues running in the background. Accepts the same shape as a synchronous return — a response object (`{ status, headers?, body?, encoding? }`) or any plain value (wrapped as 200 JSON). See [Using `respond()`](#using-respond). **2026.1.4+** throws once `app.routes.maxBackgroundPerApp` (10) of the App's handlers are still running after `respond()` on this server. |
 | `emit` | `async (event, payload) => void` | Emit an app event to trigger agents. Creates an `AppEvent` record and notifies the event dispatcher. |
@@ -77,7 +77,7 @@ Each handler function receives a single context object with these properties:
 
 **Sandbox globals (available without destructuring):**
 
-The following are available as **globals** inside the V8 isolate — not as keys on the handler argument. Don't destructure them from the handler arg (it'll bind to `undefined`); just call them.
+The following are callable **by name** inside the V8 isolate. `markdown` and `extractText` are also passed on the handler argument, so destructuring them works; the `base64*` helpers and `atob` / `btoa` are **not** on the argument — destructure one and it binds `undefined` (`base64Decode is not a function`). Call those by name.
 
 | Global | Type | Description |
 |--------|------|-------------|
@@ -343,6 +343,14 @@ const orderId = request.params.id;
 To split an absolute URL you hold (`request.app.baseUrl`, a HAL `_links.self.href`), use a pattern: `/^(https?:\/\/[^/?#]+)/i.exec(url)?.[1]` gives the origin. A `try { new URL(...) } catch` fallback hides the `ReferenceError` and silently takes the fallback every time.
 
 **4. Plain-text upstream responses break the dev `apiFetch` body parser.** In dev mode, the Vite plugin's `apiFetch` reads the upstream body with `resp.json()` first and only falls back to `resp.text()` on failure — but `resp.json()` already consumes the stream, so the fallback throws "Body already read" and the call appears to fail silently. If you're proxying through an upstream that returns `text/plain`, parse it in the handler and return JSON, rather than passing the raw body through.
+
+**5. A binary response comes back as a base64 envelope, not bytes or text.** For a successful response whose content type isn't JSON, `text/*` or an event stream, `fetch()` returns `{ status, body, encoding: 'base64', contentType, headers }` with `body` base64-encoded. That includes `image/svg+xml`, so an SVG you fetch arrives as base64, not markup. Forward the envelope unchanged with `return res` or `respond(res)` (it has the response-descriptor shape), put it in a data URI with `data:${res.contentType};base64,${res.body}`, or read a text-like one with the `base64Decode` global. A non-2xx response with a binary content type falls through to the normal `{ status, body }` path.
+
+```javascript
+// An app's icon, inlined for a page that can't load images from the Informer origin
+const res = await fetch(`apps/${id}/contents/favicon.svg`);
+const icon = res.status === 200 && res.encoding === 'base64' ? `data:${res.contentType};base64,${res.body}` : null;
+```
 
 ## Using `respond()`
 
