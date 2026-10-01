@@ -3,6 +3,8 @@
 > **Load this reference when:** receiving callbacks from external services (Stripe, GitHub, Shopify, Slack, Gmail push, etc.) — anything that doesn't come with an Informer user session. Covers the `webhooks/` directory, the signed `?token=` URL gate, HMAC body-signature verification with `crypto.verifyHmac()`, and how webhooks differ from `server/` routes (inbound identity only).
 >
 > **Not in this file:** authenticated app-internal routes — see `server-routes.md`. Agents triggered by webhooks via `emit()` — see `agents.md`. Pushing a webhook's result live to open pages via `broadcast()` — see `channels.md`.
+>
+> **Availability:** `webhooks/` routes on every App-capable release. The URL's token is a **revocable webhook token** since **2026.1.0** (I5-12605): minted with `POST /api/apps/{id}/webhook-tokens`, never issued at deploy and never returned by `GET /api/apps/{id}/webhooks` (that endpoint lists routes and invocation stats only). Pre-release builds before I5-12605 returned each route's URL from `GET /webhooks` with a never-expiring token built in; those tokens do not verify on any released server.
 
 Apps can expose **webhook endpoints** that receive requests from external services (Gmail push notifications, Slack commands, Stripe events, etc.) without requiring a logged-in Informer user. Each webhook URL embeds a signed `token` query parameter that the handler verifies — the endpoint is unguessable and tamper-proof, not anonymous. Webhook handlers run as the app owner and receive the **same handler bag as server routes** — including `query()`, `transaction()`, `fetch()`, `emit()`, `broadcast()`, `notify()`, `email()`, `crypto`, and the typed `context`. The only differences are inbound identity (no user session — see the table below).
 
@@ -11,7 +13,7 @@ Apps can expose **webhook endpoints** that receive requests from external servic
 1. Create a `webhooks/` directory in your project root
 2. Add `.js` handler files using the same file-convention routing as `server/`
 3. Run `npm run deploy` — Informer scans, bundles, and registers webhook routes as public
-4. External services POST to `/api/apps/{naturalId}/_hook/{path}`
+4. Mint a webhook token (see [Getting a Webhook URL](#getting-a-webhook-url)) and give the external service `/api/apps/{naturalId}/_hook/{path}?token=<key>`
 
 ## File-Convention Routing
 
@@ -66,7 +68,41 @@ export async function POST({ query, request, fetch, emit, log, crypto, env }) {
 | **`notify()` / `email()`** | Available | Available (run as the app owner) |
 | **Use case** | App-internal CRUD, user-specific logic | External service callbacks |
 
-The signed `token` is issued at deploy time via `GET /api/apps/{id}/webhooks`. External callers must include the token in the URL — the handler runs only if the token verifies against the app's webhook secret.
+External callers must include a webhook token in the URL — the handler runs only if the token verifies against the app's webhook secret **and** its token row still exists. See below for how to get one.
+
+## Getting a Webhook URL
+
+A webhook URL is the route's `_hook` path plus a **webhook token**: a JWT signed with the app's webhook secret and backed by a persisted row, so each one can be revoked on its own. Nothing issues one automatically — not deploy, not `GET /api/apps/{id}/webhooks`. Someone with write access to the App mints it:
+
+| Method | Endpoint | Purpose |
+|--------|----------|---------|
+| `POST` | `/api/apps/{id}/webhook-tokens` | Mint a token. Optional body `{ "notes": "<label>" }` — name it after the service that will call it. The signed JWT is the response's **`key`** field. |
+| `GET` | `/api/apps/{id}/webhook-tokens` | List the app's tokens (embedded under `_embedded["inf:token"]`, newest first), each with its current `key`. |
+| `DELETE` | `/api/apps/{id}/webhook-tokens/{tokenId}` | Revoke one token. URLs carrying it then fail with `401 Webhook token revoked`; other tokens keep working. |
+| `POST` | `/api/apps/{id}/_rotate-webhook-secret` | Re-sign everything at once: token rows survive but every `key` changes, so **every URL already handed out stops working**. Use for a leak you can't scope; to cut off one service, revoke its token instead. |
+
+```bash
+# Mint a token for one service, then build its URL
+KEY=$(curl -s -u admin:pass -X POST -H 'content-type: application/json' \
+  -d '{"notes":"Stripe"}' "$INFORMER_URL/api/apps/admin:my-app/webhook-tokens" | jq -r .key)
+echo "$INFORMER_URL/api/apps/admin:my-app/_hook/stripe/payment?token=$KEY"
+```
+
+- `{id}` in the hook URL is the App's naturalId (`owner:slug`) or its UUID. On a server with per-app origins, the same route is also served at `https://<app-origin>/hooks/<path>?token=<key>`.
+- The host must be one the external service can reach. A local dev server needs a public tunnel; the HAL `_links` on any API response show the base URL the server believes is public.
+- **One token per external service**, labeled with `notes`. Revoking it cuts off exactly that service.
+- The token only proves the caller has the URL. Still verify the provider's own body signature (next section).
+
+**Debugging a rejected call** — the server answers before your handler runs:
+
+| Response | Cause |
+|---|---|
+| `401 Webhook token required` | No `?token=` on the URL (a bare `_hook` path is always rejected). |
+| `401 Invalid webhook token` | Wrong app, a mangled token, or a token signed before the secret was rotated. |
+| `401 Webhook token revoked` | The token's row was deleted. |
+| `404 Webhook route not found` | No deployed `webhooks/` route matches that method + path. |
+
+A `401` with your **own** error body (for example `{"error":"Invalid signature"}`) means the token passed and your handler rejected the request — check the provider's signing secret in `env`.
 
 ## Sandbox Capabilities
 

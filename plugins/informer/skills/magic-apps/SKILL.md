@@ -29,7 +29,7 @@ This file is the orientation layer. Most topics have a dedicated reference under
 | User intent / signal | Load this file |
 |---|---|
 | Writing handlers under `server/`, working with `query` / `transaction` / `fetch` / `respond` / `notify` / `email` / `log` / `crypto` / base64 / markdown / `env` / `request` / sandbox constraints | `references/server-routes.md` |
-| Receiving external callbacks (Stripe, GitHub, Slack, Gmail push) under `webhooks/`, HMAC verification, signed `?token=` URLs | `references/webhooks.md` |
+| Receiving external callbacks (Stripe, GitHub, Slack, Gmail push) under `webhooks/`, HMAC verification, getting a webhook URL (minting/revoking webhook tokens, `401 Webhook token …` errors) | `references/webhooks.md` |
 | Storing app data — `migrations/`, dev-workspace lifecycle, `workspace:init` / `:migrate` / `:reset`, CRUD example | `references/persistence.md` |
 | Declaring embedding use cases under `embeddings/`, vector search over workspace data, `embed(name, text)`, chunking profiles, pgvector columns in app migrations | `references/embeddings.md` |
 | Building or polishing any screen — the mobile modes (inside Informer GO, home-screen tile, browser tab, widget card) and the screen-by-screen phone layout pass, dialogs that shift, skeletons, stale UI after an action (empty states, dropdowns, counts), TanStack Query, sortable tables / AG Grid, spacing and vertical rhythm, icon brightness and the home-screen/PWA icon set; also when to load the `frontend-design` plugin | `references/ui-quality.md` |
@@ -59,6 +59,7 @@ Customers run a spread of Informer versions, so every newer feature carries the 
 
 | Feature | Since | Reference |
 |---|---|---|
+| Revocable webhook tokens (`POST /api/apps/{id}/webhook-tokens`, per-token revoke; no token issued at deploy) | 2026.1.0 (I5-12605) | `references/webhooks.md` |
 | Bare `/api/{path}` app routes; per-app origins (origin mode) | 2026.1.2 | `references/server-routes.md` |
 | `platform` descriptor (`platform.version`, `platform.capabilities`) and the `requires:` manifest key | 2026.1.4 | `references/server-routes.md`, `references/informer-yaml.md` |
 | `respond()` background work billed, capped (`app.routes.maxBackgroundPerApp`) and written to the Logs tab when it fails; `config.timeout` capped at `app.routes.maxTimeoutMs` | 2026.1.4 (I5-13088) | `references/server-routes.md` |
@@ -769,7 +770,7 @@ Load `references/server-routes.md` for: full file-convention routing rules, ever
 
 ## Webhooks — overview
 
-Apps can expose **token-gated external endpoints** under `webhooks/` for receiving callbacks from external services (Stripe, GitHub, Slack, Gmail push). Each URL embeds a signed `?token=` query parameter — unguessable, not anonymous. Handlers run as the app owner.
+Apps can expose **token-gated external endpoints** under `webhooks/` for receiving callbacks from external services (Stripe, GitHub, Slack, Gmail push). Each URL carries a revocable webhook token as `?token=` — unguessable, not anonymous. Deploy issues no token: mint one per external service with `POST /api/apps/{id}/webhook-tokens` (the signed JWT is the response's `key`), then hand out `…/api/apps/{naturalId}/_hook/{path}?token=<key>`. Handlers run as the app owner.
 
 ```javascript
 // webhooks/github.js
@@ -787,7 +788,7 @@ export async function POST({ crypto, request, env, query }) {
 
 Webhook handlers receive the **same bag as server routes** — `query`, `transaction`, `fetch`, `context`, `respond`, `emit`, `broadcast`, `notify`, `email`, `crypto`, `markdown`, `log`, `env`, plus the base64 globals and `request.rawBody` (for HMAC verification). `notify()` and `email()` **are** available (handlers run as the app owner). The only differences are inbound identity: `request.user` is `null` (no user session) and `request.roles` is `[]` — the handler still *runs as* the app owner, so `fetch()`, `notify()`, and `email()` use owner credentials.
 
-Load `references/webhooks.md` for: file-convention routing, the `?token=` issuance/verification flow, full HMAC verification examples (GitHub, Stripe, shared-secret), and reading per-app secrets via the `env` bag (configured in **Admin → Environment** or declared as keys in `informer.yaml` `env:`).
+Load `references/webhooks.md` for: file-convention routing, getting a webhook URL (minting, revoking and rotating webhook tokens, and what each `401` means), full HMAC verification examples (GitHub, Stripe, shared-secret), and reading per-app secrets via the `env` bag (configured in **Admin → Environment** or declared as keys in `informer.yaml` `env:`).
 
 ## Embeddings — overview
 
@@ -1266,7 +1267,7 @@ The orientation above points to each file; this is the canonical list of what's 
 | File | Covers |
 |---|---|
 | `references/server-routes.md` | `server/` handlers, full sandbox-helper reference (`query`, `transaction`, `fetch`, `respond`, `notify`, `email`, `log`, `crypto`, base64/markdown globals), `config.timeout` / `config.roles`, worked CRUD example |
-| `references/webhooks.md` | `webhooks/` handlers, signed `?token=` flow, HMAC verification (`crypto.verifyHmac`), how webhooks differ from server routes (inbound identity only — same handler bag) |
+| `references/webhooks.md` | `webhooks/` handlers, getting a webhook URL (`POST /webhook-tokens`, revoke, rotate, the 401s), HMAC verification (`crypto.verifyHmac`), how webhooks differ from server routes (inbound identity only — same handler bag) |
 | `references/persistence.md` | `migrations/`, dev workspace lifecycle, CRUD worked example |
 | `references/embeddings.md` | The `embeddings/` folder — declarative vector embeddings via the platform pump (`config` + `GET`/`POST` contract), revision/re-embed semantics, tombstoned failures, pgvector columns + `embed(name, text)` search, status/`_run` routes |
 | `references/ui-quality.md` | The six UI non-negotiables in depth — mobile-first layout, layout-shift prevention (skeletons, reserved dimensions, stable dialogs), TanStack Query freshness rules, sortable tables / AG Grid Community, spacing and vertical rhythm, icon brightness and where each icon surface comes from (gallery, tab, home-screen tile, marketplace, PWA manifest) |
