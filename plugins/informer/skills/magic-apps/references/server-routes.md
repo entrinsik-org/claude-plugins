@@ -2,7 +2,7 @@
 
 > **Load this reference when:** writing handler files under `server/`, working with the V8 sandbox helpers (`query`, `transaction`, `fetch`, `respond`, `notify`, `email`, `log`, `crypto`, the base64/markdown/extractText globals), configuring per-handler `timeout` or `roles`, or wiring frontend calls to `/api/...`.
 >
-> **Not in this file:** public token-gated webhook endpoints — see `webhooks.md`. Agent tool handlers — see `agents.md` (they share the same sandbox, so this file is the authoritative sandbox reference). Live broadcast to open pages (`broadcast()`, `channels/` handlers, the page-side `channel()` API) — see `channels.md`. The typed dep proxy (`context.<slot>.<method>()`) — see SKILL.md "Accessing Your Dependencies".
+> **Not in this file:** public token-gated webhook endpoints — see `webhooks.md`. Agent tool handlers — see `agents.md` (they share the same sandbox, so this file is the authoritative sandbox reference). Live broadcast to open pages (`broadcast()`, `channels/` handlers, the page-side `channel()` API) — see `channels.md`. The typed dep proxy (`context.<slot>.<method>()`) — see SKILL.md "Accessing Your Dependencies". Commands people run from a terminal (`cli/`, `reply()`, `follow()`, `client`) — see `cli.md`.
 
 Apps can include **server-side JavaScript handlers** that run on the Informer server in sandboxed V8 isolates. These handlers have direct access to the app's Postgres workspace and can make authenticated API calls — ideal for business logic, data transformations, webhooks, or anything that shouldn't run in the browser.
 
@@ -74,6 +74,8 @@ Each handler function receives a single context object with these properties:
 | `env` | `object` | App environment variables — decrypted values from the app's Environment. Set in **Admin → Environment**; declared keys in `informer.yaml` `env:` arrive as unset placeholders for the installer to fill per tenant. Encrypted at rest; never returned by any API. |
 | `platform` | `{ version, originMode, capabilities }` | What the platform offers: the Informer build version, whether apps serve from their own origins (`originMode`, the precondition for live channels), and the app type's capability flags (`serverRoutes`, `webhooks`, `mcp`, `storage`, `embeddings`, …). Feature-detect with `platform?.capabilities?.<name>` instead of probing for a helper or comparing versions — optional chaining, because older servers inject no `platform` and a bare `platform.capabilities` throws there; the same object is `window.__INFORMER__.platform` in the browser. Informer ≥ the release carrying I5-12984; absent on older servers (treat a missing `platform` as "unknown"). **2026.1.4+** |
 | `request` | `object` | The incoming request (see below). |
+
+A `cli/` command gets the tool bag instead — `args` and `run` in place of `request` and `respond` — with three helpers only a command has: `reply(message, data)`, `follow(channel)` and, in a session, `client` (the terminal that ran it). See `cli.md`. **2026.1.4+**
 
 **Sandbox globals (available without destructuring):**
 
@@ -606,7 +608,8 @@ Server handlers run in a sandboxed V8 isolate. This means:
 
 - **No Node.js APIs** — no `require()`, `fs`, `http`, `process`, `Buffer`, etc. The bundler blocks these as imports (see [Imports](#imports) above); even if you got one past the bundler, the runtime has no Node module system to load it.
 - **No network access** — all external calls must go through `fetch()` (which enforces the whitelist)
-- **No filesystem** — use `query()` for persistence
+- **No filesystem** — use `query()` for persistence (a `cli/` command in a session reaches the person's own folders through `client.files` — `cli.md`)
+- **No `URL` or `URLSearchParams`** — the isolate has JavaScript's built-ins, not the browser's or Node's web APIs, so `new URL(...)` throws a `ReferenceError` (inside a `try` it fails silently). Take addresses apart with a regex or string methods, and build query strings with `encodeURIComponent`.
 - **Files and large data bypass the isolate** — `uploads` / `downloads` handles move bytes host-side (staging store ↔ Postgres ↔ browser); only `text()` / `json()` / `base64()` / `extractText()` bring bytes in, capped at 10 MB. A handle as `context.<slot>.request()` `data` / `form`, or `into`, moves bytes between the staging store and an integration host-side too. See `streams.md`.
 - **`embed()` is bounded** — at most 100,000 characters per call and 100 calls per handler invocation, and refused once the app's compute budget is exhausted. Every call is billed, so embed a corpus in the `embeddings/` pump, not per request. See `embeddings.md`.
 - **`btoa()` and `atob()` are available** — base64 encode/decode strings (Latin-1 only, per spec)

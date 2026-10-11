@@ -1,6 +1,6 @@
 ---
 name: magic-apps
-description: Building Informer Apps with local Vite development. Covers the dev/publish workflow, the centerpiece "Accessing Your Dependencies" model (typed slots + three patterns), and the orientation map for deeper topics (server routes, webhooks, persistence, declarative vector embeddings, widgets, copilot sidebar, event-driven AI agents, live broadcast channels over WebSockets (and messages back from the page: send(), joined, wildcards, replay), channel actors (one live, stateful sandbox per channel with a server-driven tick, for games and shared boards), staged uploads/downloads for files and large result sets (and forwarding them to integrations, transfer events, what a viewer has staged), PDF export, informer.yaml schema, app-to-app/pack API integration and openapi.json contracts, and the UI quality bar every screen must meet: mobile-first responsive layout, no layout shift, TanStack Query freshness after every action, sortable table headers, vertical rhythm, bright distinct icons with the full icon asset set) — each routes to a reference file under `references/` so the front door stays loadable on every trigger.
+description: Building Informer Apps with local Vite development. Covers the dev/publish workflow, the centerpiece "Accessing Your Dependencies" model (typed slots + three patterns), and the orientation map for deeper topics (server routes, webhooks, persistence, declarative vector embeddings, widgets, copilot sidebar, event-driven AI agents, live broadcast channels over WebSockets (and messages back from the page: send(), joined, wildcards, replay), channel actors (one live, stateful sandbox per channel with a server-driven tick, for games and shared boards), staged uploads/downloads for files and large result sets (and forwarding them to integrations, transfer events, what a viewer has staged), command-line commands people run with `inf` (the `cli/` folder, sessions that work in the person's own folders, `--watch`, CI with an App API key) and signing in with the Informer CLI instead of a `.env`, PDF export, informer.yaml schema, app-to-app/pack API integration and openapi.json contracts, and the UI quality bar every screen must meet: mobile-first responsive layout, no layout shift, TanStack Query freshness after every action, sortable table headers, vertical rhythm, bright distinct icons with the full icon asset set) — each routes to a reference file under `references/` so the front door stays loadable on every trigger.
 ---
 
 # Informer App Development
@@ -18,6 +18,7 @@ An Informer App is a custom HTML/JS/CSS application that runs inside Informer. I
 - Render charts, tables, and interactive visualizations
 - Include a **built-in AI copilot** sidebar that can query your data and answer questions in context
 - Define **AI agents** that react to events, execute tools, and chain together for automated workflows
+- Give people **commands in their terminal** (`cli/`, run with the Informer CLI `inf`), including ones that read and write files in a folder on their computer (2026.1.4+)
 - Push **live updates** to every open page over a WebSocket Informer owns for it, and take messages back from the page over the same socket (channels — 2026.1.4+, origin-mode servers), with an optional **channel actor** that keeps one live, stateful sandbox per channel and a server-driven tick (games, shared boards)
 
 Apps are stored in Informer libraries and served through the Informer UI. (You may see the term "Magic Report" in older documentation — Apps are the current name for the same concept.)
@@ -43,6 +44,7 @@ This file is the orientation layer. Most topics have a dedicated reference under
 | State kept between channel messages, or something on a clock — a multiplayer game loop, a shared whiteboard, a presence roster, an auction or countdown the server owns, "tick N times a second"; a `channels/` file with `config.actor`, `start` / `tick` / `stop` / `snapshot` exports, `restored`, `request.member`, calls one at a time, `unavailable`, `__INFORMER__.serverNow()`, `ACTOR` / `ACTOR_IDLE` billing, `platform.capabilities.channelActors` | `references/channel-actors.md` |
 | Moving FILES or large result sets — CSV/Excel import into a workspace table, an attachment into a `bytea` column, a big CSV/JSON/JSONL export, "upload" / "download" / "save as" / "import"; `__INFORMER__.upload(file)` on the page, `uploads.get(id)` → `copyInto()` / bytea parameter / `text()`, `downloads.create()` → `fromQuery()` / `writeRows()` / `return dl` / `dl.url`, the 10 MB inline cap; watching a transfer (`onEvent`, `task.created`), `__INFORMER__.streams` list/status/discard, forwarding a staged file to an integration (`context.<slot>.request()` with a handle as `data` / in `form`, or `into`) | `references/streams.md` |
 | Exposing tools to outside AI clients (Claude Code/Desktop, Cursor) — the `mcp/` folder, why the folder is the decision, writing for a caller with no context, the per-app endpoint, the OAuth connect flow, who a tool runs as | `references/mcp.md` |
+| Commands people run from a terminal or a script — "CLI", "`inf`", "add a command", "sync / import / back up a folder", "watch a folder", CI calling the app; the `cli/` folder, `export const cli` / `confirm` / `roles` / `complete` / `watch`, schema → arguments, `reply()` / `follow()`, `run.client` / `run.timeZone`, sessions with `client.files` / `prompt` / `progress` and folder `access: read \| write \| mirror`, output and `--json`, `inf install`, App API keys for CI, limits | `references/cli.md` |
 | Deep `informer.yaml` work — `dependencies:` slot field reference, app-sourced `integrations:` (an app declares and owns an Integration — OAuth, `$env` secrets, icons), RLS via `$user.*`, modernizing a legacy `access:` block, `defaultBinding` lookup, declaring env-var keys with `env:` | `references/informer-yaml.md` |
 | App-to-app/pack APIs — fetching a target's contract (`openapi.json`), typed dev bindings (`.informer/app-deps.d.ts`), public-vs-internal routes, and making your own App integratable (`description`/`schema` exports, `config.api = 'public'`, root `API.md`) | `references/app-api.md` |
 | In-gallery app docs (`docs.html`), in-app `?` help button, `README.md` fallback | `references/docs-html.md` |
@@ -69,6 +71,9 @@ Customers run a spread of Informer versions, so every newer feature carries the 
 | Async `WebAssembly.compile()` / `instantiate()` settling in server-side handlers (the synchronous constructors work on every version) | 2026.1.4 (I5-13088) | `references/wasm-workers.md`, `references/server-routes.md` |
 | Staged uploads/downloads (`uploads`, `downloads`, `__INFORMER__.upload()`) | 2026.1.4 | `references/streams.md` |
 | Streams phase 2 — transfer events (`onEvent`, `task.created`), `__INFORMER__.streams` list/status/discard, forwarding a stream to an integration (`data` / `form` / `into`) | 2026.1.4 (every released build; only unreleased previews carried phase 1 alone) | `references/streams.md` |
+| App CLI: `cli/` commands, sessions on the person's folders, `--watch`, `reply()`, `follow()`, App API keys for CI | 2026.1.4 (I5-13206; detect `platform?.capabilities?.cli`; deploy needs plugin 2.14.0+, which uploads `cli/`; `npm run dev` does not run commands) | `references/cli.md` |
+| Signing in with the Informer CLI (`inf login`) instead of a `.env` for `npm run dev` / `npm run deploy`; `inf deploy`; `informer-init` writes no `.env` | plugin 2.14.0 (I5-13206; `inf deploy` and the `develop` sign-in need a 2026.1.4 server) | this file, Development Mode |
+| `GET /api/permissions?group=apps` answers `deploy`: whether the signed-in person can deploy an app of their own | 2026.1.4 (I5-13206) | this file, Deploying |
 | Warehouse loads (`load()`, the run ledger, `schedule()`, streaming ingest) | 2026.2.0 | `references/warehouse-etl.md` |
 | `semantics.yaml` and the semantic registry | 2026.2.0 | `references/semantics.md` |
 | App accounts and public serving (`accounts:`, `public: true`, `/_auth/*`) | 2026.2.0 | `references/accounts-and-login.md` |
@@ -116,11 +121,18 @@ npm create vite@latest . -- --template react
 npm install
 npm install -D @entrinsik/vite-plugin-informer@latest
 
-# 3. Run the Informer init — creates informer.yaml, .env, .env.example,
+# 3. Run the Informer init — creates informer.yaml and .env.example,
 #    updates vite.config.js to include informer(), updates .gitignore,
 #    adds deploy + workspace:* scripts to package.json.
 npx informer-init
+
+# 4. Sign in once, if `inf auth token --json` doesn't already print a
+#    sign-in for the right server. dev and deploy use it (plugin 2.14.0+).
+npm install -g @entrinsik/informer-cli
+inf login acme.informer.cloud
 ```
+
+`inf login` waits for the person to approve a code in their browser, so run it where they can see it: ask them to type it themselves (in Claude Code, `! inf login <server>`) rather than running it in the background.
 
 If `npm create vite@latest .` refuses because the directory has stray files (a README from `git init`, a `.gitignore`, etc.), tell the user which files are in the way and either:
 - Move them aside, run vite create, then move them back; or
@@ -136,8 +148,7 @@ After `npx informer-init` you have:
 
 ```
 my-app/
-├── .env                    # Connection settings (gitignored)
-├── .env.example            # Template for connection settings
+├── .env.example            # How to override the inf sign-in, all commented out
 ├── informer.yaml           # App configuration — dependencies, roles, agents, events, widgets
 ├── package.json            # informer section (name, description, id UUID) + deploy/workspace:* scripts
 ├── vite.config.js          # Includes informer() plugin
@@ -150,7 +161,7 @@ Init also:
 - **Generates a UUID for `informer.id`** and writes it to `package.json` immediately — used by `npm run deploy` to create or address the app on the server. Don't set it manually.
 - Updates `.gitignore` to exclude `.env`
 
-The `.env` template includes both API key and basic auth blocks — uncomment the one you want. If the user mentions a specific server, fill it in directly; otherwise leave the placeholder `http://localhost:3000` and tell them to update before running `npm run dev`.
+There is no `.env` to fill in: the person's `inf` sign-in is the credential, so the project folder holds no key and can be pushed as it is. A `.env` is still honored and wins when it sets `INFORMER_URL` with `INFORMER_API_KEY` (or `INFORMER_USER` / `INFORMER_PASS`) — for a server the person has no `inf` sign-in for, or CI. Plugin releases before 2.14.0 write a `.env` with a placeholder `http://localhost:3000` and have no sign-in fallback, so there the `.env` must be filled in before `npm run dev`.
 
 > **`public/favicon.svg` is not created by init.** It's a recommended addition — 512×512, duotone — and gets deployed to the app's library root as the gallery/tab icon. Add it yourself or ask Claude to generate one.
 
@@ -158,8 +169,8 @@ The `.env` template includes both API key and basic auth blocks — uncomment th
 
 Once the project is set up, the typical next moves are:
 
-1. Pin the Informer version the app deploys to: `requires.informer` in an existing `informer.yaml`, else `GET /api/about` on the server named in `.env` (`INFORMER_URL`), else ask. Write it back as `requires: { informer: '>=…' }`. Every step below is gated on it through the Feature floors table.
-2. Ask the user what data the app needs (datasets/queries/datasources/integrations) and add `dependencies:` slots to `informer.yaml` — look up `defaultBinding` UUIDs via `GET /api/datasets-list` etc. against the configured `INFORMER_URL`. For an external service the app itself needs (a REST API, Salesforce, and so on), prefer declaring it in the `integrations:` block instead of binding to a pre-existing one — deploy creates the Integration and the slot for you, no UUID and no out-of-band setup. See `references/informer-yaml.md`.
+1. Pin the Informer version the app deploys to: `requires.informer` in an existing `informer.yaml`, else `GET /api/about` on the server the app deploys to (`INFORMER_URL` in `.env`, else the `url` that `inf auth token --json` prints), else ask. Write it back as `requires: { informer: '>=…' }`. Every step below is gated on it through the Feature floors table.
+2. Ask the user what data the app needs (datasets/queries/datasources/integrations) and add `dependencies:` slots to `informer.yaml` — look up `defaultBinding` UUIDs via `GET /api/datasets-list` etc. against that server (with a sign-in, `curl -H "Authorization: Bearer $(inf auth token)"`). For an external service the app itself needs (a REST API, Salesforce, and so on), prefer declaring it in the `integrations:` block instead of binding to a pre-existing one — deploy creates the Integration and the slot for you, no UUID and no out-of-band setup. See `references/informer-yaml.md`.
 3. Replace Vite's default `index.html` + `main.js` with the app shell — mobile-first, and with TanStack Query wired at the root for a React app (see the UI Quality Bar below).
 4. If the app stores its own data, scaffold `migrations/` and add a first migration — load `references/persistence.md`.
    If the data is LOADED from sources on a cadence (a warehouse), load `references/warehouse-etl.md` instead (Informer 2026.2.0+) — it layers sync routes, `load()`, and `automations:` schedules on top of plain persistence.
@@ -169,6 +180,7 @@ Once the project is set up, the typical next moves are:
 7. If the app should be usable from an outside AI client (Claude Code/Desktop, Cursor), scaffold `mcp/` with tools written for a context-free caller — load `references/mcp.md`.
 8. If open pages should update live when server code changes something (no polling), or send something back over the socket (typing, comments, cursors), add a `channels:` relay block and/or `channels/` handlers — load `references/channels.md` (needs an origin-mode server: read `platform.originMode`, or confirm with the user before building on it). When the channel needs state held between messages or a server clock (a game, a shared board), make its file a channel actor (2026.1.4+) — load `references/channel-actors.md` too.
 9. If the app imports files or exports large result sets (CSV in, attachments, CSV/JSON out), stage them with `__INFORMER__.upload()` on the page and use the `uploads` / `downloads` handles in `server/` — load `references/streams.md`.
+10. If people should drive the app from a terminal or a script (commands, bulk imports from a folder, backups to one, a folder kept in step with `--watch`, CI), scaffold `cli/` — load `references/cli.md` (2026.1.4+, plugin 2.14.0+).
 
 ## Local Development Workflow
 
@@ -201,23 +213,26 @@ The last row is the common gotcha: anything an app *fetches* (not script-tag-loa
 
 ### Development Mode (`npm run dev`)
 
-The Vite plugin proxies `/api/*` requests to your Informer server with Basic auth. This means:
+The Vite plugin proxies `/api/*` requests to your Informer server as you. This means:
 - Your code makes fetch calls to `/api/...` (no host needed)
 - The plugin adds authentication headers automatically
 - You get hot reload while working against real Informer data
 
-Configuration is in `.env`:
+**Where the credential comes from (plugin 2.14.0+).** With nothing set in the environment or `.env`, the plugin asks the Informer CLI (`inf auth token --json`) for the signed-in server and a current token, and the dev server renews it as it runs — so a project needs no `.env` at all after `inf login <server>`. With several sign-ins, `INFORMER_URL` alone picks which one. Set `INFORMER_URL` with a key or a password and that wins instead:
+
 ```
 INFORMER_URL=http://localhost:3000
 INFORMER_API_KEY=your-api-key
 ```
 
-Or use basic auth:
+Or basic auth:
 ```
 INFORMER_URL=http://localhost:3000
 INFORMER_USER=admin
 INFORMER_PASS=yourpassword
 ```
+
+Below plugin 2.14.0 there is no sign-in fallback: one of these `.env` blocks is required.
 
 If your app uses persistence (see `references/persistence.md`), you'll also have:
 ```
@@ -251,17 +266,21 @@ Builds your project and uploads to Informer:
 4. Uploads all built assets from `dist/`
 5. Uploads `informer.yaml`, `data-access.yaml`, `API.md`, and `README.md` from project root (whichever exist)
 6. Uploads `migrations/` directory (if it exists)
-7. Uploads `tools/` and `mcp/` directories (if they exist)
+7. Uploads `tools/` and `mcp/` directories (if they exist), and `cli/` — plugin 2.14.0+, servers 2026.1.4+; against an older server the plugin leaves `cli/` on disk and says why
 8. Uploads `server/` directory (if it exists)
 9. Uploads `webhooks/` directory (if it exists)
 10. Uploads `channels/` directory (if it exists) — plugin 2.10.0+; 2.7.0 never uploads the folder
 11. Uploads `embeddings/` directory (if it exists) — plugin 2.10.0+; 2.7.0 never uploads the folder
 12. Uploads `lib/` and `shared/` directories (if they exist). Every source tree drops dotfiles, `node_modules`, and `*.test.js`
-13. Runs deploy: pending SQL migrations + server-route scanning + webhook scanning + embedding use-case scanning + channel scanning (`channels/` handlers + the `channels:` relay block) + handler bundling + tool bundling (`tools/` + `mcp/`) + resource reference validation + agent upsert from `informer.yaml`
+13. Runs deploy: pending SQL migrations + server-route scanning + webhook scanning + embedding use-case scanning + channel scanning (`channels/` handlers + the `channels:` relay block) + CLI command scanning (`cli/`) + handler bundling + tool bundling (`tools/` + `mcp/` + `cli/`) + resource reference validation + agent upsert from `informer.yaml`
     - **Resource refs are validated**: all datasets, queries, datasources, integrations, and toolkits declared in `informer.yaml` must exist — deploy fails with a clear error if any are missing
     - **Channels need origin mode**: a `channels:` block or `channels/` directory on a path-mode server still deploys, with a non-fatal `channels_require_origin_mode` warning — see `references/channels.md`
     - **`channels:` entries need `on`**: an entry with nothing to relay fails the deploy; a `channels/` file may export `config`, `join`, `joined`, `leave`, and event-named inbound handlers, nothing else; a file with `config.actor` (2026.1.4+) adds `start` / `tick` / `stop` / `snapshot`, and a `config.actor` the scanner refuses (unknown key, a `tick` rate with no `tick` export, …) fails the deploy
 14. App is viewable at `/api/apps/{owner}:{slug}/view`
+
+**`inf deploy`** (plugin 2.14.0+, 2026.1.4 servers) is the same deploy, run from the app folder against the server `inf` is signed in to: it says where it will deploy and whether it updates an existing app, asks first (`--yes` in a script, and outside a terminal, which includes Claude Code's `!` commands), then builds and runs `informer-deploy`. `inf publish` deploys, then publishes to the marketplace from that server.
+
+**Who can deploy.** A deploy creates a Magic App, which takes **Admin in a team**, and an `inf` sign-in reaches the API for deploys (the `develop` scope) only while the person may mint API keys — API Token Creation, or Publisher in a team, which a team Admin is. So a team Admin can do both, on a server licensed for Magic Apps. On 2026.1.4+ ask before building: `GET /api/permissions?group=apps` answers `deploy: true` when all of it holds. A sign-in without `develop` makes `inf login` say so and `inf deploy` refuse; after an administrator grants it, `inf login` again.
 
 ### Package.json Configuration
 
@@ -1176,6 +1195,30 @@ Connect with `claude mcp add --transport http my-app <endpoint>` (the endpoint i
 
 Load `references/mcp.md` for: the `mcp/` vs `tools/` decision in depth (including the `emit()`-tool trap), writing tools for a context-free caller (descriptions as API docs, self-describing returns, no guessing), the identity model (`runAs` slots, `run.user`/`run.roles`, and why the app's own workspace is not per-caller so **the tool is the access control**), the full OAuth/discovery/DCR flow, curl-testing the endpoint, observability, and gotchas.
 
+## CLI commands — overview
+
+An app with a **`cli/` directory** has commands people run from their terminal with the Informer CLI (`inf`), as themselves (2026.1.4+; plugin 2.14.0+ deploys the folder; `npm run dev` doesn't run them). The file contract is the `mcp/` one — `description`, `schema`, `handler` — plus `export const cli` for positional arguments and listing; the path is the command (`cli/retro/add.js` → `inf my-app retro add`), and the schema becomes typed flags, validated on the server before anything runs.
+
+```javascript
+// cli/move.js — inf my-app move I5-12 Done
+export const description = 'Move an issue to another column';
+export const schema = {
+    type: 'object',
+    properties: { key: { type: 'string' }, column: { type: 'string', enum: ['Todo', 'Doing', 'Done'] } },
+    required: ['key', 'column'],
+};
+export const cli = { positional: ['key', 'column'] };
+
+export async function handler({ args, query, reply }) {
+    const [issue] = await query('UPDATE issues SET col = $2 WHERE key = $1 RETURNING key, col', [args.key, args.column]);
+    return reply(`Moved ${issue.key} to ${issue.col}.`, issue);   // a terminal sees the sentence, a pipe the JSON
+}
+```
+
+A command whose schema has a folder argument (`{ type: 'string', format: 'directory', access: 'read' | 'write' | 'mirror' }`) runs as a **session**: its `client` lists, reads, writes and (with `mirror`) deletes files in the folder the person named, asks questions and draws progress, with the CLI checking every path on the real disk. `export const watch` plus `added` / `changed` / `removed` keeps a folder in step under `--watch`. `confirm` and `roles` gate a command; `complete()` feeds tab completion. People sign in with `inf login`, and `inf install owner:slug name` gives an app a command of its own with a sign-in for that app alone; CI uses an App API key with **Runs CLI commands** on.
+
+Load `references/cli.md` for: the full file contract and its deploy warnings, schema → arguments (files, stdin, reserved flag names), the CLI-only bag (`run.client`, `run.timeZone`, `reply()`, `follow()`, `client`), sessions and folder access in depth, `--watch`, output and `--json`, who a command runs as, limits and billing, choosing between `cli/`, `mcp/` and `server/`, and the three lines to give people.
+
 ## PDF Export
 
 Apps can be exported to PDF via `POST /api/apps/{id}/_print`.
@@ -1270,6 +1313,7 @@ The orientation above points to each file; this is the canonical list of what's 
 | `references/channel-actors.md` | Channel actors — when to use one, `config.actor` (`tick` / `idleMs` / `memoryMb` / `snapshotMs`) and its deploy checks, the exports and call order (one at a time, the queue, skipped ticks), `request.member`, the actor bag (no `fetch` / typed `context`), own-channel broadcasts, why an actor stops, snapshots across redeploys and dead servers, the cluster and `unavailable`, `ACTOR` / `ACTOR_IDLE` billing, the `app.channels.actors` limits, `serverNow()`, dev emulation (plugin 2.13.0+) |
 | `references/streams.md` | Staged uploads/downloads — `__INFORMER__.upload()` on the page, `uploads.get(id)` → `copyInto()` / bytea parameter / inline reads under the 10 MB cap, `downloads.create()` → `fromQuery()` / `writeRows()` / `return dl` / `dl.url`, the six limits, transfer events and `__INFORMER__.streams`, forwarding to an integration (`data` / `form` / `into`), error table, dev-server emulation gaps |
 | `references/mcp.md` | The `mcp/` folder, `mcp/` vs `tools/` split, writing tools for a context-free caller, identity (`runAs` / `run.user` / `run.roles`, workspace-not-per-caller), the per-app endpoint, OAuth discovery + DCR connect flow, curl testing, observability |
+| `references/cli.md` | The `cli/` folder — command file contract (`cli`, `confirm`, `roles`, `complete`, `watch` + `added` / `changed` / `removed`), schema → arguments, the CLI-only bag (`run.client`, `run.timeZone`, `reply()`, `follow()`, `client`), sessions and folder access (`read` / `write` / `mirror`), `--watch`, output and `--json`, identity, `inf install`, App API keys for CI, limits and billing, `cli/` vs `mcp/` vs `server/` |
 | `references/informer-yaml.md` | Full `informer.yaml` schema deep dive — slot fields, `$user.*` variables, modernizing legacy `access:` blocks, declaring env-var keys with `env:` |
 | `references/docs-html.md` | In-gallery `docs.html` page, in-app `?` help button, `README.md` fallback |
 | `references/api-reference.md` | Raw API surface behind the typed-slot proxy (useful for diagnostics) |
