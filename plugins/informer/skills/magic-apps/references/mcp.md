@@ -13,6 +13,8 @@ my-app/
 
 Deploy scans both directories, so `npm run deploy` is all it takes. No manifest block, no flag: **the folder is the declaration.**
 
+The same file contract serves a third caller: `cli/` commands, which a person runs from their terminal with `inf` (**2026.1.4+**). A handler re-exported from `cli/` serves both, branching on `run.trigger` (`'mcp'` or `'cli'`) where they differ — see `cli.md`.
+
 ## The one rule: which folder
 
 `mcp/` and `tools/` share the same file contract (`description`, `schema`, `handler`), the same sandbox, and the same service bag. The only difference is who may call them, and that difference is the whole point:
