@@ -1,6 +1,6 @@
 # CLI — commands people run from their terminal
 
-> **Load this reference when:** the app should be usable from a terminal or a script — "add a command", "CLI", "`inf`", "run it from the shell", "a script / CI job that calls the app", "sync a folder", "import these files from my computer", "watch a folder". Covers the `cli/` folder, the command file contract (`description`, `schema`, `handler`, `cli`, `confirm`, `roles`, `complete`, `watch` + `added` / `changed` / `removed`), how arguments map from the schema, what the handler gets beyond the tool bag (`run.trigger: 'cli'`, `run.client`, `run.timeZone`, `reply()`, `follow()`, `client`), sessions that work in the person's own folders (`format: 'directory'` with `access: read | write | mirror`), files in and out, `--watch`, output and `--json`, who a command runs as, CI with an App API key, limits and billing, and what to tell people: `inf login`, `inf install`, `inf deploy`.
+> **Load this reference when:** the app should be usable from a terminal or a script — "add a command", "CLI", "`inf`", "run it from the shell", "a script / CI job that calls the app", "sync a folder", "import these files from my computer", "watch a folder", "a board / dashboard in the terminal", "an interactive screen", "show progress while it works". Covers the `cli/` folder, the five shapes a command can take and how to choose, the command file contract (`description`, `schema`, `handler`, `cli`, `confirm`, `roles`, `complete`, `watch` + `added` / `changed` / `removed`), how arguments map from the schema, what the handler gets beyond the tool bag (`run.trigger: 'cli'`, `run.client`, `run.timeZone`, `reply()`, `follow()`, `client`), sessions that work in the person's own folders (`format: 'directory'` with `access: read | write | mirror`), files in and out, `--watch`, the building blocks a terminal draws (`client.display`), interactive views (`render`, `init`, `actions`, `event`, `loaders`, `view = { follow }`), output and `--json`, who a command runs as, CI with an App API key, limits and billing, and what to tell people: `inf login`, `inf install`, `inf deploy`.
 >
 > **Not in this file:** the rest of the handler bag (`query`, `context`, `fetch`, `emit`, `log`, …) — see `server-routes.md`; staged upload and download handles in depth — see `streams.md`; channels a command can `follow()` — see `channels.md`; tools for outside AI clients — see `mcp.md`, the same file contract for a different caller.
 >
@@ -18,6 +18,20 @@ my-app/
 ```
 
 Path segments become the words a person types; `index.js` names its folder. Words are lowercase letters, digits and single dashes (`on-duty`). A `[param]` segment fails the deploy — arguments come from the schema. Two files naming the same command fail it too, and so does a command that is also the first words of another (`retro` and `retro add`): the CLI could not tell the command `retro add` from `retro` given the argument "add".
+
+## Five shapes of command
+
+Each shape holds server resources only as long as it needs them. Pick the smallest that does the job:
+
+| Shape | The file exports | How it runs | Held on the server | For |
+|---|---|---|---|---|
+| **Plain** | `handler` | one run, up to 30 s | nothing once it answers | lookups, writes, reports |
+| **Follow** | `handler` returning `follow(channel)` | one run, then the CLI tails the channel | a socket subscription | a live feed, a log |
+| **Session** | `handler` that uses `client` | one run over the CLI's socket, up to 30 min | the isolate while it runs; a database connection only while it queries | work in the person's folders, a question mid-run, progress |
+| **Watch** | `watch` + `added` / `changed` / `removed` | one session run per file event | per event | keeping a folder in step |
+| **View** | `render` (+ `init`, `actions`, `event`, `loaders`, `view`) | one short run per key or broadcast | nothing but the socket; the state lives in the CLI | a board, a dashboard, anything a person works with keys |
+
+**Session or view?** Ask who decides what happens next. A session is a script the server runs: "read the folder, *then* import, *then* ask". It finishes on its own, and its progress lives in its local variables, so it holds an isolate until it does. A view is a screen the person drives: "*whenever* I press f, *whenever* someone moves a card". It has no end, so no code runs between keys: each key is a short run that turns the state the CLI kept into the next state and frame. A board written as a session holds an isolate for hours and dies with the connection; a folder import written as a view becomes an awkward state machine. They combine: a view's action can `client.prompt`, and a session can `client.display` its progress.
 
 ## Writing a command
 
@@ -113,7 +127,7 @@ The tool bag (`args`, `run`, `context`, `query`, `transaction`, `fetch`, `emit`,
 | `run.trigger` | `'cli'` — branch on it when one handler also serves `mcp/` or an agent. |
 | `run.user` | `{ username, displayName }` of the person who ran it, `run.roles` their app roles. |
 | `run.timeZone` | IANA zone of the computer that ran it, else the user's Informer time zone, else the server's — always set, so "today" in a command means the person's today. |
-| `run.client` | What the CLI says about its computer: `{ os, arch, release, node, cliVersion, cpus, memoryGb }`. Self-reported: show or check it, never treat it as proof of anything. |
+| `run.client` | What the CLI says about its computer: `{ os, arch, release, node, cliVersion, cpus, memoryGb, blocks }`, `blocks` being the building blocks it draws (below). Self-reported: show or check it, never treat it as proof of anything. |
 | `reply(message, data)` | Return it: a terminal shows `message`, while a pipe or `--json` gets `data`. Use it whenever the person wants a sentence and a script wants the record. |
 | `follow(channel, { events })` | Return it: the CLI joins that channel and prints its events until Ctrl-C (one JSON line per event when piped), under the same rules as a page joining it. `events` limits what is printed. See `channels.md`. |
 | `client` | The terminal that ran the command, in a session only (next section); `undefined` otherwise. |
@@ -137,7 +151,9 @@ Piped or with `--json`, everything is JSON, so `inf my-app mine | jq` always wor
 
 ## Sessions: working in the person's folders
 
-A command that calls back to the terminal runs as a **session**: the CLI opens a socket to the app, and the handler's `client` reaches the computer that ran it while the run lasts. A command is a session when its schema has a folder argument, its source calls `client.files` / `client.prompt` / `client.progress` / `client.log` or takes `client` from the bag, or it declares `cli.session: true`.
+A command that calls back to the terminal runs as a **session**: the CLI opens a socket to the app, and the handler's `client` reaches the computer that ran it while the run lasts. A command is a session when its schema has a folder argument, its source calls `client.files` / `client.prompt` / `client.progress` / `client.log` / `client.display` or takes `client` from the bag, or it declares `cli.session: true`.
+
+A session's workspace connection opens at its first `query()` and closes after **10 seconds** without one (`app.cli.sessionIdleMs`); the next query opens another. So a session waiting minutes on a prompt holds no database connection. It never closes inside a `transaction()` or while a `copyInto` / `fromQuery` streams, but **a temp table does not survive the close**: a session that needs one across a wait on the person makes a real table instead.
 
 ```javascript
 // cli/backup.js — inf my-app backup ~/Documents/notes
@@ -194,8 +210,9 @@ What naming a folder does **not** consent to, enforced by the CLI:
 | `client.prompt({ name, message, choices?, default? })` | the person's answer, as a string. In a script `--answer name=value` answers it; with no terminal and no answer it takes `default`, else the call fails naming the `--answer` to pass. Give every prompt a `name`. |
 | `client.progress({ label, done, total })` | draws one live progress bar on the terminal (hidden when piped). |
 | `client.log(text)` | prints a line on the person's terminal. |
+| `client.display(tree)` | draws a live region from building blocks (below) and answers `{ show(tree), update(id, node) }` to change it. It only shows — for a status panel while the handler works. When the run ends the last frame stays; piped, only that frame prints; with `--json`, one `{"view": tree}` line per change. |
 
-A refused call throws with `err.code`: `cli_access_denied` (outside the folders or above their level), `cli_not_found`, `cli_no_terminal`, `cli_bad_answer`, `cli_list_too_long`. Ctrl-C or a dropped connection fails waiting calls within a second and stops the run, which is recorded as failed — the work and its billing stop with it.
+A refused call throws with `err.code`: `cli_access_denied` (outside the folders or above their level), `cli_not_found`, `cli_no_terminal`, `cli_bad_answer`, `cli_list_too_long`, `cli_view_too_large` (a tree over 256 KB of JSON), `cli_view_unknown_node` (`update` of an id the tree lacks). Ctrl-C or a dropped connection fails waiting calls within a second and stops the run, which is recorded as failed — the work and its billing stop with it.
 
 ### Keeping a folder in step: `watch`
 
@@ -224,7 +241,105 @@ export async function removed({ file, query }) {
 }
 ```
 
-With `--watch` the CLI runs `handler` once, then sends each file that appears, changes or goes, one at a time and in order, until Ctrl-C. Each event runs its export with `{ args, file }` (and `client`) as its own session run. `watch.folder` names a folder argument; `watch.glob`, when set, names the string argument whose value filters which files' events are sent. Dotfiles, editor leftovers and saves that changed nothing are never sent; a dropped connection reconnects and syncs again; a failing event is printed and the watch goes on. A watch that cannot work (no event export, a `folder` that is not a folder argument) deploys with a warning and no `--watch`.
+With `--watch` the CLI runs `handler` once, then sends each file that appears, changes or goes, one at a time and in order, until Ctrl-C. Each event runs its export with `{ args, file }` (and `client`) as its own session run. `watch.folder` names a folder argument; `watch.glob`, when set, names the string argument whose value filters which files' events are sent. Dotfiles, editor leftovers and saves that changed nothing are never sent; a dropped connection reconnects and syncs again; a failing event is printed and the watch goes on. A watch that cannot work (no event export, a `folder` that is not a folder argument) deploys with a warning and no `--watch`. An event's `client.display` shows while that event runs and goes before its line is printed.
+
+## Building blocks: what a terminal draws
+
+`client.display` and views send a **tree**, and the CLI lays it out to the terminal's width. The server says what to show, never how: no escape codes cross, and every string is stripped of control characters before it is drawn.
+
+| Node | Draws |
+|---|---|
+| `'text'` or `{ type: 'text', text, style? }` | wrapped text; `style`: `bold`, `dim`, `italic`, `underline`, `cyan`, `green`, `yellow`, `red` (or a list of them) |
+| `{ type: 'markdown', text }` | a page, as `cli.output: 'markdown'` |
+| `{ type: 'table', title?, columns?, rows, rowKey?, keys?, onSelect?, highlight?, empty? }` | aligned columns; `columns` picks and orders the fields; `empty` shows when there are no rows |
+| `{ type: 'list', title?, items, keys?, onSelect?, empty? }` | `• item` lines (an item may be `{ text }`) |
+| `{ type: 'columns', children }` | children side by side; stacked one under another when each would be under 16 columns wide |
+| `{ type: 'box', title?, children }` | a frame around its children |
+| `{ type: 'progress', label?, done, total }` | a bar with `done/total` and a percentage |
+| `{ type: 'spinner', label? }` | an animated spinner |
+| `{ type: 'pending', id, label?, load? }` | a placeholder spinner, replaced later by `update(id, …)` or, in a view, by a loader |
+| `[ … ]` | its children, one under another |
+
+Any node may carry an `id`, which `update(id, node)` (or a view's loader) replaces. A type the CLI does not know shows its `text`, else its `children`, so a newer block degrades on an older `inf`; `run.client.blocks` lists what this CLI draws if a command wants to choose. The frame is clipped to the terminal (rows past its height become "… N more lines"), wide characters and emoji count as two columns, and a resize redraws it. A tree is at most **256 KB** of JSON.
+
+## Views: screens a person drives
+
+A `cli/` file that **exports `render`** is a view — no `handler`, and one in the same file never runs (deploy warns). There is no long-running code: the CLI keeps the view's **state** and sends it back with every step, and each step is one short session run that returns the next state and frame.
+
+```javascript
+// cli/board.js — inf my-app board
+import { cardsIn, historyOf, move } from '../lib/cards.js';
+
+const NEXT = { todo: 'doing', doing: 'done' };
+
+export const description = 'The board, live: pick a card, move it from the keyboard';
+export const view = { follow: 'cards' };                 // broadcasts here run event()
+
+export async function init({ args, query }) {            // once, when the view opens
+    return { highlight: {} };                            // the first state
+}
+
+export async function render({ state, query }) {         // every step: state → tree
+    const lane = async (id) => ({
+        type: 'table', id, title: id, columns: ['key', 'summary'], rowKey: 'key',
+        rows: await cardsIn(query, id),
+        keys: { f: 'forward', enter: 'open' },           // key → action
+        onSelect: 'peek',                                // the selection moving runs actions.peek
+        highlight: state.highlight,                      // { 'VD-3': 'yellow' }
+    });
+    return [
+        { type: 'columns', children: [await lane('todo'), await lane('doing'), await lane('done')] },
+        state.showing ? { type: 'pending', id: 'detail', load: 'detail', label: 'Loading' } : '',
+    ];
+}
+
+export const actions = {                                  // each returns the new state
+    peek: ({ state, row }) => ({ ...state, showing: row.key }),
+    forward: async ({ state, row, node, query, run, broadcast }) => {
+        if (!NEXT[node]) return undefined;               // already done: nothing changes
+        await move(query, row.key, NEXT[node], run.user.username);
+        await broadcast('cards', 'changed', { key: row.key, by: run.user.username });
+        return { ...state, highlight: {} };
+    },
+    open: async ({ state, row, client }) => {            // an action may ask
+        const note = await client.prompt({ name: 'note', message: `Note for ${row.key}` });
+        return { ...state, note };
+    },
+};
+
+export function event({ state, event }) {                 // a broadcast on view.follow
+    return { ...state, highlight: { [event.payload.key]: 'yellow' } };
+}
+
+export const loaders = {                                  // fill a placeholder after the frame
+    detail: async ({ state, query }) => ({
+        type: 'list', title: 'History',
+        items: (await historyOf(query, state.showing)).map(h => `${h.at}  ${h.by} ${h.change}`),
+    }),
+};
+```
+
+| Export | Runs | Gets | Answers |
+|---|---|---|---|
+| `init` | once, when the view opens (optional; the state starts `null` without it) | the bag | the first state |
+| `render` | after every step | the bag, `state` | the tree |
+| `actions.<name>` | a key bound in `keys`, or `onSelect` as the selection moves | `state`, `row` (the selected row), `node` (the table's `id`), `key` (`null` for onSelect) | the new state; `undefined` keeps it |
+| `event` | for each broadcast on `view.follow`, oldest first | `state`, `event` (`{ event, payload, at }`) | the new state; `undefined` keeps it |
+| `loaders.<name>` | for a `pending` node with `load: '<name>'`, after the frame is drawn | `state`, `node` (the placeholder's `id`) | the node that replaces it |
+
+Every export also gets the handler bag (`query`, `run`, `broadcast`, `client`, …), and `args` from the command line.
+
+**Keys.** The arrows (or `j`/`k`) move the selection and `←`/`→` or Tab move between tables with `keys`, all inside the CLI; only a bound key or `onSelect` reaches the server. `q`, Esc or Ctrl-C quits. A dim line under the frame names the keys. The selection follows a row by its `rowKey` across frames, else by position.
+
+**State is the CLI's, and untrusted.** It comes back with every step exactly as the last step answered, so treat it like `args`: the person could change it. Every step runs as the person, so their permissions hold anyway; the app's own tables are guarded by the queries you write, as everywhere. Keep it small — ids and flags, not rows: `render` queries what it shows each time, and state over **64 KB** (`app.cli.maxViewStateBytes`) fails the step.
+
+**Steps.** Keyed actions, selections and events go one at a time, in order; while one runs, only the newest selection waits behind it, since the person has moved past the rest. Broadcasts that arrive together (within 150 ms, or while a step runs) go as one step — `event()` runs for each, the frame renders once — so a bulk change costs each open view one run. A step that fails prints its message and the view keeps the frame and state it had.
+
+**Placeholders.** `render` answers one whole tree, so a slow part delays the frame. Put it in a `pending` node with `load`, and the frame goes out without it; the CLI then runs the loader (up to 4 at once, beside the steps) and swaps its node in. A loader answering after a newer frame is dropped, and that frame's placeholder loads afresh.
+
+**Following.** `view.follow` names a channel, and may take arguments from the command line: `follow: 'cards/{project}'` with a `project` string or number argument. A value that is missing or would not make one channel's name (a `/`, a space) follows nothing. The CLI subscribes on the same socket under the usual channel rules (`channels.md`). Broadcast after a write so every open view, this one included, hears it.
+
+**Connection.** A dropped connection reconnects with backoff, renders the state the CLI kept, and subscribes again; keys pressed meanwhile wait. Not at a terminal, or with `--json`, only the opening step runs (with its loads), its frame prints plain or as JSON, and the command ends.
 
 ## Who a command runs as
 
@@ -232,12 +347,13 @@ The person who ran it, signed in through `inf`: every query, `context` call and 
 
 - **`inf login <server>`** signs a person in. **`inf install <owner:slug> <name>`** gives an app a command of its own (`name move I5-1 Done`) with a sign-in bound to that one app: a token that can reach nothing else, kept apart from their `inf` sign-in. In an app's own instructions, tell people the `inf install` line, by the app's natural id (`owner:slug`), not its UUID.
 - **Scripts and CI:** an **App API key** with **Runs CLI commands** on (App Admin → API Keys) signs `inf` in from the environment — `INFORMER_URL` plus `INFORMER_TOKEN=<key>`. It reaches this app's commands and nothing else, runs as the key's owner, and the key's roles cap theirs. In a script, `--yes`, `--overwrite`, `--delete` and `--answer` replace the questions a terminal would ask.
-- Every run is recorded with who ran it, the arguments, the result or error and the time taken. App Admin's **CLI** tab lists each command with its 30-day runs and failures, the latest runs, the copyable install and sign-in steps for that server, and who installed the app's commands, with revoke.
+- Every run is recorded with who ran it, the arguments, the result or error and the time taken. A view records its opening, keyed actions and events; a selection moving and a placeholder loading happen on every arrow key, so they are recorded only when they fail. App Admin's **CLI** tab lists each command with its 30-day runs and failures, the latest runs, the copyable install and sign-in steps for that server, and who installed the app's commands, with revoke.
 
 ## Limits and billing
 
-- A plain run has the sandbox's **30 seconds**. A session run may last **30 minutes** (`app.cli.sessionMaxMs`), one `client` call **10 minutes** including a prompt waiting on the person (`clientCallTimeoutMs`), with **8** calls open at once (`maxPendingCalls`).
-- Runs are billed as app compute and refused (`402`) once the app's compute budget is spent; a session's time waiting on the terminal is billed as memory held, like an idle channel actor (`app.cli.idleCreditsPerGbHour`).
+- A plain run has the sandbox's **30 seconds**. A session run may last **30 minutes** (`app.cli.sessionMaxMs`), one `client` call **10 minutes** including a prompt waiting on the person (`clientCallTimeoutMs`), with **8** calls open at once (`maxPendingCalls`). A view has no limit on how long it stays open: nothing runs between its steps.
+- Runs are billed as app compute and refused (`402`) once the app's compute budget is spent; a session's time waiting on the terminal is billed as memory held, like an idle channel actor (`app.cli.idleCreditsPerGbHour`). A view's every step is a short run, billed as one (about 60 ms to start, plus its queries), and idle time costs nothing.
+- **A view's cost grows with the people watching it.** Each open view renders for its own person, so one broadcast to a channel with 50 open views is 50 runs. Batching makes a burst one run per view, not one per change; for many viewers keep `render` cheap, and push slow parts into loaders.
 - Commands are a person's tool. For data another program reads on a schedule, a server route with an App API key (`server-routes.md`) is still the contract to build.
 
 ## Choosing `cli/`, `mcp/` or `server/`
@@ -247,7 +363,7 @@ The person who ran it, signed in through `inf`: every query, `context` call and 
 | Caller | a person at a terminal, or their script | an outside AI client's model | the app's pages, or another program over HTTP |
 | Arguments | typed words, checked against `schema` | the model's JSON, checked against `schema` | `request.body` / `query` / `params` |
 | Reaches the caller's computer | yes, in a session (`client`) | no | no |
-| Result | printed (table, page, file) or piped | read by the model | an HTTP response |
+| Result | printed (table, page, file, a live view) or piped | read by the model | an HTTP response |
 
 The file contract is shared with `mcp/` and `tools/`, so one handler re-exported from `cli/` and `mcp/` serves both — branch on `run.trigger` where they differ.
 
