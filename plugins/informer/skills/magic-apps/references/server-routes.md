@@ -75,7 +75,7 @@ Each handler function receives a single context object with these properties:
 | `platform` | `{ version, originMode, capabilities }` | What the platform offers: the Informer build version, whether apps serve from their own origins (`originMode`, the precondition for live channels), and the app type's capability flags (`serverRoutes`, `webhooks`, `mcp`, `storage`, `embeddings`, …). Feature-detect with `platform?.capabilities?.<name>` instead of probing for a helper or comparing versions — optional chaining, because older servers inject no `platform` and a bare `platform.capabilities` throws there; the same object is `window.__INFORMER__.platform` in the browser. Informer ≥ the release carrying I5-12984; absent on older servers (treat a missing `platform` as "unknown"). **2026.1.4+** |
 | `request` | `object` | The incoming request (see below). |
 
-A `cli/` command gets the tool bag instead — `args` and `run` in place of `request` and `respond` — with three helpers only a command has: `reply(message, data)`, `follow(channel)` and, in a session, `client` (the terminal that ran it). See `cli.md`. **2026.1.4+**
+A `cli/` command gets the tool bag instead — `args` and `run` in place of `request` and `respond` — with three helpers only a command has: `reply(message, data)`, `follow(channel)` and, in a session, `client` (the terminal that ran it). See `cli.md`. **2026.2.0+**
 
 **Sandbox globals (available without destructuring):**
 
