@@ -13,7 +13,7 @@ my-app/
 
 Deploy scans both directories, so `npm run deploy` is all it takes. No manifest block, no flag: **the folder is the declaration.**
 
-The same file contract serves a third caller: `cli/` commands, which a person runs from their terminal with `inf` (**2026.1.4+**). A handler re-exported from `cli/` serves both, branching on `run.trigger` (`'mcp'` or `'cli'`) where they differ — see `cli.md`.
+The same file contract serves a third caller: `cli/` commands, which a person runs from their terminal with `inf` (**2026.2.0+**). A handler re-exported from `cli/` serves both, branching on `run.trigger` (`'mcp'` or `'cli'`) where they differ — see `cli.md`.
 
 ## The one rule: which folder
 

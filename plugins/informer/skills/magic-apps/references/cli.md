@@ -4,7 +4,7 @@
 >
 > **Not in this file:** the rest of the handler bag (`query`, `context`, `fetch`, `emit`, `log`, …) — see `server-routes.md`; staged upload and download handles in depth — see `streams.md`; channels a command can `follow()` — see `channels.md`; tools for outside AI clients — see `mcp.md`, the same file contract for a different caller.
 >
-> **Availability:** Informer **2026.1.4+** (I5-13206). Feature-detect `platform?.capabilities?.cli` in a handler or on the page: `true` on an App, `false` on a Magic Report (deploy refuses `cli/` there), absent on older builds. `@entrinsik/vite-plugin-informer` **2.14.0+** uploads `cli/`; earlier releases leave the folder behind, so the commands never appear. Against a server below 2026.1.4, 2.14.0+ leaves `cli/` on disk and says why, since those servers would serve the handlers as static files. `npm run dev` does not run commands (the dev `platform` reports `cli: false`): deploy to try one. People run commands with `@entrinsik/informer-cli` (`inf`, Node 22+), and a server administrator adds the **Informer Command Line Interface** OAuth client once (Admin → OAuth Clients → New) before anyone can sign in.
+> **Availability:** Informer **2026.2.0+** (I5-13206). Feature-detect `platform?.capabilities?.cli` in a handler or on the page: `true` on an App, `false` on a Magic Report (deploy refuses `cli/` there), absent on older builds. `@entrinsik/vite-plugin-informer` **2.14.0+** uploads `cli/`; earlier releases leave the folder behind, so the commands never appear. Against a server below 2026.2.0, 2.14.0+ leaves `cli/` on disk and says why, since those servers would serve the handlers as static files. `npm run dev` does not run commands (the dev `platform` reports `cli: false`): deploy to try one. People run commands with `@entrinsik/informer-cli` (`inf`, Node 22+), and a server administrator adds the **Informer Command Line Interface** OAuth client once (Admin → OAuth Clients → New) before anyone can sign in.
 
 An app with a `cli/` directory has commands. Deploy scans it, so `npm run deploy` is all it takes — **the folder is the declaration**, as with `mcp/`.
 
@@ -101,11 +101,11 @@ export async function complete({ arg, partial, args, query }) {
 }
 ```
 
-Runs with the handler bag when someone presses Tab on an argument: `arg` is the argument, `partial` what is typed of it, `args` the rest typed so far. Return strings (at most 200 are kept). It has **3 seconds**, and a failure or timeout offers nothing rather than an error, so a slow completer never hangs a shell. Enum and boolean values, flags and command words complete without it. Completion runs are not recorded.
+Runs with the handler bag when someone presses Tab on an argument: `arg` is the argument, `partial` what is typed of it, `args` the rest typed so far. Return strings (at most 200 are kept). It has **3 seconds**, and a failure or timeout offers nothing rather than an error, so a slow completer never hangs a shell. Enum and boolean values, flags and command words complete without it. Completion runs are not recorded, but each one is billed as app compute and refused once the app's budget is spent, and `run.roles` holds the caller's roles as capped (an App API key's cap applies), the same as a run.
 
 ## Arguments
 
-The CLI turns what was typed into an object shaped by `schema`, and the server validates it with the full JSON Schema before anything runs (`400 cli_invalid_args`, one line per problem). So `required`, `enum`, `minimum`, `pattern` and `additionalProperties: false` are real checks, and `description` is the help text.
+The CLI turns what was typed into an object shaped by `schema`, and the server validates it with the full JSON Schema before anything runs (`400 cli_invalid_args`, one line per problem). So `required`, `enum`, `minimum` and `additionalProperties: false` are real checks, and `description` is the help text. `pattern` and `patternProperties` are **not** checked on the server (a regular expression run against what the caller typed could stall it), and deploy warns when a schema has one: check those in the handler.
 
 | Schema | Typed as |
 |---|---|
@@ -145,9 +145,9 @@ Return a value and the CLI prints it. In a terminal the shape picks the form unl
 | object | aligned `key  value` lines |
 | string / number | as is (`cli.output: 'markdown'` lays a string out as a page) |
 | `null` / `undefined` | nothing |
-| a `downloads` handle | the file: saved under its filename (never over an existing file), to `--out`, or to stdout when piped |
+| a `downloads` handle | the file: saved under its filename (never over an existing file, and never a dot-file name the person didn't type), to `--out`, or to stdout when piped. It must be a handle `downloads.create()` made in this app for this caller: the server rebuilds it from its record, and a handle written by hand fails the run (`400 cli_bad_download`) |
 
-Piped or with `--json`, everything is JSON, so `inf my-app mine | jq` always works; a string prints as it is, so `inf my-app report > report.md` writes the text. Throwing fails the run (`422 cli_command_failed`) with your message as the error; make it say what to do.
+Piped or with `--json`, everything is JSON, so `inf my-app mine | jq` always works; a string prints as it is, so `inf my-app report > report.md` writes the text. Throwing fails the run (`422 cli_command_failed`) with your message as the error; make it say what to do. A run past its time limit answers `504 cli_timeout`, and one that failed outside your code (the app's database unreachable, say) answers `500 cli_platform_error` with a reference for an administrator, never the platform's own error text.
 
 ## Sessions: working in the person's folders
 
@@ -205,7 +205,7 @@ What naming a folder does **not** consent to, enforced by the CLI:
 | `client.files.list(folder, { glob?, hash? })` | `[{ path, name, size, mtime, hash? }]` — files under the folder, recursively, `name` relative to it with `/` separators. `glob` filters (`*.md`, `**/*.csv`); `hash: true` adds a SHA-256 to compare with what the app holds. Symlinks are skipped; more than 10,000 matches is refused — narrow with a glob. |
 | `client.files.read(path)` | an upload handle (`text()`, `json()`, `copyInto(table)`, …, `streams.md`). The bytes are staged, never sent over the socket, and the upload is discarded when the run ends — store what you need before returning. |
 | `client.files.text(path, encoding?)` | the file's text, releasing its upload at once. Use it to read many files in one run. |
-| `client.files.write(path, download)` | writes a finished `downloads` handle (`await dl.end()`) to `path`, creating folders. |
+| `client.files.write(path, download)` | writes a finished `downloads` handle (`await dl.end()`) to `path`, creating folders. Only a handle `downloads.create()` made in this run's app for this caller (`cli_bad_download` otherwise): the server rebuilds it, so a URL you put on it is never what the CLI fetches. |
 | `client.files.remove(path)` | deletes a file (`mirror` only). |
 | `client.prompt({ name, message, choices?, default? })` | the person's answer, as a string. In a script `--answer name=value` answers it; with no terminal and no answer it takes `default`, else the call fails naming the `--answer` to pass. Give every prompt a `name`. |
 | `client.progress({ label, done, total })` | draws one live progress bar on the terminal (hidden when piped). |
@@ -345,14 +345,14 @@ Every export also gets the handler bag (`query`, `run`, `broadcast`, `client`, �
 
 The person who ran it, signed in through `inf`: every query, `context` call and `fetch` is theirs, and `run.roles` are their app roles from the share. They see only the apps shared with them and only the commands their roles allow.
 
-- **`inf login <server>`** signs a person in. **`inf install <owner:slug> <name>`** gives an app a command of its own (`name move I5-1 Done`) with a sign-in bound to that one app: a token that can reach nothing else, kept apart from their `inf` sign-in. In an app's own instructions, tell people the `inf install` line, by the app's natural id (`owner:slug`), not its UUID.
+- **`inf login <server>`** signs a person in. **`inf install <owner:slug> <name>`** gives an app a command of its own (`name move I5-1 Done`) with a sign-in bound to that one app: a token that can reach nothing else, kept apart from their `inf` sign-in. In an app's own instructions, tell people the `inf install` line, by the app's natural id (`owner:slug`), not its UUID. The install is bound to the app it was made for: if that app is deleted and deployed again as a new one, the old install's sign-in is refused ("isn't shared with you"), so `inf uninstall <name>` and install again.
 - **Scripts and CI:** an **App API key** with **Runs CLI commands** on (App Admin → API Keys) signs `inf` in from the environment — `INFORMER_URL` plus `INFORMER_TOKEN=<key>`. It reaches this app's commands and nothing else, runs as the key's owner, and the key's roles cap theirs. In a script, `--yes`, `--overwrite`, `--delete` and `--answer` replace the questions a terminal would ask.
 - Every run is recorded with who ran it, the arguments, the result or error and the time taken. A view records its opening, keyed actions and events; a selection moving and a placeholder loading happen on every arrow key, so they are recorded only when they fail. App Admin's **CLI** tab lists each command with its 30-day runs and failures, the latest runs, the copyable install and sign-in steps for that server, and who installed the app's commands, with revoke.
 
 ## Limits and billing
 
-- A plain run has the sandbox's **30 seconds**. A session run may last **30 minutes** (`app.cli.sessionMaxMs`), one `client` call **10 minutes** including a prompt waiting on the person (`clientCallTimeoutMs`), with **8** calls open at once (`maxPendingCalls`). A view has no limit on how long it stays open: nothing runs between its steps.
-- Runs are billed as app compute and refused (`402`) once the app's compute budget is spent; a session's time waiting on the terminal is billed as memory held, like an idle channel actor (`app.cli.idleCreditsPerGbHour`). A view's every step is a short run, billed as one (about 60 ms to start, plus its queries), and idle time costs nothing.
+- A plain run has the sandbox's **30 seconds**. A session run may last **30 minutes** (`app.cli.sessionMaxMs`), one `client` call **10 minutes** including a prompt waiting on the person (`clientCallTimeoutMs`), with **8** calls open at once (`maxPendingCalls`), and one CLI connection may hold **8** sessions at once (`maxSessionsPerSocket`, `429 cli_too_many_sessions` past it). A view has no limit on how long it stays open: nothing runs between its steps.
+- Runs (and tab completions) are billed as app compute and refused (`402 cli_budget_exhausted`) once the app's compute budget is spent; a session's time waiting on the terminal is billed as memory held, like an idle channel actor (`app.cli.idleCreditsPerGbHour`). A view's every step is a short run, billed as one (about 60 ms to start, plus its queries), and idle time costs nothing.
 - **A view's cost grows with the people watching it.** Each open view renders for its own person, so one broadcast to a channel with 50 open views is 50 runs. Batching makes a burst one run per view, not one per change; for many viewers keep `render` cheap, and push slow parts into loaders.
 - Commands are a person's tool. For data another program reads on a schedule, a server route with an App API key (`server-routes.md`) is still the contract to build.
 
@@ -377,4 +377,4 @@ inf login acme.informer.cloud               # approve in the browser
 inf install sales:pipeline pipe             # then: pipe --help
 ```
 
-`inf install` offers to put its folder on the PATH and turn on tab completion (zsh, bash, fish, PowerShell); the person opens a new terminal before the command is found. `inf app` lists every app shared with them that has commands, and `inf app <app> --about` shows an app's whole description.
+`inf install` offers to put its folder on the PATH and turn on tab completion (zsh, bash, fish, PowerShell); the person opens a new terminal before the command is found. `inf app` lists every app shared with them that has commands, and `inf app <app> --about` shows an app's whole description. When something doesn't work, `inf whoami` says who and where they're signed in, and `inf status` checks the server, the sign-in, tab completion and PATH (Informer CLI 0.2.0-beta.1+).
