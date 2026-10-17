@@ -2,9 +2,9 @@
 
 > **Load this reference when:** writing or modernizing `informer.yaml` — declaring `dependencies:` slot fields (`target`, `runAs`, `options`, `defaultBinding`), wiring row-level security via `$user.*` variables, migrating a legacy `access:` block to typed slots, or deciding when `access.apis:` / `access.libraries:` still apply.
 >
-> **Not in this file:** how handler code calls the slots (`context.<slot>.method()`) — see SKILL.md "Accessing Your Dependencies". Widget declarations (`widgets:` block) — see `widgets.md`. Agent declarations (`agents:` / `events:` blocks) — see `agents.md`. Custom role definitions (`roles:` block) — see SKILL.md "App Roles". The `channels:` relay block's shape is below; its runtime semantics (`broadcast()`, `channels/` handlers, the page API) — see `channels.md`.
+> **Not in this file:** how handler code calls the slots (`context.<slot>.method()`) — see SKILL.md "Accessing Your Dependencies". Widget declarations (`widgets:` block) — see `widgets.md`. Agent declarations (`agents:` / `events:` blocks) — see `agents.md`. Custom role definitions (`roles:` block) — see SKILL.md "App Roles". The `channels:` relay block's shape is below; its runtime semantics (`broadcast()`, `channels/` handlers, the page API) — see `channels.md`. The `notifications:` opt-in declaration's shape is below; `notify()` and the page API — see `server-routes.md`.
 
-Apps are configured with an `informer.yaml` file in the project root. This single file declares the app's **data dependencies** (typed slots that get bound at install time), any **raw API allowlist** the app needs, **widgets**, **agents**, **live channel relays** (`channels:`), and **custom roles**. It's uploaded automatically on deploy.
+Apps are configured with an `informer.yaml` file in the project root. This single file declares the app's **data dependencies** (typed slots that get bound at install time), any **raw API allowlist** the app needs, **widgets**, **agents**, **live channel relays** (`channels:`), the **push notification opt-in** (`notifications:`), and **custom roles**. It's uploaded automatically on deploy.
 
 ```yaml
 # informer.yaml
@@ -272,6 +272,37 @@ flags it at boot, the server drops every relayed frame (`relay_dropped`).
 - A path-mode server accepts the block but records a non-fatal
   `channels_require_origin_mode` deploy warning; a Magic Report (`type:
   report`) deploy that carries it is refused with `apps_license_required`.
+
+## `notifications:` (push opt-in; Informer 2026.2.0+, origin mode)
+
+Declares that the app sends push notifications with `notify()`, so the
+platform helps users opt in: Informer GO shows a bell in the app's title bar
+that walks them through installing the app, and the installed app shows a
+"Get notifications from {app}?" banner (Turn on / Not now) each time it opens
+while notifications are off. See `server-routes.md` → "Using `notify()`" for
+delivery, `subscribed`, the page API and service workers.
+
+```yaml
+notifications: true
+# or keep window.__INFORMER__.notifications and drop the banner,
+# when the app offers its own button:
+notifications:
+  prompt: false
+```
+
+| Value | Meaning |
+|-------|---------|
+| `true` | The app notifies; the installed app shows the banner (`prompt: true`) |
+| `{ prompt: false }` | The app notifies; no banner |
+| `false` or absent | Nothing declared |
+
+**Rules.**
+
+- Any other value **fails the deploy** with a 400 that names the accepted
+  shapes. Stored in `app.defn.notifications`.
+- On a path-mode server the key deploys but does nothing: `notify()` reaches
+  Informer GO phones there, which need no opt-in.
+- Servers below 2026.2.0 ignore the key.
 
 ## `integrations:` (app-sourced integrations)
 

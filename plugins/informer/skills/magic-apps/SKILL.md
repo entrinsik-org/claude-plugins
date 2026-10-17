@@ -1,6 +1,6 @@
 ---
 name: magic-apps
-description: Building Informer Apps with local Vite development. Covers the dev/publish workflow, the centerpiece "Accessing Your Dependencies" model (typed slots + three patterns), and the orientation map for deeper topics (server routes, webhooks, persistence, declarative vector embeddings, widgets, copilot sidebar, event-driven AI agents, live broadcast channels over WebSockets (and messages back from the page: send(), joined, wildcards, replay), channel actors (one live, stateful sandbox per channel with a server-driven tick, for games and shared boards), staged uploads/downloads for files and large result sets (and forwarding them to integrations, transfer events, what a viewer has staged), PDF export, informer.yaml schema, app-to-app/pack API integration and openapi.json contracts, and the UI quality bar every screen must meet: mobile-first responsive layout, no layout shift, TanStack Query freshness after every action, sortable table headers, vertical rhythm, bright distinct icons with the full icon asset set) — each routes to a reference file under `references/` so the front door stays loadable on every trigger.
+description: Building Informer Apps with local Vite development. Covers the dev/publish workflow, the centerpiece "Accessing Your Dependencies" model (typed slots + three patterns), and the orientation map for deeper topics (server routes, push notifications to the installed app and their opt-in, webhooks, persistence, declarative vector embeddings, widgets, copilot sidebar, event-driven AI agents, live broadcast channels over WebSockets (and messages back from the page: send(), joined, wildcards, replay), channel actors (one live, stateful sandbox per channel with a server-driven tick, for games and shared boards), staged uploads/downloads for files and large result sets (and forwarding them to integrations, transfer events, what a viewer has staged), PDF export, informer.yaml schema, app-to-app/pack API integration and openapi.json contracts, and the UI quality bar every screen must meet: mobile-first responsive layout, no layout shift, TanStack Query freshness after every action, sortable table headers, vertical rhythm, bright distinct icons with the full icon asset set) — each routes to a reference file under `references/` so the front door stays loadable on every trigger.
 ---
 
 # Informer App Development
@@ -28,7 +28,7 @@ This file is the orientation layer. Most topics have a dedicated reference under
 
 | User intent / signal | Load this file |
 |---|---|
-| Writing handlers under `server/`, working with `query` / `transaction` / `fetch` / `respond` / `notify` / `email` / `log` / `crypto` / base64 / markdown / `env` / `request` / sandbox constraints | `references/server-routes.md` |
+| Writing handlers under `server/`, working with `query` / `transaction` / `fetch` / `respond` / `notify` / `email` / `log` / `crypto` / base64 / markdown / `env` / `request` / sandbox constraints; push notifications and their opt-in — "notify users", "push", "turn on notifications", `notifications:` in informer.yaml, `__INFORMER__.notifications`, an app service worker | `references/server-routes.md` |
 | Receiving external callbacks (Stripe, GitHub, Slack, Gmail push) under `webhooks/`, HMAC verification, signed `?token=` URLs | `references/webhooks.md` |
 | Storing app data — `migrations/`, dev-workspace lifecycle, `workspace:init` / `:migrate` / `:reset`, CRUD example | `references/persistence.md` |
 | Declaring embedding use cases under `embeddings/`, vector search over workspace data, `embed(name, text)`, chunking profiles, pgvector columns in app migrations | `references/embeddings.md` |
@@ -72,6 +72,7 @@ Customers run a spread of Informer versions, so every newer feature carries the 
 | Warehouse loads (`load()`, the run ledger, `schedule()`, streaming ingest) | 2026.2.0 | `references/warehouse-etl.md` |
 | `semantics.yaml` and the semantic registry | 2026.2.0 | `references/semantics.md` |
 | App accounts and public serving (`accounts:`, `public: true`, `/_auth/*`) | 2026.2.0 | `references/accounts-and-login.md` |
+| Push notifications to the installed app (Web Push on origin-mode servers), `notifications:` opt-in, `__INFORMER__.notifications`, `notify()` → `subscribed` / `unsubscribed`, only users who can open the app receive them | 2026.2.0 (I5-13207; below it `notify()` reaches Informer GO phones only) | `references/server-routes.md`, `references/informer-yaml.md` |
 
 Features not listed have no floor recorded here; where a reference states one inline (the `openapi.json` endpoint needs 2026.1.1, for example), that line wins.
 
@@ -758,7 +759,7 @@ Handlers receive a single argument with the sandbox helpers (`query`, `transacti
 
 Sandbox constraints: no Node APIs, no filesystem, no direct network — all I/O is through the injected callbacks. 128 MB memory, 30s default wall-clock timeout (configurable via `config.timeout`).
 
-Load `references/server-routes.md` for: full file-convention routing rules, every sandbox helper's calling shape and edge cases, return-value semantics, `respond()` early-ack pattern, `log()` levels and behavior, `notify()` / `email()` (single + bulk), `config.timeout` / `config.roles`, the full orders-API worked example.
+Load `references/server-routes.md` for: full file-convention routing rules, every sandbox helper's calling shape and edge cases, return-value semantics, `respond()` early-ack pattern, `log()` levels and behavior, `notify()` / `email()` (single + bulk; **2026.2.0+** on origin-mode servers `notify()` reaches the user's installed copy of the app, and the `notifications:` declaration plus `__INFORMER__.notifications` drive the opt-in), `config.timeout` / `config.roles`, the full orders-API worked example.
 
 ## Webhooks — overview
 
