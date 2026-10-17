@@ -1,6 +1,6 @@
 # Server-Side Routes
 
-> **Load this reference when:** writing handler files under `server/`, working with the V8 sandbox helpers (`query`, `transaction`, `fetch`, `respond`, `notify`, `email`, `log`, `crypto`, the base64/markdown/extractText globals), configuring per-handler `timeout` or `roles`, or wiring frontend calls to `/api/...`.
+> **Load this reference when:** writing handler files under `server/`, working with the V8 sandbox helpers (`query`, `transaction`, `fetch`, `respond`, `notify`, `email`, `log`, `crypto`, the base64/markdown/extractText globals), configuring per-handler `timeout` or `roles`, wiring frontend calls to `/api/...`, or sending push notifications and helping users opt in (`notify()`, `notifications:` in `informer.yaml`, `window.__INFORMER__.notifications`, an app service worker's `importScripts('/_app/push-sw.js')`).
 >
 > **Not in this file:** public token-gated webhook endpoints — see `webhooks.md`. Agent tool handlers — see `agents.md` (they share the same sandbox, so this file is the authoritative sandbox reference). Live broadcast to open pages (`broadcast()`, `channels/` handlers, the page-side `channel()` API) — see `channels.md`. The typed dep proxy (`context.<slot>.<method>()`) — see SKILL.md "Accessing Your Dependencies". Commands people run from a terminal (`cli/`, `reply()`, `follow()`, `client`) — see `cli.md`.
 
@@ -67,7 +67,7 @@ Each handler function receives a single context object with these properties:
 | `uploads` | `object` | Resolve a file the page staged with `__INFORMER__.upload()` — `uploads.get(id)` returns a handle (`copyInto(table)`, `text()`, `json()`, `extractText()`, `discard()`; the handle itself binds as a `bytea` query parameter). Bytes never enter the isolate. A handle also goes out as the `data` or a `form` field of `context.<slot>.request()` — the host streams it to the integration. See `streams.md`. **2026.1.4+** |
 | `downloads` | `object` | Stage bytes for the browser — `downloads.create({ filename })` returns a handle (`fromQuery(sql)`, `writeRows(rows)`, `write(chunk)`, `end()`, `url`); return it or `respond()` with it to stream it as the response. `context.<slot>.request({ …, into: dl })` fills and seals it from an integration's response (`into: 'upload'` stages a fresh upload instead). See `streams.md`. **2026.1.4+** |
 | `embed` | `async (useCase, text) => { embedding, revision }` | Query-time vector from the platform embedding model, scoped to a declared `embeddings/` use case (unknown names throw). Returns an object, not a bare array: `revision` is the stamp the pump writes beside every stored vector, and a search must filter on it as well as ordering by distance, or a repointed model silently returns near-random neighbours. Bounded — 100k characters per call, 100 calls per invocation, refused on an exhausted compute budget. Always a function where the server has it and throws when the app type lacks the capability, so feature-detect on `platform?.capabilities?.embeddings`. See `embeddings.md`. **2026.1.4+** |
-| `notify` | `async (username, message) => { id }` | Enqueue a push notification for delivery to a user's Informer GO devices. See [Using `notify()`](#using-notify). |
+| `notify` | `async (username, message) => { id, subscribed }` | Enqueue a push notification. On an origin-mode server it goes to the recipient's installed copy of this App (a PWA with notifications turned on); otherwise to their Informer GO phones. `subscribed: false` means they have nowhere to receive it. See [Using `notify()`](#using-notify). **2026.2.0+** for the installed-App delivery and `subscribed` |
 | `email` | `async (to, message) => { id }` | Enqueue an email for delivery via the tenant's mail transport. See [Using `email()`](#using-email). |
 | `crypto` | `object` | Cryptographic helpers (all async): `hmac`, `hash`, `randomUUID`, `randomBytes`, `timingSafeEqual`, `verifyHmac`, `encrypt`/`decrypt` (AES-256-GCM), `verify`. See [Using `crypto`](#using-crypto). |
 | `log` | `function` | Structured logging. `log(message, data?)` or `log.info()`/`log.warn()`/`log.error()`/`log.debug()`. Writes to `app_log`. See [Using `log()`](#using-log). |
@@ -486,16 +486,23 @@ Two sibling exports enrich the App's `openapi.json` contract — the document ot
 
 ## Using `notify()`
 
-Enqueue a push notification for delivery to a user's registered Informer GO devices. Messages are queued and delivered asynchronously via FCM. Returns immediately with the message ID. The app's ID is automatically attached — tapping the notification in GO opens this app.
+Enqueue a push notification. Returns immediately; delivery happens asynchronously. The notification carries this app's name, and tapping it opens this app, optionally deep-linking via `path`. Only users who can open the app receive it (**2026.2.0+**; older servers deliver to anyone named).
+
+Where it arrives depends on the server — read `platform.originMode` in the handler bag (`window.__INFORMER__.platform.originMode` on the page):
+
+- **Origin mode, 2026.2.0+:** the recipient's **installed** copy of this app — added to the Home Screen, or installed from the browser — with notifications turned on. Installing the app is how a user opts in, and the notification shows the app's own icon and name. A user who has not installed it and turned notifications on receives nothing, so check `subscribed` and fall back to `email()`.
+- **Path mode, or any server below 2026.2.0:** the recipient's Informer GO phones (FCM).
 
 ```javascript
 // Single notification
-export async function POST({ notify, request }) {
-    const { id } = await notify('jane', {
+export async function POST({ notify, email }) {
+    const { id, subscribed } = await notify('jane', {
         title: 'Order Shipped',
         body: 'Your order #1234 has shipped!',
         path: '/orders/1234'     // optional deep link within this app
     });
+    // === false, not !subscribed: below 2026.2.0 it is undefined
+    if (subscribed === false) await email('jane@acme.com', { subject: 'Order Shipped', html: '<p>Your order #1234 has shipped!</p>' });
     return { notificationId: id };
 }
 ```
@@ -503,10 +510,11 @@ export async function POST({ notify, request }) {
 **Bulk notifications** — pass an array to send multiple in a single call:
 
 ```javascript
-const { ids, queued } = await notify([
+const { ids, queued, unsubscribed } = await notify([
     { username: 'jane', title: 'Report Ready', body: 'Your Q1 report is ready' },
     { username: 'bob', title: 'Report Ready', body: 'Your Q1 report is ready' },
 ]);
+// unsubscribed: usernames with nowhere to receive it (2026.2.0+; absent below)
 ```
 
 **Parameters (single):**
@@ -516,12 +524,45 @@ const { ids, queued } = await notify([
 | `username` | string | Informer username to notify |
 | `message.title` | string | **Required.** Notification title |
 | `message.body` | string | Notification body text |
-| `message.path` | string | Deep link path within the app (e.g. `/orders/123`) |
-| `message.data` | object | Custom data (values coerced to strings for FCM) |
+| `message.path` | string | Deep link within the app (e.g. `/orders/123`). Resolves against this app's view URL on tap. |
+| `message.data` | object | Custom data (values coerced to strings). Keep it small: an installed app's notification must fit in about 4 KB. The keys `appId`, `appName` and `appPath` are the platform's — values the app sets for them are replaced or dropped, so deep-link with `path`, not `data.appPath`. |
 
 **Bulk:** Array of `{ username, title, body, path?, data? }` objects.
 
-Messages are retried up to 3 times on failure, then moved to `dead` status. Message history is viewable via `GET /api/apps/{id}/messages`.
+Messages are retried up to 3 times on failure, then moved to `dead` status. **2026.2.0+:** some failures go `dead` at once, since retrying cannot fix them — the recipient is not a user, their account is disabled, they cannot open the app, they have no device to receive it (`subscribed: false`), every device it was sent to is gone, or the notification was refused as too large. Message history is viewable via `GET /api/apps/{id}/messages`.
+
+### Helping users opt in (**2026.2.0+**, origin mode)
+
+**Declare it in `informer.yaml`** so the platform helps users opt in: Informer GO shows a bell in the app's title bar that walks them through installing it, and the installed app shows a banner ("Get notifications from {app}?" — Turn on / Not now) each time it opens while notifications are off, until the user turns them on or picks Not now. Older servers ignore the key.
+
+```yaml
+notifications: true
+# or keep the API and drop the banner, when the app offers its own button:
+notifications:
+  prompt: false
+```
+
+Any other value fails the deploy with a 400.
+
+**Your own button** — `window.__INFORMER__.notifications` (installed app only; call `enable()` from a click handler, since the browser asks for permission inside the user's gesture). Feature-detect it: below 2026.2.0 it does not exist.
+
+```javascript
+const n = window.__INFORMER__.notifications;
+const state = n ? await n.status() : 'unsupported';
+// 'not-installed' | 'unsupported' | 'blocked' | 'off' | 'on'
+if (state === 'off') {
+    button.onclick = async () => {
+        try { await n.enable(); } catch (err) { showError(err.message); }   // resolves the new status
+    };
+}
+// n.disable() turns them off again (resolves 'off')
+```
+
+`'not-installed'` means a browser tab or the app inside Informer GO — installing is the opt-in, so show install guidance there, not a button. Every method resolves `'unsupported'` on a path-mode server, and for sessions that act for someone else or have no Informer user to notify: a share link, an admin impersonating a user, and an app account's sign-in (`accounts:`). The installed app never subscribes on its own; on load it only repairs a subscription the browser already holds, so a user's "off" stays off.
+
+**An app that ships its own service worker** must add `importScripts('/_app/push-sw.js');` to it, or its worker replaces the platform's and notifications never show. The platform owns the app's push subscription: one the app makes itself, with its own VAPID key, is replaced the next time the app opens — always send through `notify()`.
+
+**Not emulated in dev.** Under `npm run dev`, `notify()` logs to the console and resolves `{ id }` with no `subscribed`, and `window.__INFORMER__.notifications` is absent, so the feature-detect above lands on `'unsupported'`. Test delivery on a deployed origin-mode server with the app installed.
 
 ## Using `email()`
 
