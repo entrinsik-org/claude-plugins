@@ -1,6 +1,6 @@
 ---
 name: magic-apps
-description: Building Informer Apps with local Vite development. Covers the dev/publish workflow, the centerpiece "Accessing Your Dependencies" model (typed slots + three patterns), and the orientation map for deeper topics (server routes, webhooks, persistence, declarative vector embeddings, widgets, copilot sidebar, event-driven AI agents, live broadcast channels over WebSockets (and messages back from the page: send(), joined, wildcards, replay), channel actors (one live, stateful sandbox per channel with a server-driven tick, for games and shared boards), staged uploads/downloads for files and large result sets (and forwarding them to integrations, transfer events, what a viewer has staged), PDF export, informer.yaml schema, app-to-app/pack API integration and openapi.json contracts, and the UI quality bar every screen must meet: mobile-first responsive layout, no layout shift, TanStack Query freshness after every action, sortable table headers, vertical rhythm, bright distinct icons with the full icon asset set) — each routes to a reference file under `references/` so the front door stays loadable on every trigger.
+description: Building Informer Apps with local Vite development. Covers the dev/publish workflow, the centerpiece "Accessing Your Dependencies" model (typed slots + three patterns), and the orientation map for deeper topics (server routes, GET-route response caching (config.cache, ETag/304), webhooks, persistence, declarative vector embeddings, widgets, copilot sidebar, event-driven AI agents, live broadcast channels over WebSockets (and messages back from the page: send(), joined, wildcards, replay), channel actors (one live, stateful sandbox per channel with a server-driven tick, for games and shared boards), staged uploads/downloads for files and large result sets (and forwarding them to integrations, transfer events, what a viewer has staged), PDF export, informer.yaml schema, app-to-app/pack API integration and openapi.json contracts, and the UI quality bar every screen must meet: mobile-first responsive layout, no layout shift, TanStack Query freshness after every action, sortable table headers, vertical rhythm, bright distinct icons with the full icon asset set) — each routes to a reference file under `references/` so the front door stays loadable on every trigger.
 ---
 
 # Informer App Development
@@ -29,6 +29,7 @@ This file is the orientation layer. Most topics have a dedicated reference under
 | User intent / signal | Load this file |
 |---|---|
 | Writing handlers under `server/`, working with `query` / `transaction` / `fetch` / `respond` / `notify` / `email` / `log` / `crypto` / base64 / markdown / `env` / `request` / sandbox constraints | `references/server-routes.md` |
+| Making a `GET` route cheaper or faster when it is read far more than its data changes — "cache", "ETag", "304", a polling dashboard, a catalog every page loads, a CDN in front of a public App; `config.cache` (`ttl` / `vary` / `tables` / `edge`), what invalidates it and what needs a `ttl` | `references/response-cache.md` |
 | Receiving external callbacks (Stripe, GitHub, Slack, Gmail push) under `webhooks/`, HMAC verification, signed `?token=` URLs | `references/webhooks.md` |
 | Storing app data — `migrations/`, dev-workspace lifecycle, `workspace:init` / `:migrate` / `:reset`, CRUD example | `references/persistence.md` |
 | Declaring embedding use cases under `embeddings/`, vector search over workspace data, `embed(name, text)`, chunking profiles, pgvector columns in app migrations | `references/embeddings.md` |
@@ -72,6 +73,7 @@ Customers run a spread of Informer versions, so every newer feature carries the 
 | Warehouse loads (`load()`, the run ledger, `schedule()`, streaming ingest) | 2026.2.0 | `references/warehouse-etl.md` |
 | `semantics.yaml` and the semantic registry | 2026.2.0 | `references/semantics.md` |
 | App accounts and public serving (`accounts:`, `public: true`, `/_auth/*`) | 2026.2.0 | `references/accounts-and-login.md` |
+| Response caching for `GET` routes (`config.cache`) | 2026.2.0 (I5-13259; older servers ignore the key and run the route uncached; the dev server never caches) | `references/response-cache.md` |
 
 Features not listed have no floor recorded here; where a reference states one inline (the `openapi.json` endpoint needs 2026.1.1, for example), that line wins.
 
@@ -760,6 +762,8 @@ Sandbox constraints: no Node APIs, no filesystem, no direct network — all I/O 
 
 Load `references/server-routes.md` for: full file-convention routing rules, every sandbox helper's calling shape and edge cases, return-value semantics, `respond()` early-ack pattern, `log()` levels and behavior, `notify()` / `email()` (single + bulk), `config.timeout` / `config.roles`, the full orders-API worked example.
 
+A `GET` route read far more often than its data changes can declare `export const config = { cache: true }` (2026.2.0+): repeat requests get `304 Not Modified` without the handler running, until a workspace write, deploy or env change. Load `references/response-cache.md` before declaring it: reads through `fetch()` / `context` slots need a `ttl`, and `tables` must list every table the handler reads.
+
 ## Webhooks — overview
 
 Apps can expose **token-gated external endpoints** under `webhooks/` for receiving callbacks from external services (Stripe, GitHub, Slack, Gmail push). Each URL embeds a signed `?token=` query parameter — unguessable, not anonymous. Handlers run as the app owner.
@@ -1259,6 +1263,7 @@ The orientation above points to each file; this is the canonical list of what's 
 | File | Covers |
 |---|---|
 | `references/server-routes.md` | `server/` handlers, full sandbox-helper reference (`query`, `transaction`, `fetch`, `respond`, `notify`, `email`, `log`, `crypto`, base64/markdown globals), `config.timeout` / `config.roles`, worked CRUD example |
+| `references/response-cache.md` | `config.cache` on `GET` routes — options (`ttl` / `vary` / `tables` / `edge`), what changes the `ETag` and what needs a `ttl`, never-tagged responses, the public-route store and overload `503`, CDN cache-key rules, verifying, the deploy partial failure, `app.responseCache` / `app.heldFiles` server settings |
 | `references/webhooks.md` | `webhooks/` handlers, signed `?token=` flow, HMAC verification (`crypto.verifyHmac`), how webhooks differ from server routes (inbound identity only — same handler bag) |
 | `references/persistence.md` | `migrations/`, dev workspace lifecycle, CRUD worked example |
 | `references/embeddings.md` | The `embeddings/` folder — declarative vector embeddings via the platform pump (`config` + `GET`/`POST` contract), revision/re-embed semantics, tombstoned failures, pgvector columns + `embed(name, text)` search, status/`_run` routes |
