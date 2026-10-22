@@ -551,7 +551,18 @@ dependencies:
     options:
       filter:
         sales_rep: $user.username        # Users only see their own records
+        status: [open, pending]          # Either value matches
 ```
+
+Each key is a dataset field and a row must match every key. How a key's value matches (**2026.1.5+**):
+
+- **One value** → rows where the field equals it (`term`).
+- **A multi-value user field** (stored as an array, e.g. `["Nursing","Pharmacy"]`) → rows equal to any element (`terms`). Text around the variable joins each element: `org-$user.custom.school` → `org-Nursing` or `org-Pharmacy`.
+- **A YAML list** is the any-of syntax. Variable entries add every value they hold: `school: [Shared, $user.custom.school]`. An entry that resolves to nothing adds nothing. Don't write an ES `terms:` block as the value; a mapping is not a filter value.
+- **An empty user field** (no value, `[]`, or `[null]` from a directory sync) falls back to the field's admin Default Value.
+- **Fails closed.** A key left with nothing to match on (its variable is unset with no default, a missing variable embedded in text like `org-$user.custom.dept`, missing credentials, an empty `''`/`[]` value, or a non-scalar value) injects `{ match_none: {} }`: the viewer gets zero rows from the slot, never everything the slot's `runAs` identity can read. A slot `filter:` that isn't a field map (including one left empty with nothing under it) fails the deploy; in a legacy `access.datasets` entry it injects a single `match_none`. `$env.*` is not resolved in dataset filters, so it always matches no rows. Make sure every user who opens the app has a value, or give the field a Default Value.
+
+Older releases drop the clause for an unset variable (the viewer sees every row) and stringify arrays to `"Nursing,Pharmacy"` (matching nothing). Floor the app with `requires:` if it relies on either behavior above.
 
 ## Integration with Credentials
 
@@ -577,9 +588,15 @@ dependencies:
 | `$user.username` | Login name |
 | `$user.email` | Email address |
 | `$user.displayName` | Full name |
-| `$user.custom.xxx` | Custom user field |
+| `$user.custom.xxx` | Custom user field, or its Default Value when the user has none |
 | `$tenant.id` | Tenant ID |
-| `$report.id` | App UUID |
+| `$tenant.name` | Tenant display name |
+| `$app.id` | App UUID |
+| `$app.name` | App display name |
+| `$app.naturalId` | App natural id (`owner:slug`) |
+| `$app.owner` | App owner (principal id) |
+
+Any other `$user.*` / `$tenant.*` / `$app.*` path doesn't resolve: it becomes `''` in a header or param and matches no rows in a dataset filter. `$report.*` is not a variable namespace at all and stays literal text; use `$app.*`.
 
 ## Resource Types
 

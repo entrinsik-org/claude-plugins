@@ -266,6 +266,8 @@ dependencies:
         owner: $user.username
 ```
 
+A multi-value user field or a YAML list matches any of its values; a key whose variable resolves to nothing matches no rows. See `informer-yaml.md` "With Row-Level Security" for the full rules.
+
 ### Integration Credentials
 
 ```yaml
