@@ -29,11 +29,9 @@ This file is the orientation layer. Most topics have a dedicated reference under
 
 | User intent / signal | Load this file |
 |---|---|
-| Writing handlers under `server/`, working with `query` / `transaction` / `fetch` / `respond` / `notify` / `email` / `log` / `crypto` / base64 / markdown / `env` / `request` / sandbox constraints | `references/server-routes.md` |
-| Receiving external callbacks (Stripe, GitHub, Slack, Gmail push) under `webhooks/`, HMAC verification, getting a webhook URL (minting/revoking webhook tokens, `401 Webhook token …` errors) | `references/webhooks.md` |
 | Writing handlers under `server/`, working with `query` / `transaction` / `fetch` / `respond` / `notify` / `email` / `log` / `crypto` / base64 / markdown / `env` / `request` / sandbox constraints; push notifications and their opt-in — "notify users", "push", "turn on notifications", `notifications:` in informer.yaml, `__INFORMER__.notifications`, an app service worker | `references/server-routes.md` |
 | Making a `GET` route cheaper or faster when it is read far more than its data changes — "cache", "ETag", "304", a polling dashboard, a catalog every page loads, a CDN in front of a public App; `config.cache` (`ttl` / `vary` / `tables` / `edge`), what invalidates it and what needs a `ttl` | `references/response-cache.md` |
-| Receiving external callbacks (Stripe, GitHub, Slack, Gmail push) under `webhooks/`, HMAC verification, signed `?token=` URLs | `references/webhooks.md` |
+| Receiving external callbacks (Stripe, GitHub, Slack, Gmail push) under `webhooks/`, HMAC verification, getting a webhook URL (minting/revoking webhook tokens, `401 Webhook token …` errors) | `references/webhooks.md` |
 | Storing app data — `migrations/`, dev-workspace lifecycle, `workspace:init` / `:migrate` / `:reset`, CRUD example | `references/persistence.md` |
 | Declaring embedding use cases under `embeddings/`, vector search over workspace data, `embed(name, text)`, chunking profiles, pgvector columns in app migrations | `references/embeddings.md` |
 | Building or polishing any screen — the mobile modes (inside Informer GO, home-screen tile, browser tab, widget card) and the screen-by-screen phone layout pass, dialogs that shift, skeletons, stale UI after an action (empty states, dropdowns, counts), TanStack Query, sortable tables / AG Grid, spacing and vertical rhythm, icon brightness and the home-screen/PWA icon set; also when to load the `frontend-design` plugin | `references/ui-quality.md` |
