@@ -97,7 +97,7 @@ A `Cache-Control` the handler sets itself is kept on the `200`; otherwise a tagg
 - **Add `ttl`** for any slot/`fetch()`/time dependency. Pick the staleness the screen can tolerate, not the shortest possible.
 - **`edge`** only for a public App whose anonymous traffic is large enough to want a CDN, and only for answers that may lag by `edge` seconds: a CDN cannot be invalidated.
 
-Do not use caching in place of client freshness: after a mutation the page must still invalidate its TanStack Query keys (`ui-quality.md`). The refetch is what will be cheap now. A run that may have written waits until its writes are recorded before each `broadcast()` and before it answers, so the caller's refetch, and a channel subscriber's refetch on the event (`channels.md`), never get a `304` for the old data. Don't add cache-busting query parameters.
+Do not use caching in place of client freshness: after a mutation the page must still invalidate its TanStack Query keys (`ui-quality.md`). The refetch is what will be cheap now. A run that may have written waits until its writes are recorded before each `broadcast()` and before it answers, so the caller's refetch, and a channel subscriber's refetch on the event (`channels.md`), get a `304` for the old data only if recording those writes takes longer than the one-second wait cap, which is rare. Don't add cache-busting query parameters.
 
 ## In the browser
 
