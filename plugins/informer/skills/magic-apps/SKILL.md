@@ -1,6 +1,6 @@
 ---
 name: magic-apps
-description: Building Informer Apps with local Vite development. Covers the dev/publish workflow, the centerpiece "Accessing Your Dependencies" model (typed slots + three patterns), and the orientation map for deeper topics (server routes, GET-route response caching (config.cache, ETag/304), push notifications to the installed app and their opt-in, webhooks, persistence, declarative vector embeddings, widgets, embedded AI copilots built into the App's own UI (and moving off the legacy `openChat()` / `registerTool()` / `showCopilot()` GO sidebar calls), event-driven AI agents, live broadcast channels over WebSockets (and messages back from the page: send(), joined, wildcards, replay), channel actors (one live, stateful sandbox per channel with a server-driven tick, for games and shared boards), staged uploads/downloads for files and large result sets (and forwarding them to integrations, transfer events, what a viewer has staged), command-line commands people run with `inf` (the `cli/` folder, sessions that work in the person's own folders, `--watch`, CI with an App API key) and signing in with the Informer CLI instead of a `.env`, PDF export, informer.yaml schema, app-to-app/pack API integration and openapi.json contracts, and the UI quality bar every screen must meet: mobile-first responsive layout, no layout shift, TanStack Query freshness after every action, sortable table headers, vertical rhythm, bright distinct icons with the full icon asset set) — each routes to a reference file under `references/` so the front door stays loadable on every trigger.
+description: Building Informer Apps with local Vite development. Covers the dev/publish workflow, the centerpiece "Accessing Your Dependencies" model (typed slots + three patterns), and the orientation map for deeper topics (server routes, GET-route response caching (config.cache, ETag/304), push notifications to the installed app and their opt-in, webhooks, persistence, declarative vector embeddings, widgets, embedded AI copilots built into the App's own UI (and moving off the legacy `openChat()` / `registerTool()` / `showCopilot()` GO sidebar calls), event-driven AI agents, live broadcast channels over WebSockets (and messages back from the page: send(), joined, wildcards, replay), channel actors (one live, stateful sandbox per channel with a server-driven tick, for games and shared boards), staged uploads/downloads for files and large result sets (and forwarding them to integrations, transfer events, what a viewer has staged), command-line commands people run with `inf` (the `cli/` folder, sessions that work in the person's own folders, `--watch`, interactive terminal views such as boards and dashboards, CI with an App API key) and signing in with the Informer CLI instead of a `.env`, PDF export, informer.yaml schema, app-to-app/pack API integration and openapi.json contracts, and the UI quality bar every screen must meet: mobile-first responsive layout, no layout shift, TanStack Query freshness after every action, sortable table headers, vertical rhythm, bright distinct icons with the full icon asset set) — each routes to a reference file under `references/` so the front door stays loadable on every trigger.
 ---
 
 # Informer App Development
@@ -78,7 +78,7 @@ Customers run a spread of Informer versions, so every newer feature carries the 
 | `semantics.yaml` and the semantic registry | 2026.2.0 | `references/semantics.md` |
 | App accounts and public serving (`accounts:`, `public: true`, `/_auth/*`) | 2026.2.0 | `references/accounts-and-login.md` |
 | App CLI: `cli/` commands, sessions on the person's folders, `--watch`, `reply()`, `follow()`, `client.display`, interactive views, App API keys for CI | 2026.2.0 (I5-13206; detect `platform?.capabilities?.cli`; deploy needs plugin 2.14.0+, which uploads `cli/`; `npm run dev` does not run commands) | `references/cli.md` |
-| Signing in with the Informer CLI (`inf login`) instead of a `.env` for `npm run dev` / `npm run deploy`; `inf deploy`; `informer-init` writes no `.env` | plugin 2.14.0 (I5-13206; `inf deploy` and the `develop` sign-in need a 2026.2.0 server) | this file, Development Mode |
+| Signing in with the Informer CLI (`inf login`) instead of a `.env` for `npm run dev` / `npm run deploy`; `inf deploy`; `informer-init` writes no `.env` | 2026.2.0 server + plugin 2.14.0 (I5-13206; the `cli` / `develop` sign-in scopes are new in 2026.2.0 — below it, copy `.env.example` to `.env` and fill it in) | this file, Development Mode |
 | `GET /api/permissions?group=apps` answers `deploy`: whether the signed-in person can deploy an app of their own | 2026.2.0 (I5-13206) | this file, Deploying |
 | Push notifications to the installed app (Web Push on origin-mode servers), `notifications:` opt-in, `__INFORMER__.notifications`, `notify()` → `subscribed` / `unsubscribed`, only users who can open the app receive them | 2026.2.0 (I5-13207; below it `notify()` reaches Informer GO phones only) | `references/server-routes.md`, `references/informer-yaml.md` |
 | Response caching for `GET` routes (`config.cache`) | 2026.2.0 (I5-13259; older servers ignore the key and run the route uncached; the dev server never caches) | `references/response-cache.md` |
@@ -132,7 +132,8 @@ npm install -D @entrinsik/vite-plugin-informer@latest
 npx informer-init
 
 # 4. Sign in once, if `inf auth token --json` doesn't already print a
-#    sign-in for the right server. dev and deploy use it (plugin 2.14.0+).
+#    sign-in for the right server. dev and deploy use it (plugin 2.14.0+,
+#    2026.2.0+ server; below it, copy .env.example to .env and fill it in).
 npm install -g @entrinsik/informer-cli
 inf login acme.informer.cloud
 ```
@@ -166,7 +167,7 @@ Init also:
 - **Generates a UUID for `informer.id`** and writes it to `package.json` immediately — used by `npm run deploy` to create or address the app on the server. Don't set it manually.
 - Updates `.gitignore` to exclude `.env`
 
-There is no `.env` to fill in: the person's `inf` sign-in is the credential, so the project folder holds no key and can be pushed as it is. A `.env` is still honored and wins when it sets `INFORMER_URL` with `INFORMER_API_KEY` (or `INFORMER_USER` / `INFORMER_PASS`) — for a server the person has no `inf` sign-in for, or CI. Plugin releases before 2.14.0 write a `.env` with a placeholder `http://localhost:3000` and have no sign-in fallback, so there the `.env` must be filled in before `npm run dev`.
+There is no `.env` to fill in: the person's `inf` sign-in is the credential, so the project folder holds no key and can be pushed as it is. **The `inf` sign-in needs a 2026.2.0+ server** (its `cli` / `develop` scopes are new there); below it, copy `.env.example` to `.env` and fill in `INFORMER_URL` plus a key or a password. A `.env` is still honored and wins when it sets `INFORMER_URL` with `INFORMER_API_KEY` (or `INFORMER_USER` / `INFORMER_PASS`) — for a server the person has no `inf` sign-in for, or CI. Plugin releases before 2.14.0 write a `.env` with a placeholder `http://localhost:3000` and have no sign-in fallback, so there the `.env` must be filled in before `npm run dev`.
 
 > **`public/favicon.svg` is not created by init.** It's a recommended addition — 512×512, duotone — and gets deployed to the app's library root as the gallery/tab icon. Add it yourself or ask Claude to generate one.
 
@@ -237,7 +238,7 @@ INFORMER_USER=admin
 INFORMER_PASS=yourpassword
 ```
 
-Below plugin 2.14.0 there is no sign-in fallback: one of these `.env` blocks is required.
+Below plugin 2.14.0, or against a server below **2026.2.0** (it has no `cli` / `develop` sign-in scopes, so `inf login` cannot work there), there is no sign-in fallback: one of these `.env` blocks is required.
 
 If your app uses persistence (see `references/persistence.md`), you'll also have:
 ```
@@ -285,7 +286,7 @@ Builds your project and uploads to Informer:
 
 **`inf deploy`** (plugin 2.14.0+, 2026.2.0 servers) is the same deploy, run from the app folder against the server `inf` is signed in to: it says where it will deploy and whether it updates an existing app, asks first (`--yes` in a script, and outside a terminal, which includes Claude Code's `!` commands), then builds and runs `informer-deploy`. `inf publish` deploys, then publishes to the marketplace from that server.
 
-**Who can deploy.** A deploy creates a Magic App, which takes **Admin in a team**, and an `inf` sign-in reaches the API for deploys (the `develop` scope) only while the person may mint API keys — API Token Creation, or Publisher in a team, which a team Admin is. So a team Admin can do both, on a server licensed for Magic Apps. On 2026.2.0+ ask before building: `GET /api/permissions?group=apps` answers `deploy: true` when all of it holds. `inf whoami --json` (Informer CLI 2.0.0-beta.0+) says which server and user `inf` is signed in as and whether that sign-in carries `develop` (`canDeploy`); `inf status` checks the server, the sign-in, tab completion and PATH, exiting 1 on a problem. A sign-in without `develop` makes `inf login` say so and `inf deploy` refuse; after an administrator grants it, `inf login` again. After a deploy, `inf open <owner:slug>` opens the app in the person's browser.
+**Who can deploy.** A deploy creates a Magic App, which takes **Admin in a team**, and an `inf` sign-in reaches the API for deploys (the `develop` scope) only while the person may mint API keys — API Token Creation, or Publisher in a team, which a team Admin is. So a team Admin can do both, on a server licensed for Magic Apps. On 2026.2.0+ ask before building: `GET /api/permissions?group=apps` answers `deploy: true` when all of it holds. `inf whoami --json` (Informer CLI 2.0.0-beta.0+) says which server and user `inf` is signed in as and whether that sign-in carries `develop` (`canDeploy`); `inf status` checks the server, the sign-in, tab completion and PATH, exiting 1 on a problem. A sign-in without `develop` makes `inf login` say so and `inf deploy` refuse; after an administrator grants it, `inf login` again. After a deploy, `inf open <owner:slug>` opens an app that has `cli/` commands in the person's browser (it finds the app among those with commands, so any other answers "No app called … is shared with you"); any app opens at `/api/apps/{owner}:{slug}/view`.
 
 ### Package.json Configuration
 
@@ -1218,7 +1219,7 @@ Load `references/mcp.md` for: the `mcp/` vs `tools/` decision in depth (includin
 
 ## CLI commands — overview
 
-An app with a **`cli/` directory** has commands people run from their terminal with the Informer CLI (`inf`), as themselves (2026.2.0+; plugin 2.14.0+ deploys the folder; `npm run dev` doesn't run them). The file contract is the `mcp/` one — `description`, `schema`, `handler` — plus `export const cli` for positional arguments and listing; the path is the command (`cli/retro/add.js` → `inf my-app retro add`), and the schema becomes typed flags, validated on the server before anything runs.
+An app with a **`cli/` directory** has commands people run from their terminal with the Informer CLI (`inf`), as themselves (2026.2.0+; plugin 2.14.0+ deploys the folder; `npm run dev` doesn't run them). The file contract is the `mcp/` one — `description`, `schema`, `handler` — plus `export const cli` for positional arguments and listing; the path is the command (`cli/retro/add.js` → `inf my-app retro add`), and the schema becomes typed flags. **Only the CLI checks arguments against the schema**; a call from `curl` or a script reaches the handler as sent, so the handler checks what it relies on.
 
 ```javascript
 // cli/move.js — inf my-app move I5-12 Done
@@ -1232,15 +1233,12 @@ export const cli = { positional: ['key', 'column'] };
 
 export async function handler({ args, query, reply }) {
     const [issue] = await query('UPDATE issues SET col = $2 WHERE key = $1 RETURNING key, col', [args.key, args.column]);
+    if (!issue) throw new Error(`No issue ${args.key}`);
     return reply(`Moved ${issue.key} to ${issue.col}.`, issue);   // a terminal sees the sentence, a pipe the JSON
 }
 ```
 
-A command whose schema has a folder argument (`{ type: 'string', format: 'directory', access: 'read' | 'write' | 'mirror' }`) runs as a **session**: its `client` lists, reads, writes and (with `mirror`) deletes files in the folder the person named, asks questions, draws progress or a live `client.display(tree)`, with the CLI checking every path on the real disk. `export const watch` plus `added` / `changed` / `removed` keeps a folder in step under `--watch`. `confirm` and `roles` gate a command; `complete()` feeds tab completion. People sign in with `inf login`, and `inf install owner:slug name` gives an app a command of its own with a sign-in for that app alone; CI uses an App API key with **Runs CLI commands** on.
-
-A file that exports **`render`** instead of `handler` is a **view**: a screen the person drives with keys, such as a board or a dashboard. The CLI keeps its state; each key (`actions.<name>`), each broadcast on `view.follow` (`event`) and each placeholder (`loaders.<name>`) is one short run that answers the next state and frame, so nothing is held on the server between keys and a view can stay open all day. Choose a session when the work is a script with an end ("then"); choose a view when the person decides what happens next ("whenever").
-
-Load `references/cli.md` for: the five shapes of command and how to choose, the full file contract and its deploy warnings, schema → arguments (files, stdin, reserved flag names), the CLI-only bag (`run.client`, `run.timeZone`, `reply()`, `follow()`, `client`), sessions and folder access in depth, `--watch`, the building blocks a terminal draws, views (`render`, `init`, `actions`, `event`, `loaders`, `view.follow`), output and `--json`, who a command runs as, limits and billing, choosing between `cli/`, `mcp/` and `server/`, and the three lines to give people.
+Load `references/cli.md` for: the five shapes of command and how to choose (plain, follow, a **session** whose `client` works in the person's folders, `--watch`, and a **view** — a board or dashboard the person drives with keys), the full file contract and its deploy warnings, schema → arguments, the CLI-only bag (`run.client`, `run.timeZone`, `reply()`, `follow()`, `client`), the building blocks a terminal draws, output and `--json`, who a command runs as (`inf login`, `inf install`, App API keys for CI), limits and billing, choosing between `cli/`, `mcp/` and `server/`, and the three lines to give people.
 
 ## PDF Export
 

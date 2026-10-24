@@ -17,7 +17,7 @@ my-app/
     releases/index.js     → inf my-app releases
 ```
 
-Path segments become the words a person types; `index.js` names its folder. Words are lowercase letters, digits and single dashes (`on-duty`). A `[param]` segment fails the deploy — arguments come from the schema. Two files naming the same command fail it too, and so does a command that is also the first words of another (`retro` and `retro add`): the CLI could not tell the command `retro add` from `retro` given the argument "add".
+Path segments become the words a person types; `index.js` names its folder. Words are lowercase letters, digits and single dashes (`on-duty`). A `[param]` segment fails the deploy — arguments come from the schema. Two files naming the same command fail it too, and so does a command that is also the first words of another (`retro` and `retro add`): the CLI could not tell the command `retro add` from `retro` given the argument "add". A `.js` file that exports neither `handler` nor `render` is a helper, not a command, and is skipped; any other kind of file in `cli/` draws a deploy warning, since nothing serves or imports it there.
 
 ## Five shapes of command
 
@@ -67,15 +67,15 @@ export async function handler({ args, query, run, reply }) {
 
 `inf my-app move I5-12 Done --note "shipped"` runs it. `inf my-app` lists the commands by group, and `inf my-app move --help` prints the usage line, the description and each argument from the schema.
 
-The scanner reads `description`, `schema`, `cli`, `watch`, `confirm` and `roles` **from the file's own source, each on its own**: they must be literals, not names imported or defined elsewhere in the file (a `ReferenceError` in the deploy warning means exactly this). `handler` may be re-exported (`export { handler } from '../mcp/move_issue.js'`), which is how one function serves both an MCP tool and a command.
+The scanner reads `description`, `schema`, `cli`, `watch`, `view`, `confirm` and `roles` **from the file's own source, each on its own**: they must be literals, not names imported or defined elsewhere in the file (a `ReferenceError` in the deploy warning means exactly this). `handler` may be re-exported (`export { handler } from '../mcp/move_issue.js'`), which is how one function serves both an MCP tool and a command.
 
 ### `export const cli`
 
 | Key | Value | Effect |
 |---|---|---|
 | `positional` | `['key', 'column']` | Schema properties typed in order without a flag. A last entry ending `...` (`'files...'`) takes every remaining word and must be an `array` property. Anything not listed is a flag. |
-| `group` | `'Issues'` | Heading the command is listed under; ungrouped commands come first. |
-| `order` | number | Order within the listing; equal or missing orders sort alphabetically. |
+| `group` | `'Issues'` | Heading the command is listed under; ungrouped commands come first, then each group where its first command falls. |
+| `order` | number | Commands with an `order` come first, lowest first; ties and commands without one follow alphabetically. |
 | `output` | `'table'` / `'markdown'` / `'text'` / `'json'` | How a terminal shows the result. Without it the shape decides (below). `markdown` lays a string out as a page — headings, lists, tables, links — and stays markdown in a pipe. |
 | `columns` | `['key', 'title', 'col']` | Which fields a table shows, in order. |
 | `session` | `true` | Run as a session (below) though the source shows no `client` call — for a handler that passes the whole bag to a helper. |
@@ -89,7 +89,7 @@ export const confirm = true;              // asks "…?" first; scripts need --y
 export const roles = ['ops', 'admin'];    // app roles allowed to see and run it
 ```
 
-Both are read as literals, never evaluated, so they cannot be computed. `confirm` must be `export const confirm = true` (or `false`); any other spelling deploys as `true` with a warning — the author reached for the gate, so the strict reading wins. A command with `roles` is hidden from, and refused (`403 cli_role_required`) to, anyone holding none of them; an app's owners (Publisher+) hold every role. A `roles` list the scanner cannot read closes the command to everyone until it is fixed, and deploy warns about a role `informer.yaml` does not define.
+Both are read as literals, never evaluated, so they cannot be computed. `confirm` must be `export const confirm = true` (or `false`); any other spelling deploys as `true` with a warning — the author reached for the gate, so the strict reading wins. A command with `roles` is hidden from, and refused (`403 cli_role_required`) to, anyone holding none of them; an app's owners (Publisher+) hold every role the app defines. A `roles` list the scanner cannot read closes the command to everyone until it is fixed, and deploy warns when **none** of the listed roles is defined in `informer.yaml`, since then no one can run it (one undefined role beside a defined one draws no warning).
 
 ### Tab completion: `complete`
 
@@ -105,7 +105,9 @@ Runs with the handler bag when someone presses Tab on an argument: `arg` is the 
 
 ## Arguments
 
-The CLI turns what was typed into an object shaped by `schema`, and the server validates it with the full JSON Schema before anything runs (`400 cli_invalid_args`, one line per problem). So `required`, `enum`, `minimum` and `additionalProperties: false` are real checks, and `description` is the help text. `pattern` and `patternProperties` are **not** checked on the server (a regular expression run against what the caller typed could stall it), and deploy warns when a schema has one: check those in the handler.
+The CLI turns what was typed into an object shaped by `schema`, checks it against the whole schema before it sends anything (ajv; draft-07 unless `$schema` names 2019-09 or 2020-12) and fills `default`s, nested ones too. Failures print under "Invalid arguments for …", one line per problem, and exit 2. `description` is the help text, and `format` is never a validation.
+
+**The server does not check the schema.** A call that skips the CLI — `curl`, a script or CI against the run route — reaches the handler as sent, with only top-level `default`s filled; the server refuses nothing but arguments nested more than 32 levels deep (`400 cli_invalid_args`). So `required`, `enum`, `minimum` and `additionalProperties: false` are a convenience for people at a terminal, not a guard: **check in the handler whatever it relies on**, as an `mcp/` tool does.
 
 | Schema | Typed as |
 |---|---|
@@ -147,7 +149,7 @@ Return a value and the CLI prints it. In a terminal the shape picks the form unl
 | `null` / `undefined` | nothing |
 | a `downloads` handle | the file: saved under its filename (never over an existing file, and never a dot-file name the person didn't type), to `--out`, or to stdout when piped. It must be a handle `downloads.create()` made in this app for this caller: the server rebuilds it from its record, and a handle written by hand fails the run (`400 cli_bad_download`) |
 
-Piped or with `--json`, everything is JSON, so `inf my-app mine | jq` always works; a string prints as it is, so `inf my-app report > report.md` writes the text. Throwing fails the run (`422 cli_command_failed`) with your message as the error; make it say what to do. A run past its time limit answers `504 cli_timeout`, and one that failed outside your code (the app's database unreachable, say) answers `500 cli_platform_error` with a reference for an administrator, never the platform's own error text.
+Piped or with `--json`, everything is JSON, so `inf my-app mine | jq` always works; a string prints as it is, so `inf my-app report > report.md` writes the text. Throwing fails the run (`422 cli_command_failed`) with your message as the error; make it say what to do. A run past its time limit answers `504 cli_timeout`, and one that failed outside your code (the app's database unreachable, say) answers `500 cli_platform_error` with a reference for an administrator, never the platform's own error text. Before anything runs, a paid marketplace app whose license lapsed past its grace period is refused on runs, sessions and completions (`402 cli_license_lapsed`), and a session over a connection whose sign-in was revoked since — an install revoked, `inf logout`, an App API key deleted — is refused (`401 cli_signin_revoked`; a run already going finishes).
 
 ## Sessions: working in the person's folders
 
@@ -190,12 +192,12 @@ export async function handler({ args, query, downloads, client, reply }) {
 | `write` | also `files.write`: create and replace files |
 | `mirror` | also `files.remove`: delete files — for a command that keeps a folder identical to the app |
 
-A folder without a valid `access` deploys read-only with a warning; `access` on anything that is not `format: 'directory'` does nothing. The CLI resolves the folder to an absolute path before the run, so `args.folder` is that path: build file paths from it. Every call names a path, checked on the server against the folders and levels the command declares and checked again by the CLI against the real disk after symlinks, so a handler can never reach outside what was named.
+A folder without a valid `access` deploys read-only with a warning; `access` on anything that is not `format: 'directory'` does nothing and draws a deploy warning. The CLI resolves the folder to an absolute path before the run, so `args.folder` is that path: build file paths from it. Every call names a path, checked on the server against the folders and levels the command declares and checked again by the CLI against the real disk after symlinks, so a handler can never reach outside what was named.
 
 What naming a folder does **not** consent to, enforced by the CLI:
 
 - **Replacing** an existing file asks once per folder at a terminal, and needs `--overwrite` in a script. **Deleting** asks the same way and needs `--delete`, so raising a command to `mirror` in a later deploy cannot delete through a script's standing `--overwrite`.
-- **Hidden entries** (a name starting with `.`, at any depth) are left out of listings and refused unless the person passes `--hidden`: a project folder holds `.env` and `.git`.
+- **Hidden entries** (a name starting with `.`, at any depth) are left out of listings and refused unless the person passes `--hidden`: a project folder holds `.env` and `.git`. The platform's private folder directly under home counts as hidden too: `Library` on macOS, `AppData` on Windows.
 - The filesystem root is never a folder, and a home folder only ever to read.
 
 ### `client`
@@ -204,7 +206,7 @@ What naming a folder does **not** consent to, enforced by the CLI:
 |---|---|
 | `client.files.list(folder, { glob?, hash? })` | `[{ path, name, size, mtime, hash? }]` — files under the folder, recursively, `name` relative to it with `/` separators. `glob` filters (`*.md`, `**/*.csv`); `hash: true` adds a SHA-256 to compare with what the app holds. Symlinks are skipped; more than 10,000 matches is refused — narrow with a glob. |
 | `client.files.read(path)` | an upload handle (`text()`, `json()`, `copyInto(table)`, …, `streams.md`). The bytes are staged, never sent over the socket, and the upload is discarded when the run ends — store what you need before returning. |
-| `client.files.text(path, encoding?)` | the file's text, releasing its upload at once. Use it to read many files in one run. |
+| `client.files.text(path, encoding?)` | the file's text, releasing its upload at once. Use it to read many files in one run. Like an upload's `text()`, it reads at most **10 MB**. |
 | `client.files.write(path, download)` | writes a finished `downloads` handle (`await dl.end()`) to `path`, creating folders. Only a handle `downloads.create()` made in this run's app for this caller (`cli_bad_download` otherwise): the server rebuilds it, so a URL you put on it is never what the CLI fetches. |
 | `client.files.remove(path)` | deletes a file (`mirror` only). |
 | `client.prompt({ name, message, choices?, default? })` | the person's answer, as a string. In a script `--answer name=value` answers it; with no terminal and no answer it takes `default`, else the call fails naming the `--answer` to pass. Give every prompt a `name`. |
@@ -212,7 +214,7 @@ What naming a folder does **not** consent to, enforced by the CLI:
 | `client.log(text)` | prints a line on the person's terminal. |
 | `client.display(tree)` | draws a live region from building blocks (below) and answers `{ show(tree), update(id, node) }` to change it. It only shows — for a status panel while the handler works. When the run ends the last frame stays; piped, only that frame prints; with `--json`, one `{"view": tree}` line per change. |
 
-A refused call throws with `err.code`: `cli_access_denied` (outside the folders or above their level), `cli_not_found`, `cli_no_terminal`, `cli_bad_answer`, `cli_list_too_long`, `cli_view_too_large` (a tree over 256 KB of JSON), `cli_view_unknown_node` (`update` of an id the tree lacks). Ctrl-C or a dropped connection fails waiting calls within a second and stops the run, which is recorded as failed — the work and its billing stop with it.
+A refused call throws with `err.code`: `cli_access_denied` (outside the folders or above their level), `cli_hidden` (a hidden entry without `--hidden`), `cli_overwrite_required` / `cli_delete_required` (a script without `--overwrite` / `--delete`), `cli_change_declined` (the person said no), `cli_not_found`, `cli_not_a_file`, `cli_bad_download` (`files.write` given a handle that isn't this run's), `cli_no_terminal`, `cli_bad_answer`, `cli_list_too_long`, `cli_too_many_calls` (more than 8 waiting at once — await each), `cli_call_timeout` (no answer within 10 minutes), `cli_disconnected`, `cli_view_too_large` (a tree over 256 KB of JSON), `cli_view_unknown_node` (`update` of an id the tree lacks). Once the app's compute budget is spent, the next call throws `402 cli_budget_exhausted` (below). Ctrl-C or a dropped connection fails waiting calls within a second and stops the run, which is recorded as failed — the work and its billing stop with it.
 
 ### Keeping a folder in step: `watch`
 
@@ -346,13 +348,13 @@ Every export also gets the handler bag (`query`, `run`, `broadcast`, `client`, �
 The person who ran it, signed in through `inf`: every query, `context` call and `fetch` is theirs, and `run.roles` are their app roles from the share. They see only the apps shared with them and only the commands their roles allow.
 
 - **`inf login <server>`** signs a person in. **`inf install <owner:slug> <name>`** gives an app a command of its own (`name move I5-1 Done`) with a sign-in bound to that one app: a token that can reach nothing else, kept apart from their `inf` sign-in. In an app's own instructions, tell people the `inf install` line, by the app's natural id (`owner:slug`), not its UUID. The install is bound to the app it was made for: if that app is deleted and deployed again as a new one, the old install's sign-in is refused ("isn't shared with you"), so `inf uninstall <name>` and install again.
-- **Scripts and CI:** an **App API key** with **Runs CLI commands** on (App Admin → API Keys) signs `inf` in from the environment — `INFORMER_URL` plus `INFORMER_TOKEN=<key>`. It reaches this app's commands and nothing else, runs as the key's owner, and the key's roles cap theirs. In a script, `--yes`, `--overwrite`, `--delete` and `--answer` replace the questions a terminal would ask.
+- **Scripts and CI:** an **App API key** with **Runs CLI commands** on (App Admin → **API Docs** → **New key**; the switch cannot be combined with **Read-only** or **Public routes only**) signs `inf` in from the environment — `INFORMER_URL` plus `INFORMER_TOKEN=<key>`. It reaches this app's commands and nothing else, runs as the key's owner, and the key's roles cap theirs. In a script, `--yes`, `--overwrite`, `--delete` and `--answer` replace the questions a terminal would ask.
 - Every run is recorded with who ran it, the arguments, the result or error and the time taken. A view records its opening, keyed actions and events; a selection moving and a placeholder loading happen on every arrow key, so they are recorded only when they fail. App Admin's **CLI** tab lists each command with its 30-day runs and failures, the latest runs, the copyable install and sign-in steps for that server, and who installed the app's commands, with revoke.
 
 ## Limits and billing
 
-- A plain run has the sandbox's **30 seconds**. A session run may last **30 minutes** (`app.cli.sessionMaxMs`), one `client` call **10 minutes** including a prompt waiting on the person (`clientCallTimeoutMs`), with **8** calls open at once (`maxPendingCalls`), and one CLI connection may hold **8** sessions at once (`maxSessionsPerSocket`, `429 cli_too_many_sessions` past it). A view has no limit on how long it stays open: nothing runs between its steps.
-- Runs (and tab completions) are billed as app compute and refused (`402 cli_budget_exhausted`) once the app's compute budget is spent; a session's time waiting on the terminal is billed as memory held, like an idle channel actor (`app.cli.idleCreditsPerGbHour`). A view's every step is a short run, billed as one (about 60 ms to start, plus its queries), and idle time costs nothing.
+- A plain run has the sandbox's **30 seconds**. A session run may last **30 minutes** (`app.cli.sessionMaxMs`), one `client` call **10 minutes** including a prompt waiting on the person (`clientCallTimeoutMs`), with **8** calls open at once (`maxPendingCalls`), and one person may have **16** session runs of one app open at once on a server, across all their terminals (`app.cli.maxSessionsPerUser`, `429 cli_too_many_sessions` past it). A view has no limit on how long it stays open: nothing runs between its steps.
+- Runs (and tab completions) are billed as app compute and refused (`402 cli_budget_exhausted`) once the app's compute budget is spent. A session already going is checked again before its `client` calls (at most every 5 seconds) and once the budget is spent, that call and every later one throws `402 cli_budget_exhausted`. The handler cannot turn it into another error: a run that fails after it answers that 402, whatever it threw. A session's time waiting on the terminal is billed as memory held, like an idle channel actor (`app.cli.idleCreditsPerGbHour`). A view's every step is a short run, billed as one, and idle time costs nothing.
 - **A view's cost grows with the people watching it.** Each open view renders for its own person, so one broadcast to a channel with 50 open views is 50 runs. Batching makes a burst one run per view, not one per change; for many viewers keep `render` cheap, and push slow parts into loaders.
 - Commands are a person's tool. For data another program reads on a schedule, a server route with an App API key (`server-routes.md`) is still the contract to build.
 
@@ -361,7 +363,7 @@ The person who ran it, signed in through `inf`: every query, `context` call and 
 | | `cli/` | `mcp/` | `server/` |
 |---|---|---|---|
 | Caller | a person at a terminal, or their script | an outside AI client's model | the app's pages, or another program over HTTP |
-| Arguments | typed words, checked against `schema` | the model's JSON, checked against `schema` | `request.body` / `query` / `params` |
+| Arguments | typed words, checked against `schema` by the CLI only — the handler checks what it relies on | the model's JSON, as sent | `request.body` / `query` / `params` |
 | Reaches the caller's computer | yes, in a session (`client`) | no | no |
 | Result | printed (table, page, file, a live view) or piped | read by the model | an HTTP response |
 
@@ -377,4 +379,4 @@ inf login acme.informer.cloud               # approve in the browser
 inf install sales:pipeline pipe             # then: pipe --help
 ```
 
-`inf install` offers to put its folder on the PATH and turn on tab completion (zsh, bash, fish, PowerShell); the person opens a new terminal before the command is found. `inf app` lists every app shared with them that has commands, and `inf app <app> --about` shows an app's whole description. When something doesn't work, `inf whoami` says who and where they're signed in, and `inf status` checks the server, the sign-in, tab completion and PATH (Informer CLI 2.0.0-beta.0+). If `inf` is not found after the install, or `informer` lists the installer's commands (`init`, `check`), npm is taking `@entrinsik` packages from a private registry that holds the older installer CLI under the same name; install with `npm install -g @entrinsik/informer-cli --registry=https://registry.npmjs.org/`.
+`inf install` offers to put its folder on the PATH and turn on tab completion (zsh, bash and fish; PowerShell completion is written but not yet tested on Windows); the person opens a new terminal before the command is found. `inf app` lists every app shared with them that has commands, and `inf app <app> --about` shows an app's whole description. When something doesn't work, `inf whoami` says who and where they're signed in, and `inf status` checks the server, the sign-in, tab completion and PATH (Informer CLI 2.0.0-beta.0+). If `inf` is not found after the install, or `informer` lists the installer's commands (`init`, `check`), npm is taking `@entrinsik` packages from a private registry that holds the older installer CLI under the same name; install with `npm install -g @entrinsik/informer-cli --registry=https://registry.npmjs.org/`.
