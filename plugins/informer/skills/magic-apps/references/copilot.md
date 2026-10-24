@@ -1,10 +1,14 @@
 # Embedded copilots
 
-> **Availability:** the pattern on this page works on every 2026.1.x server: `POST /api/models/{model}/_chat`, its automatic grant to every App, and `system` + `dynamicSystem` all shipped in **2026.1.0**. Attaching other Apps' `mcp/` tools with `appIds` (and the tool-approval flow they bring) needs **2026.1.4+**.
+> **Load this reference when:** building a copilot or chat into the App; any `_chat` / `_completion` / `_object` call; wiring `useChat` / `DefaultChatTransport`; client tools and tool approvals; calling a model from a `server/` route; moving an App off `__INFORMER__.openChat()` / `showCopilot()` / `registerTool()`.
+>
+> **Not in this file:** event-driven agents that run without a user (`agents.md`); writing the `mcp/` tools a copilot attaches with `appIds` (`mcp.md`); live updates between tabs (`channels.md`); the handler bag and `config` exports (`server-routes.md`).
+>
+> **Availability:** the core pattern works on every 2026.1.x server: `POST /api/models/{model}/_chat`, its automatic grant to every App, and `system` + `dynamicSystem` all shipped in **2026.1.0**. Attaching other Apps' `mcp/` tools with `appIds` (and the tool-approval flow they bring) needs **2026.1.4+**. Below that the `_chat` validator strips unknown keys, so `appIds` is dropped silently and its tools never appear. Detect it with `window.__INFORMER__.platform` (absent below 2026.1.4), and fall back to a client tool that calls one of your own routes, which reaches the other App through a `target: app` dependency slot. Recall over past chats and multi-tab sync ([Persisting the conversation](#persisting-the-conversation)) lean on 2026.1.4 features and carry their own tags. **Legacy:** `__INFORMER__.openChat()`, `showCopilot()` and `registerTool()` still drive Informer GO's docked copilot sidebar through 2026.2.0. Don't add new uses; replace them with the embedded pattern ([Moving off the GO sidebar calls](#moving-off-the-go-sidebar-calls)).
 
 An embedded copilot is a chat the App builds into its own UI and streams from Informer's model endpoint. It looks like the rest of the App, sees exactly what the user is looking at, acts through the App's own routes, and works wherever the App runs: a browser tab, the App's own origin, an installed PWA, or inside Informer GO. Nothing about it depends on a host page beside the App.
 
-The rules below come from Informer's own streaming chat App, including the fixes it learned the hard way. Each one prevents a failure a copilot otherwise ships with.
+Each rule below prevents a failure a copilot otherwise ships with.
 
 ## The shape of an embedded copilot
 
@@ -14,7 +18,7 @@ The rules below come from Informer's own streaming chat App, including the fixes
 4. **Server tools** come from Informer: built-in `functions`, `toolkitIds`, and other Apps' `mcp/` tools via `appIds`.
 5. **The transcript is the App's data.** Store the AI SDK UIMessages as-is in the App's workspace, through its own routes.
 
-Call everything root-relative: `fetch('/api/…')`. The same build is served from the App's origin, from `/api/apps/{id}/view/…` and inside GO, and the session already carries the App's identity. A view-prefixed absolute URL is refused by GO cloud's `connect-src`.
+Call everything root-relative: `fetch('/api/…')`. The same build is served from the App's origin, from `/api/apps/{id}/view/…` and inside GO, and the session already carries the App's identity. An absolute URL to the Informer host's view prefix is refused in origin mode on any server, whose CSP is `connect-src 'self'`.
 
 ## The transport (React)
 
@@ -33,16 +37,16 @@ const MAX_AUTO_SENDS = 6;   // automatic continuations per user turn
 
 export function useCopilot({ model, system, getContext }) {
     // Everything that may change between turns is read through a ref.
-    const live = useRef({ model, system });
-    live.current = { model, system };
+    const live = useRef({ model, system, getContext });
+    live.current = { model, system, getContext };
     const autoSends = useRef(0);
     const addToolOutputRef = useRef(null);
 
-    // Built ONCE. Rebuilding the transport mid-run aborts an in-flight tool loop.
+    // Built once, so its closures see only the first render: read the live values from `live`.
     const transport = useMemo(() => new DefaultChatTransport({
         api: `/api/models/${model}/_chat`,
         prepareSendMessagesRequest: async ({ messages, trigger, messageId, id }) => {
-            const { model, system } = live.current;
+            const { model, system, getContext } = live.current;
             // Per-turn context is a nicety: if it fails, the turn still goes.
             const ctx = await getContext(messages).catch(() => null);
             return {
@@ -60,7 +64,7 @@ export function useCopilot({ model, system, getContext }) {
 
     const chat = useChat({
         transport,
-        throttle: 50,   // tokens arrive faster than frames; without this every token re-renders the tree
+        experimental_throttle: 50,   // tokens arrive faster than frames; without this every token re-renders the tree. A bare `throttle` is ignored.
         sendAutomaticallyWhen: (o) => {
             // A hard ceiling: a tool loop that never settles must not bill a request every few seconds.
             if (autoSends.current >= MAX_AUTO_SENDS) return false;
@@ -108,7 +112,7 @@ A vanilla (no-build) App has no `useChat`. Read the stream directly and run the 
 | `system` | `string` | The static prompt: the copilot's job, voice and rules. Keep it stable from turn to turn so the provider can cache it. |
 | `dynamicSystem` | `string` | Per-turn context: what is on screen, the user's name and timezone, "Now: …", a summary of earlier turns. |
 | `tools` | `object` | Client tools, **an object keyed by tool name**, each `{ description, inputSchema }` (JSON Schema). The server does not run these: the call streams to the page. The OpenAI array shape is rejected with a 400. |
-| `functions` | `string[]` | Built-in server functions, e.g. `datasetSearch`, `datasetLookupAndSearch`, `datasourceSqlTables`, `datasourceSqlColumns`, `searchResources`, `evaluateMath`. The server runs them. |
+| `functions` | `string[]` | Extra built-in server functions, e.g. `datasetSearch`, `datasetLookupAndSearch`, `datasourceSqlTables`, `datasourceSqlColumns`. The server runs them. Six are always on without listing them ([Server tools](#server-tools)). |
 | `toolkitIds` | `string[]` | Toolkits whose tools the server runs. |
 | `appIds` | `string[]` | **2026.1.4+.** Apps (uuid or `owner:slug`) whose `mcp/` tools the server runs as the user; unreadable ids add nothing. These tools can require approval ([Approvals](#approvals)). |
 | `webSearch` | `boolean` | Let the model search the web. |
@@ -189,11 +193,15 @@ async function runClientTool({ toolName, input }) {
 
 Put Informer's own capabilities on the server side of the call: `functions` for built-ins, `toolkitIds` for toolkits, and **2026.1.4+** `appIds` for other Apps' `mcp/` tools. The server runs them and streams their parts back. `onToolCall` still fires for them; return `undefined` so the page doesn't answer a call that isn't its own.
 
-App tool names arrive as `app_<owner>_<slug>_<tool>_<hash>`. Decode one back into an app, a tool and a read-or-write kind before showing it to the user.
+Every `_chat` also carries six built-ins you never list: `pushNotification`, `email`, `createDownload`, `searchMemory`, `evaluateMath` and `searchResources`. `onToolCall` sees those calls too. The tenant's copilot instructions from AI settings (`aiSettings.copilot.instructions`) are prepended to your `system`, so write `system` to sit under them.
+
+A server tool that fails still arrives as `output-available`, with `output: { error, statusCode?, code? }`. Check `output.error` before painting the card as a success.
+
+App tool names arrive as `app_<owner>_<slug>_<tool>_<hash>`, folded to `[A-Za-z0-9_-]` and truncated, so they can't be split back into their pieces and say nothing about read or write. Treat them as opaque: label the card from `input.aiProgressMessage` and the attached App's name.
 
 ### Approvals
 
-An App's `mcp/` tool runs as the user, so unless it declares `needsApproval = false` the server stops and asks: on the first call by default, on every call with `needsApproval = true`. The stream then carries the tool part in state `approval-requested` with `part.approval.id`, and the turn waits.
+An App's `mcp/` tool runs as the user, so unless it declares `export const needsApproval = false` the server stops and asks: on the first call in a conversation by default, on every call with `export const needsApproval = true` (`mcp.md`). The stream then carries the tool part in state `approval-requested` with `part.approval.id`, and the turn waits.
 
 ```ts
 // On the tool card's buttons:
@@ -207,7 +215,7 @@ chat.addToolApprovalResponse({ id: part.approval.id, approved: false, reason: 'T
 
 Streaming markdown looks broken unless the page manages it. The rules:
 
-- **Throttle** `useChat` at 50 ms. **Memoise** each message on its message object and streaming flag.
+- **Throttle** `useChat` at 50 ms with `experimental_throttle` (the only spelling `@ai-sdk/react` 3 reads). **Memoise** each message on its message object and streaming flag.
 - **Render per block**, one sanitized HTML string per top-level block (DOMPurify; links limited to http(s)/mailto with `target=_blank rel=noopener`).
 - **Pace only the live last block.** The reveal runs on its own clock, releasing whole sentences or lines while the stream is live, with a short stall fallback. Text before a tool call is not paced: it may never end in a sentence break and would sit held back for the whole turn. On a hidden tab, show everything at once, since browsers starve `requestAnimationFrame` there.
 - **Memoise on the text being rendered, not the text received.** Close unbalanced `**`, `*` and backticks in the last paragraph, and keep single-paragraph list items tight so items already on screen don't reflow.
@@ -222,10 +230,19 @@ Streaming markdown looks broken unless the page manages it. The rules:
 Show `chat.error` inline with a retry that regenerates the turn, and say what went wrong in plain words:
 
 ```ts
+// useChat puts the refusal's JSON body ({ statusCode, error, message }) in err.message;
+// the vanilla reader below sets err.status instead.
+function statusOf(err) {
+    if (err?.status) return err.status;
+    try { return JSON.parse(err?.message)?.statusCode; } catch { return undefined; }
+}
 function describe(err) {
+    const status = statusOf(err);
     const m = String(err?.message || err);
-    if (/402|budget|credit/i.test(m)) return 'This copilot is out of AI budget for now. An admin can raise it under AI settings.';
-    if (/401|403/.test(m)) return 'Your session has expired. Reload to sign in again.';
+    if (status === 402 || /budget|credit/i.test(m)) return 'This copilot is out of AI budget for now. An admin can raise it under AI settings.';
+    if (status === 401) return "You're signed out. Sign in again to keep going.";
+    if (status === 403) return "AI isn't enabled for your account. Ask an admin to turn it on.";
+    if (status === 400 && /AI is not enabled/i.test(m)) return 'AI is turned off on this Informer.';
     if (/Failed to fetch|network/i.test(m)) return 'Lost the connection while answering.';
     return 'Something went wrong answering that.';
 }
@@ -267,8 +284,8 @@ When the copilot needs more than a transcript:
 
 - **Memory across conversations.** After a settled turn with at least four new messages, one `_object` call proposes facts to add or update, capped at two new ones. Most conversations teach nothing durable, so an empty answer is normal. Filter what comes back in code too (drop activity logs, ticket ids and anything long): a prompt alone will not hold that line. Keep a watermark of the last message already mined.
 - **Silent compaction.** Past roughly 160k characters of text, summarise all but the most recent 14 messages with one `_object` call, folding in any earlier summary. Store the summary and the position it covers; send the summary in `dynamicSystem` and drop the covered messages from `_chat`. Never show the summary to the user.
-- **Recall over past chats.** Declare `embeddings/` for messages and search them by vector, falling back to Postgres full-text search when `platform.capabilities.embeddings` is off. Gate the pgvector migration with `-- requires: embeddings` so it is skipped rather than failing where the extension is absent.
-- **Multi-tab sync.** Broadcast changes on `@user/<username>` channels and invalidate the matching queries. Channels exist only in origin mode, so gate on `platform.originMode`. Tag every write with a per-tab id so a tab ignores its own echo, and adopt a transcript another tab changed only while this one is idle.
+- **Recall over past chats (2026.1.4+).** Declare `embeddings/` for messages and search them by vector, falling back to Postgres full-text search when `platform?.capabilities?.embeddings` is off. Gate the pgvector migration with `-- requires: embeddings` so it is skipped rather than failing where the extension is absent. Below 2026.1.4 that line is a plain SQL comment and the migration fails, and `platform` is absent, so ship full-text search alone there.
+- **Multi-tab sync (2026.1.4+).** Broadcast changes on `@user/<username>` channels and invalidate the matching queries. Channels exist only in origin mode, so gate on `platform?.originMode`. Tag every write with a per-tab id so a tab ignores its own echo, and adopt a transcript another tab changed only while this one is idle.
 
 ## Calling the model from a server route
 
@@ -282,21 +299,27 @@ export async function generateObject(fetch, { prompt, schema, outputSize = 'smal
         body: { messages: [{ role: 'user', parts: [{ type: 'text', text: prompt }] }], schema, outputSize }
     });
     if (res.status !== 200) throw new Error(`_object failed (${res.status})`);
-    const raw = res.body;
-    // Some paths wrap the result as { object }; accept both.
-    return raw && typeof raw === 'object' && raw.object && typeof raw.object === 'object' ? raw.object : raw;
+    return res.body;   // the object itself, unwrapped
 }
 ```
 
-Small models drift from schemas, so normalise the output before using it ([Defensive parsing](#defensive-parsing-for-_object)). The call is metered to the App.
+Models drift from schemas, so normalise the output before using it ([Defensive parsing](#defensive-parsing-for-_object)). The call is metered to the App.
+
+The automatic grant runs `_object` as the viewing user. **2026.2.0+:** a session with no Informer user (a public route, an App-account sign-in) gets a 403 from it instead. To call the model there, declare the entry yourself and run it as the App owner:
+
+```yaml
+access:
+  apis:
+    - { method: POST, url: /api/models/*/_object, runAs: owner }
+```
 
 ## Streaming in production
 
-Tokens stream live through the App proxy when the server sets `appProxyStreaming: true`, and Informer cloud does. On a server without it, each reply arrives whole when the model finishes. A paced reveal (see [Rendering the reply](#rendering-the-reply)) keeps that looking smooth, so build the reveal regardless. In local dev the Vite plugin sends `/api` straight to the server, so replies always stream there.
+`appProxyStreaming` is off by default, so replies arrive whole through the App proxy when the model finishes. Always build the paced reveal (see [Rendering the reply](#rendering-the-reply)); it keeps a whole reply looking smooth. In local dev the Vite plugin sends `/api` straight to the server, so replies always stream there.
 
 ## Choosing a model
 
-`go_everyday` is a sound default slug. For a picker, list `GET /api/chat-models` (it answers a HAL collection: read `_embedded['inf:model']`, and accept a bare array too) rather than hard-coding tiers. `GET /api/ai-budget` reports the current user's AI budget (weekly and session windows, turns left per tier), if the App wants to show it before a 402 does. Both need `access.apis` entries: they are not auto-granted.
+`go_everyday` is a sound default slug. For a picker, list `GET /api/chat-models` (it answers a HAL collection: read `_embedded['inf:model']`, and accept a bare array too) rather than hard-coding tiers. `GET /api/ai-budget` reports whether AI is configured and the user's monthly credit use against their cap (`monthly.percentUsed`, `monthly.resetsAt`), which lets the App warn before a 402. Both need `access.apis` entries: they are not auto-granted.
 
 ## Endpoint reference
 
@@ -331,18 +354,19 @@ The stream is `text/event-stream` with CRLF framing: events are separated by `\r
 |---|---|---|
 | `text-delta` | Text chunk | `delta` |
 | `tool-input-available` | A tool call is ready | `toolCallId`, `toolName`, `input` |
-| `tool-output-available` | A server tool returned | `toolCallId`, `output` |
-| `tool-output-error` | A tool failed | `toolCallId`, `errorText` |
+| `tool-input-error` | The model's call didn't fit the tool's schema; a `tool-output-error` follows | `toolCallId`, `toolName`, `input`, `errorText` |
+| `tool-output-available` | A server tool returned, including one that failed inside its handler: `output` is then `{ error, statusCode?, code? }` | `toolCallId`, `output` |
+| `tool-output-error` | The call never reached a handler (after `tool-input-error`) | `toolCallId`, `errorText` |
 | `tool-approval-request` | A server tool needs approval | `approvalId`, `toolCallId` |
 | `finish-step` / `finish` | A step / the stream ended | |
 | `error` | Stream error | `errorText` |
 
-A vanilla App runs the tool loop itself. `tool-input-available` fires for every tool call, including the ones the server runs (`functions`, `toolkitIds`, `appIds`), which are followed by their own `tool-output-available`, or `tool-output-error` when they fail. After the stream ends, append the assistant message with **every** call as a `tool-<name>` part: state `output-available` with the output (the server's for its tools, yours for yours), or state `output-error` with `errorText` for a server tool that failed, so the model sees the failure instead of an empty result. Run only your own tools, and post again if you ran any. Keep the same six-step ceiling.
+A vanilla App runs the tool loop itself. `tool-input-available` fires for every valid tool call, including the ones the server runs (`functions`, `toolkitIds`, `appIds`), which are followed by their own `tool-output-available`. A call with malformed input arrives as `tool-input-error` instead, followed by `tool-output-error`. After the stream ends, append the assistant message with **every** call as a `tool-<name>` part: state `output-available` with the output (the server's for its tools, yours for yours), or state `output-error` with `errorText` for a call that errored, so the model sees the failure instead of an empty result. Run only your own tools, and post again if you ran any. Keep the same six-step ceiling.
 
 Three things the reader has to handle that `useChat` handles for you:
 
-- **A refusal is JSON, not a stream.** Check `res.ok` before reading; a 4xx/5xx body is `{ statusCode, error, message }`. Keep the status on the error, so the page can say "out of AI budget" for a 402 or "session expired" for a 401 (see [Errors and session loss](#errors-and-session-loss)).
-- **Stop has to abort the request.** Pass an `AbortController`'s `signal` to `fetch`; aborting ends the read with an `AbortError`. Keep the text that already arrived as the reply rather than discarding it.
+- **A refusal is JSON, not a stream.** Check `res.ok` before reading; a 4xx/5xx body is `{ statusCode, error, message }`. Keep the status on the error, so the page can say "out of AI budget" for a 402, "signed out" for a 401, or "AI isn't enabled for your account" for a 403 (see [Errors and session loss](#errors-and-session-loss)).
+- **Stop has to abort the request.** Pass an `AbortController`'s `signal` to `fetch`; aborting ends the read with an `AbortError`. Keep the text that already arrived as the reply rather than discarding it. A Stop before the response arrives rejects `fetch` itself with `AbortError`; treat that as a stop too, not an error.
 - **An `error` event can arrive mid-stream,** after text has already been shown. Surface it where the reply was going, and offer Try again.
 
 ```js
@@ -366,7 +390,7 @@ async function readStream(res, onText) {
                 if (!data) continue;
                 let e; try { e = JSON.parse(data); } catch { continue; }
                 if (e.type === 'text-delta') { text += e.delta; onText(text); }
-                else if (e.type === 'tool-input-available') calls.push(e);
+                else if (e.type === 'tool-input-available' || e.type === 'tool-input-error') calls.push(e);
                 else if (e.type === 'tool-output-available') serverOutputs[e.toolCallId] = e.output;
                 else if (e.type === 'tool-output-error') serverErrors[e.toolCallId] = e.errorText;
                 else if (e.type === 'error') throw Object.assign(new Error(e.errorText), { text });
@@ -409,7 +433,7 @@ async function turn(messages, onText, signal, step = 0) {
         parts.push({ type: `tool-${c.toolName}`, toolCallId: c.toolCallId, state: 'output-available', input: c.input, output });
     }
     const next = [...messages, { id: newId(), role: 'assistant', parts }];
-    if (aborted || !ranMine || step + 1 >= 6) return next;
+    if (aborted || !ranMine || step >= 6) return next;   // at most six continuations, as in the React hook
     return turn(next, onText, signal, step + 1);
 }
 
@@ -421,7 +445,8 @@ async function send(text) {
     try {
         history = await turn(messages, renderReply, controller.signal);
     } catch (err) {
-        showError(err.status, err.message);   // 402 → out of AI budget; 401/403 → session expired
+        // A Stop before the response arrived rejects fetch with AbortError: a stop, not a failure.
+        if (err.name !== 'AbortError') showError(err.status, err.message);   // 402 budget; 401 signed out; 403 AI not enabled for this user
     } finally {
         controller = null;
     }
@@ -429,7 +454,7 @@ async function send(text) {
 stopButton.onclick = () => controller?.abort();
 ```
 
-This loop does not answer approvals. A vanilla App that attaches `appIds` must handle `tool-approval-request`: show the call, then resend with that tool part in state `approval-responded` carrying `approval: { id, approved, reason? }`. Otherwise, attach only Apps whose tools declare `needsApproval = false`.
+This loop does not answer approvals. A vanilla App that attaches `appIds` must handle `tool-approval-request`: show the call, then resend with that tool part in state `approval-responded` carrying `approval: { id, approved, reason? }`. Otherwise, attach only Apps whose tools declare `export const needsApproval = false`.
 
 ### `_completion`
 
@@ -467,7 +492,7 @@ Fields: `messages` and `schema` (both required), and `outputSize`.
 
 ### Defensive parsing for `_object`
 
-`go_everyday` is a Haiku-class model and drifts from schemas. Expect:
+Models drift from schemas, the smaller tiers most. Expect:
 
 - array fields returned as a bare string (`risks: "text"`);
 - array items scattered into top-level keys (`item_1`, `risks_1`, …);
@@ -492,3 +517,13 @@ const result = { summary: asString(raw.summary), risks: asArray(raw.risks, raw, 
 ## Local development
 
 All three endpoints work under `vite dev`: the plugin proxies `/api` to the server with your credentials, and streams live.
+
+## Moving off the GO sidebar calls
+
+| Legacy call | Embedded equivalent |
+|---|---|
+| `registerTool({ name, description, schema, handler })` | A client tool: put `{ description, inputSchema }` in the `_chat` body's `tools` object, run it in `useChat`'s `onToolCall`, answer with `addToolOutput` ([Client tools](#client-tools-app-actions)). The handler usually becomes a call to one of the App's own `server/` routes. |
+| `openChat({ prompt, context, instructions })` | Open the App's own copilot panel and send `prompt` as the first user turn. Put `context` in a text part of that turn and `instructions` in `dynamicSystem` for that turn only. |
+| `showCopilot()` | The App's own button or shortcut that opens its panel. |
+
+Tools registered with `registerTool()` reach only GO's sidebar; the embedded copilot sees only the tools in its own `_chat` body, so move them together.

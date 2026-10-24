@@ -100,6 +100,20 @@ export async function handler({ args, query, run }) {
 
 That is not an MCP-specific caveat (your `server/` routes have the same property), just the place it matters most: an outside model will ask for everything.
 
+## Asking before a tool runs in chat (2026.1.4+)
+
+`mcp/` tools also reach Informer chats: GO's chat when the app is attached to it, and an embedded copilot that names the app in `_chat`'s `appIds` (`copilot.md`). There the tool runs as the user, and one export decides whether the user is asked first:
+
+```javascript
+export const needsApproval = false;   // safe to run unasked
+// export const needsApproval = true; // ask before every call
+// (omitted)                          // ask on the first call; consent carries for the rest of the conversation
+```
+
+- **It must be a `const` boolean literal**, written exactly as `export const needsApproval = …`. An expression, a `let` / `var`, or another export form (`export { needsApproval }`) can't be read at deploy: the deploy warns and stores `true`, so the tool asks every time.
+- **`annotations` doesn't count.** MCP hints such as `readOnlyHint` are published to outside clients and never consulted by chat.
+- **Outside MCP clients never see it.** They get `annotations` and apply their own confirmation rules.
+
 ## Connecting a client
 
 The app's admin panel has an **MCP** tab with the endpoint address and a copy-paste snippet per client. From code, the address is the `inf:app-mcp` rel; never build it by hand.

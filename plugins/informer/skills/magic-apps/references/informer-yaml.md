@@ -52,7 +52,7 @@ The legacy `access:` block for typed resources still works at runtime, but:
 - It doesn't support the typed-proxy dispatch (`context.<slot>.search(...)`) — handlers would have to hand-build URLs.
 - `npx informer-init`'s older scaffolds wrote empty `access: { datasets: [] }` blocks; if you find one in an existing `informer.yaml`, **replace it with `dependencies:`** — don't preserve the legacy shape "for consistency with the existing file."
 
-`access:` keeps **one** legitimate use: the `apis:` sub-block for raw API paths that don't fit the typed-slot model (e.g. AI model endpoints, custom server routes). Everything else goes under `dependencies:`.
+`access:` keeps **one** legitimate use: the `apis:` sub-block for raw API paths that don't fit the typed-slot model (e.g. `GET /api/chat-models`, custom server routes). Everything else goes under `dependencies:`. The AI model routes (`_chat`, `_completion`, `_object`) need no entry: every App is granted them as the viewing user.
 
 **Important:** Without either a populated `dependencies:` section or an `access:` declaration, ALL API access is blocked when the app runs in Informer.
 
@@ -94,7 +94,7 @@ The recipe Claude follows when asked to modernize:
    - **`target`** — singular form of the parent section (`datasets` → `dataset`, etc.).
    - **`defaultBinding`** — the resource's **UUID** (resolve via the matching `*-list` endpoint, e.g. `GET /api/datasets-list`). UUIDs survive bundle round-trips and aren't broken by configId renames; configIds in `defaultBinding` will be rejected at deploy.
    - Carry `filter` / `headers` / `params` / `paths` (when present on a structured access entry) into `options:`.
-3. Remove the migrated entries from `access:`. **Keep `access.apis`** — raw paths don't have a slot model.
+3. Remove the migrated entries from `access:`. **Keep `access.apis`** — raw paths don't have a slot model. An entry for an AI model route (`POST /api/models/…/_chat`, `_completion`, `_object`) is optional, since every App is granted those as the viewing user; keep it only if it says `runAs: owner`.
 4. Update any server-side handler code that referenced these resources by `naturalId` to use the slot name instead (`context.northwind_orders.search({...})` etc. — the slot name is a property of `context`, not nested under `context.dependencies`).
 5. Deploy the draft. Auto-bind runs through `defaultBinding`. An unresolvable `defaultBinding` (target missing or unreadable on this instance) doesn't fail the deploy — it logs a warning, and a required slot surfaces a `default_binding_unresolved` warning telling the admin to bind it in Settings. Author errors (a non-UUID value like a configId, or a target type that doesn't support `defaultBinding`) are still fatal.
 6. Review via the draft diff, then commit.
@@ -110,7 +110,7 @@ access:
   queries:
     - admin:daily-summary
   apis:
-    - POST /api/models/go_everyday/_object
+    - GET /api/chat-models
 
 # After — defaultBinding values are UUIDs resolved from each
 # configId via the matching `*-list` endpoint at modernize time.
@@ -129,7 +129,7 @@ dependencies:
     defaultBinding: 9a8b7c6d-5e4f-3a2b-1c0d-fedcba987654
 access:
   apis:
-    - POST /api/models/go_everyday/_object   # raw API — stays in access
+    - GET /api/chat-models   # raw API — stays in access
 ```
 
 ## `requires:` (platform floor; Informer 2026.1.4+ enforces it, older releases ignore the key)
@@ -583,7 +583,7 @@ The five typed-slot targets and what API surface each one's bound resource expos
 
 > **`libraries` is not a typed slot.** Library access lives only in the legacy `access.libraries:` whitelist block (`contents/*`) — there is no `target: library` slot model. Use `access.libraries:` if your app needs to read files from another library; everything else goes under `dependencies:`.
 
-For raw API paths that don't fit the slot model (custom endpoints, AI model routes), use `access.apis:`:
+For raw API paths that don't fit the slot model (custom endpoints, `GET /api/chat-models`), use `access.apis:`. The AI model routes are granted automatically and need an entry only to run as the owner (`{ method: POST, url: /api/models/*/_object, runAs: owner }`, for sessions with no Informer user — `copilot.md`):
 
 ```yaml
 # informer.yaml
