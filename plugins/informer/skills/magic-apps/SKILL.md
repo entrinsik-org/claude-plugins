@@ -1,6 +1,6 @@
 ---
 name: magic-apps
-description: Building Informer Apps with local Vite development. Covers the dev/publish workflow, the centerpiece "Accessing Your Dependencies" model (typed slots + three patterns), and the orientation map for deeper topics (server routes, webhooks, persistence, declarative vector embeddings, widgets, copilot sidebar, event-driven AI agents, live broadcast channels over WebSockets (and messages back from the page: send(), joined, wildcards, replay), channel actors (one live, stateful sandbox per channel with a server-driven tick, for games and shared boards), staged uploads/downloads for files and large result sets (and forwarding them to integrations, transfer events, what a viewer has staged), PDF export, informer.yaml schema, app-to-app/pack API integration and openapi.json contracts, and the UI quality bar every screen must meet: mobile-first responsive layout, no layout shift, TanStack Query freshness after every action, sortable table headers, vertical rhythm, bright distinct icons with the full icon asset set) — each routes to a reference file under `references/` so the front door stays loadable on every trigger.
+description: Building Informer Apps with local Vite development. Covers the dev/publish workflow, the centerpiece "Accessing Your Dependencies" model (typed slots + three patterns), and the orientation map for deeper topics (server routes, GET-route response caching (config.cache, ETag/304), push notifications to the installed app and their opt-in, webhooks, persistence, declarative vector embeddings, widgets, embedded AI copilots built into the App's own UI (and moving off the legacy `openChat()` / `registerTool()` / `showCopilot()` GO sidebar calls), event-driven AI agents, live broadcast channels over WebSockets (and messages back from the page: send(), joined, wildcards, replay), channel actors (one live, stateful sandbox per channel with a server-driven tick, for games and shared boards), staged uploads/downloads for files and large result sets (and forwarding them to integrations, transfer events, what a viewer has staged), command-line commands people run with `inf` (the `cli/` folder, sessions that work in the person's own folders, `--watch`, interactive terminal views such as boards and dashboards, CI with an App API key) and signing in with the Informer CLI instead of a `.env`, PDF export, informer.yaml schema, app-to-app/pack API integration and openapi.json contracts, and the UI quality bar every screen must meet: mobile-first responsive layout, no layout shift, TanStack Query freshness after every action, sortable table headers, vertical rhythm, bright distinct icons with the full icon asset set) — each routes to a reference file under `references/` so the front door stays loadable on every trigger.
 ---
 
 # Informer App Development
@@ -16,8 +16,9 @@ An Informer App is a custom HTML/JS/CSS application that runs inside Informer. I
 - **Maintain vector embeddings** over its own data declaratively (platform embedding pump + pgvector) for semantic search (Informer 2026.1.4+)
 - **Move files and large result sets** (CSV imports, attachments, big exports) without the bytes touching the app's sandbox — staged uploads/downloads (2026.1.4+)
 - Render charts, tables, and interactive visualizations
-- Include a **built-in AI copilot** sidebar that can query your data and answer questions in context
+- Build an **embedded AI copilot** into its own UI: a streaming chat that sees what the user is looking at and acts through the App's own routes
 - Define **AI agents** that react to events, execute tools, and chain together for automated workflows
+- Give people **commands in their terminal** (`cli/`, run with the Informer CLI `inf`), including ones that read and write files in a folder on their computer (2026.2.0+)
 - Push **live updates** to every open page over a WebSocket Informer owns for it, and take messages back from the page over the same socket (channels — 2026.1.4+, origin-mode servers), with an optional **channel actor** that keeps one live, stateful sandbox per channel and a server-driven tick (games, shared boards)
 
 Apps are stored in Informer libraries and served through the Informer UI. (You may see the term "Magic Report" in older documentation — Apps are the current name for the same concept.)
@@ -28,8 +29,9 @@ This file is the orientation layer. Most topics have a dedicated reference under
 
 | User intent / signal | Load this file |
 |---|---|
-| Writing handlers under `server/`, working with `query` / `transaction` / `fetch` / `respond` / `notify` / `email` / `log` / `crypto` / base64 / markdown / `env` / `request` / sandbox constraints | `references/server-routes.md` |
-| Receiving external callbacks (Stripe, GitHub, Slack, Gmail push) under `webhooks/`, HMAC verification, signed `?token=` URLs | `references/webhooks.md` |
+| Writing handlers under `server/`, working with `query` / `transaction` / `fetch` / `respond` / `notify` / `email` / `log` / `crypto` / base64 / markdown / `env` / `request` / sandbox constraints; push notifications and their opt-in — "notify users", "push", "turn on notifications", `notifications:` in informer.yaml, `__INFORMER__.notifications`, an app service worker | `references/server-routes.md` |
+| Making a `GET` route cheaper or faster when it is read far more than its data changes — "cache", "ETag", "304", a polling dashboard, a catalog every page loads, a CDN in front of a public App; `config.cache` (`ttl` / `vary` / `tables` / `edge`), what invalidates it and what needs a `ttl` | `references/response-cache.md` |
+| Receiving external callbacks (Stripe, GitHub, Slack, Gmail push) under `webhooks/`, HMAC verification, getting a webhook URL (minting/revoking webhook tokens, **Copy URL** in the admin panel, `401 Webhook token …` errors) | `references/webhooks.md` |
 | Storing app data — `migrations/`, dev-workspace lifecycle, `workspace:init` / `:migrate` / `:reset`, CRUD example | `references/persistence.md` |
 | Declaring embedding use cases under `embeddings/`, vector search over workspace data, `embed(name, text)`, chunking profiles, pgvector columns in app migrations | `references/embeddings.md` |
 | Building or polishing any screen — the mobile modes (inside Informer GO, home-screen tile, browser tab, widget card) and the screen-by-screen phone layout pass, dialogs that shift, skeletons, stale UI after an action (empty states, dropdowns, counts), TanStack Query, sortable tables / AG Grid, spacing and vertical rhythm, icon brightness and the home-screen/PWA icon set; also when to load the `frontend-design` plugin | `references/ui-quality.md` |
@@ -37,13 +39,14 @@ This file is the orientation layer. Most topics have a dedicated reference under
 | Declaring SEMANTICS for a workspace database — `semantics.yaml` (structure: types/units/enum values + quick-dev inline labels, `decimals`, computed `expr`, `bins`), `semantics.<locale>.yaml` strings-only overlays, categories and declared links, the `exposure` policy (open vs curated sources), description-vs-COMMENT channels, how customer overlays layer on top after install | `references/semantics.md` |
 | Writing a walker against a SPECIFIC integration (QuickBooks, Salesforce, …) — per-connector traps: hidden inactive rows, pagination quirks, incremental watermark fields, deletion detection | `references/connector-gotchas.md` |
 | Declaring `widgets:` in `informer.yaml`, building self-contained HTML cards under `public/widgets/`, iframe quirks | `references/widgets.md` |
-| Activating the in-app copilot, `openChat()` / `registerTool()`, AI completion endpoints (`_chat` / `_completion` / `_object`), `useChat` hook patterns | `references/copilot.md` |
+| Building an AI copilot or chat into the App, any LLM call (`_chat` / `_completion` / `_object`), `useChat` / `DefaultChatTransport`, client tools and tool approvals, calling a model from a `server/` route, moving off `openChat()` / `registerTool()` / `showCopilot()` | `references/copilot.md` |
 | Declaring `agents:` in `informer.yaml`, writing `tools/*.js`, `emit()` chaining, cron, toolkits/assistants integration, agent REST API | `references/agents.md` |
 | Live updates to open pages and messages back from them — "real-time" / "push" / "stop polling" / presence / typing / chat / cursors; `broadcast(channel, event, payload, { replay })` from a handler, the `channels:` relay block (`on` required), gated channels under `channels/` (`join` / `joined` / `leave` / event exports, `config.roles`), `@user/<username>`, wildcards (`rooms/*`), `__INFORMER__.channel(name, { since }).on(event, fn)` / `.send(event, payload)`, `connected`, frame `seq` and replay after a reconnect, `replay_gap`, `platform.originMode`, `origin_mode_required` | `references/channels.md` |
 | State kept between channel messages, or something on a clock — a multiplayer game loop, a shared whiteboard, a presence roster, an auction or countdown the server owns, "tick N times a second"; a `channels/` file with `config.actor`, `start` / `tick` / `stop` / `snapshot` exports, `restored`, `request.member`, calls one at a time, `unavailable`, `__INFORMER__.serverNow()`, `ACTOR` / `ACTOR_IDLE` billing, `platform.capabilities.channelActors` | `references/channel-actors.md` |
 | Moving FILES or large result sets — CSV/Excel import into a workspace table, an attachment into a `bytea` column, a big CSV/JSON/JSONL export, "upload" / "download" / "save as" / "import"; `__INFORMER__.upload(file)` on the page, `uploads.get(id)` → `copyInto()` / bytea parameter / `text()`, `downloads.create()` → `fromQuery()` / `writeRows()` / `return dl` / `dl.url`, the 10 MB inline cap; watching a transfer (`onEvent`, `task.created`), `__INFORMER__.streams` list/status/discard, forwarding a staged file to an integration (`context.<slot>.request()` with a handle as `data` / in `form`, or `into`) | `references/streams.md` |
-| Exposing tools to outside AI clients (Claude Code/Desktop, Cursor) — the `mcp/` folder, why the folder is the decision, writing for a caller with no context, the per-app endpoint, the OAuth connect flow, who a tool runs as | `references/mcp.md` |
-| Deep `informer.yaml` work — `dependencies:` slot field reference, app-sourced `integrations:` (an app declares and owns an Integration — OAuth, `$env` secrets, icons), RLS via `$user.*`, modernizing a legacy `access:` block, `defaultBinding` lookup, declaring env-var keys with `env:` | `references/informer-yaml.md` |
+| Exposing tools to outside AI clients (Claude Code/Desktop, Cursor) — the `mcp/` folder, why the folder is the decision, writing for a caller with no context, the per-app endpoint, the OAuth connect flow, who a tool runs as, `export const needsApproval` for copilots that attach the App | `references/mcp.md` |
+| Commands people run from a terminal or a script — "CLI", "`inf`", "add a command", "sync / import / back up a folder", "watch a folder", "a board / dashboard in the terminal", CI calling the app; the `cli/` folder, `export const cli` / `confirm` / `roles` / `complete` / `watch`, schema → arguments, `reply()` / `follow()`, `run.client` / `run.timeZone`, sessions with `client.files` / `prompt` / `progress` / `display` and folder `access: read \| write \| mirror`, interactive views (`render` / `actions` / `event` / `loaders`), output and `--json`, `inf install`, App API keys for CI, limits | `references/cli.md` |
+| Deep `informer.yaml` work — `dependencies:` slot field reference, app-sourced `integrations:` (an app declares and owns an Integration — OAuth, `$env` secrets, icons), RLS via `$user.*`, modernizing a legacy `access:` block, `defaultBinding` lookup, declaring env-var keys with `env:`, the `notifications:` push opt-in; SQL parameters in a datasource slot's `query()` (`$name`, `params`, `inputs`, `language`) | `references/informer-yaml.md` |
 | App-to-app/pack APIs — fetching a target's contract (`openapi.json`), typed dev bindings (`.informer/app-deps.d.ts`), public-vs-internal routes, and making your own App integratable (`description`/`schema` exports, `config.api = 'public'`, root `API.md`) | `references/app-api.md` |
 | In-gallery app docs (`docs.html`), in-app `?` help button, `README.md` fallback | `references/docs-html.md` |
 | Looking up the raw API surface behind the typed-slot proxy (still useful when something fails) | `references/api-reference.md` |
@@ -60,6 +63,7 @@ Customers run a spread of Informer versions, so every newer feature carries the 
 | Feature | Since | Reference |
 |---|---|---|
 | Bare `/api/{path}` app routes; per-app origins (origin mode) | 2026.1.2 | `references/server-routes.md` |
+| Datasource slot `query()` binding `$name` from `params` — with declared `inputs`; `params` alone | 2026.1.3 (I5-13058); 2026.1.4 (I5-13071) | `references/informer-yaml.md` |
 | `platform` descriptor (`platform.version`, `platform.capabilities`) and the `requires:` manifest key | 2026.1.4 | `references/server-routes.md`, `references/informer-yaml.md` |
 | `respond()` background work billed, capped (`app.routes.maxBackgroundPerApp`) and written to the Logs tab when it fails; `config.timeout` capped at `app.routes.maxTimeoutMs` | 2026.1.4 (I5-13088) | `references/server-routes.md` |
 | Live broadcast channels (`broadcast()`, `channels:`, `channels/` with `join` / `leave`, `@user/`) | 2026.1.4 | `references/channels.md` |
@@ -67,11 +71,17 @@ Customers run a spread of Informer versions, so every newer feature carries the 
 | Channel actors (`config.actor`, `tick`, snapshots), `request.member`, `__INFORMER__.serverNow()`, `send()` as a socket message, the `unavailable` code | 2026.1.4 (I5-13088; detect `platform.capabilities.channelActors` — without it an actor file runs as an ordinary handler; dev needs plugin 2.13.0+) | `references/channel-actors.md` |
 | Declarative embeddings (`embeddings/`, `embed()`, pgvector) | 2026.1.4 | `references/embeddings.md` |
 | Async `WebAssembly.compile()` / `instantiate()` settling in server-side handlers (the synchronous constructors work on every version) | 2026.1.4 (I5-13088) | `references/wasm-workers.md`, `references/server-routes.md` |
+| `_chat` `appIds` (other Apps' `mcp/` tools, run server-side), the tool-approval flow and `export const needsApproval` | 2026.1.4 (I5-12973; below it `_chat` drops `appIds` silently) | `references/copilot.md`, `references/mcp.md` |
 | Staged uploads/downloads (`uploads`, `downloads`, `__INFORMER__.upload()`) | 2026.1.4 | `references/streams.md` |
 | Streams phase 2 — transfer events (`onEvent`, `task.created`), `__INFORMER__.streams` list/status/discard, forwarding a stream to an integration (`data` / `form` / `into`) | 2026.1.4 (every released build; only unreleased previews carried phase 1 alone) | `references/streams.md` |
 | Warehouse loads (`load()`, the run ledger, `schedule()`, streaming ingest) | 2026.2.0 | `references/warehouse-etl.md` |
 | `semantics.yaml` and the semantic registry | 2026.2.0 | `references/semantics.md` |
 | App accounts and public serving (`accounts:`, `public: true`, `/_auth/*`) | 2026.2.0 | `references/accounts-and-login.md` |
+| App CLI: `cli/` commands, sessions on the person's folders, `--watch`, `reply()`, `follow()`, `client.display`, interactive views, App API keys for CI | 2026.2.0 (I5-13206; detect `platform?.capabilities?.cli`; deploy needs plugin 2.14.0+, which uploads `cli/`; `npm run dev` does not run commands) | `references/cli.md` |
+| Signing in with the Informer CLI (`inf login`) instead of a `.env` for `npm run dev` / `npm run deploy`; `inf deploy`; `informer-init` writes no `.env` | 2026.2.0 server + plugin 2.14.0 (I5-13206; the `cli` / `develop` sign-in scopes are new in 2026.2.0 — below it, copy `.env.example` to `.env` and fill it in) | this file, Development Mode |
+| `GET /api/permissions?group=apps` answers `deploy`: whether the signed-in person can deploy an app of their own | 2026.2.0 (I5-13206) | this file, Deploying |
+| Push notifications to the installed app (Web Push on origin-mode servers), `notifications:` opt-in, `__INFORMER__.notifications`, `notify()` → `subscribed` / `unsubscribed`, only users who can open the app receive them | 2026.2.0 (I5-13207; below it `notify()` reaches Informer GO phones only. On an origin-mode server at 2026.2.0, an App that calls `notify()` without `notifications:` or its own `enable()` button reaches nobody) | `references/server-routes.md`, `references/informer-yaml.md` |
+| Response caching for `GET` routes (`config.cache`) | 2026.2.0 (I5-13259; older servers ignore the key and run the route uncached; the dev server and drafts never cache) | `references/response-cache.md` |
 
 Features not listed have no floor recorded here; where a reference states one inline (the `openapi.json` endpoint needs 2026.1.1, for example), that line wins.
 
@@ -116,11 +126,19 @@ npm create vite@latest . -- --template react
 npm install
 npm install -D @entrinsik/vite-plugin-informer@latest
 
-# 3. Run the Informer init — creates informer.yaml, .env, .env.example,
+# 3. Run the Informer init — creates informer.yaml and .env.example,
 #    updates vite.config.js to include informer(), updates .gitignore,
 #    adds deploy + workspace:* scripts to package.json.
 npx informer-init
+
+# 4. Sign in once, if `inf auth token --json` doesn't already print a
+#    sign-in for the right server. dev and deploy use it (plugin 2.14.0+,
+#    2026.2.0+ server; below it, copy .env.example to .env and fill it in).
+npm install -g @entrinsik/informer-cli
+inf login acme.informer.cloud
 ```
+
+`inf login` waits for the person to approve a code in their browser, so run it where they can see it: ask them to type it themselves (in Claude Code, `! inf login <server>`) rather than running it in the background.
 
 If `npm create vite@latest .` refuses because the directory has stray files (a README from `git init`, a `.gitignore`, etc.), tell the user which files are in the way and either:
 - Move them aside, run vite create, then move them back; or
@@ -136,8 +154,7 @@ After `npx informer-init` you have:
 
 ```
 my-app/
-├── .env                    # Connection settings (gitignored)
-├── .env.example            # Template for connection settings
+├── .env.example            # How to override the inf sign-in, all commented out
 ├── informer.yaml           # App configuration — dependencies, roles, agents, events, widgets
 ├── package.json            # informer section (name, description, id UUID) + deploy/workspace:* scripts
 ├── vite.config.js          # Includes informer() plugin
@@ -150,7 +167,7 @@ Init also:
 - **Generates a UUID for `informer.id`** and writes it to `package.json` immediately — used by `npm run deploy` to create or address the app on the server. Don't set it manually.
 - Updates `.gitignore` to exclude `.env`
 
-The `.env` template includes both API key and basic auth blocks — uncomment the one you want. If the user mentions a specific server, fill it in directly; otherwise leave the placeholder `http://localhost:3000` and tell them to update before running `npm run dev`.
+There is no `.env` to fill in: the person's `inf` sign-in is the credential, so the project folder holds no key and can be pushed as it is. **The `inf` sign-in needs a 2026.2.0+ server** (its `cli` / `develop` scopes are new there); below it, copy `.env.example` to `.env` and fill in `INFORMER_URL` plus a key or a password. A `.env` is still honored and wins when it sets `INFORMER_URL` with `INFORMER_API_KEY` (or `INFORMER_USER` / `INFORMER_PASS`) — for a server the person has no `inf` sign-in for, or CI. Plugin releases before 2.14.0 write a `.env` with a placeholder `http://localhost:3000` and have no sign-in fallback, so there the `.env` must be filled in before `npm run dev`.
 
 > **`public/favicon.svg` is not created by init.** It's a recommended addition — 512×512, duotone — and gets deployed to the app's library root as the gallery/tab icon. Add it yourself or ask Claude to generate one.
 
@@ -158,8 +175,8 @@ The `.env` template includes both API key and basic auth blocks — uncomment th
 
 Once the project is set up, the typical next moves are:
 
-1. Pin the Informer version the app deploys to: `requires.informer` in an existing `informer.yaml`, else `GET /api/about` on the server named in `.env` (`INFORMER_URL`), else ask. Write it back as `requires: { informer: '>=…' }`. Every step below is gated on it through the Feature floors table.
-2. Ask the user what data the app needs (datasets/queries/datasources/integrations) and add `dependencies:` slots to `informer.yaml` — look up `defaultBinding` UUIDs via `GET /api/datasets-list` etc. against the configured `INFORMER_URL`. For an external service the app itself needs (a REST API, Salesforce, and so on), prefer declaring it in the `integrations:` block instead of binding to a pre-existing one — deploy creates the Integration and the slot for you, no UUID and no out-of-band setup. See `references/informer-yaml.md`.
+1. Pin the Informer version the app deploys to: `requires.informer` in an existing `informer.yaml`, else `GET /api/about` on the server the app deploys to (`INFORMER_URL` in `.env`, else the `url` that `inf auth token --json` prints), else ask. Write it back as `requires: { informer: '>=…' }`. Every step below is gated on it through the Feature floors table.
+2. Ask the user what data the app needs (datasets/queries/datasources/integrations) and add `dependencies:` slots to `informer.yaml` — look up `defaultBinding` UUIDs via `GET /api/datasets-list` etc. against that server (with a sign-in, `curl -H "Authorization: Bearer $(inf auth token)"`). For an external service the app itself needs (a REST API, Salesforce, and so on), prefer declaring it in the `integrations:` block instead of binding to a pre-existing one — deploy creates the Integration and the slot for you, no UUID and no out-of-band setup. See `references/informer-yaml.md`.
 3. Replace Vite's default `index.html` + `main.js` with the app shell — mobile-first, and with TanStack Query wired at the root for a React app (see the UI Quality Bar below).
 4. If the app stores its own data, scaffold `migrations/` and add a first migration — load `references/persistence.md`.
    If the data is LOADED from sources on a cadence (a warehouse), load `references/warehouse-etl.md` instead (Informer 2026.2.0+) — it layers sync routes, `load()`, and `automations:` schedules on top of plain persistence.
@@ -169,6 +186,7 @@ Once the project is set up, the typical next moves are:
 7. If the app should be usable from an outside AI client (Claude Code/Desktop, Cursor), scaffold `mcp/` with tools written for a context-free caller — load `references/mcp.md`.
 8. If open pages should update live when server code changes something (no polling), or send something back over the socket (typing, comments, cursors), add a `channels:` relay block and/or `channels/` handlers — load `references/channels.md` (needs an origin-mode server: read `platform.originMode`, or confirm with the user before building on it). When the channel needs state held between messages or a server clock (a game, a shared board), make its file a channel actor (2026.1.4+) — load `references/channel-actors.md` too.
 9. If the app imports files or exports large result sets (CSV in, attachments, CSV/JSON out), stage them with `__INFORMER__.upload()` on the page and use the `uploads` / `downloads` handles in `server/` — load `references/streams.md`.
+10. If people should drive the app from a terminal or a script (commands, bulk imports from a folder, backups to one, a folder kept in step with `--watch`, a board or dashboard to work from the keyboard, CI), scaffold `cli/` — load `references/cli.md` (2026.2.0+, plugin 2.14.0+).
 
 ## Local Development Workflow
 
@@ -201,23 +219,26 @@ The last row is the common gotcha: anything an app *fetches* (not script-tag-loa
 
 ### Development Mode (`npm run dev`)
 
-The Vite plugin proxies `/api/*` requests to your Informer server with Basic auth. This means:
+The Vite plugin proxies `/api/*` requests to your Informer server as you. This means:
 - Your code makes fetch calls to `/api/...` (no host needed)
 - The plugin adds authentication headers automatically
 - You get hot reload while working against real Informer data
 
-Configuration is in `.env`:
+**Where the credential comes from (plugin 2.14.0+).** With nothing set in the environment or `.env`, the plugin asks the Informer CLI (`inf auth token --json`) for the signed-in server and a current token, and the dev server renews it as it runs — so a project needs no `.env` at all after `inf login <server>`. With several sign-ins, `INFORMER_URL` alone picks which one. Set `INFORMER_URL` with a key or a password and that wins instead:
+
 ```
 INFORMER_URL=http://localhost:3000
 INFORMER_API_KEY=your-api-key
 ```
 
-Or use basic auth:
+Or basic auth:
 ```
 INFORMER_URL=http://localhost:3000
 INFORMER_USER=admin
 INFORMER_PASS=yourpassword
 ```
+
+Below plugin 2.14.0, or against a server below **2026.2.0** (it has no `cli` / `develop` sign-in scopes, so `inf login` cannot work there), there is no sign-in fallback: one of these `.env` blocks is required.
 
 If your app uses persistence (see `references/persistence.md`), you'll also have:
 ```
@@ -251,17 +272,21 @@ Builds your project and uploads to Informer:
 4. Uploads all built assets from `dist/`
 5. Uploads `informer.yaml`, `data-access.yaml`, `API.md`, and `README.md` from project root (whichever exist)
 6. Uploads `migrations/` directory (if it exists)
-7. Uploads `tools/` and `mcp/` directories (if they exist)
+7. Uploads `tools/` and `mcp/` directories (if they exist), and `cli/` — plugin 2.14.0+, servers 2026.2.0+; against an older server the plugin leaves `cli/` on disk and says why
 8. Uploads `server/` directory (if it exists)
 9. Uploads `webhooks/` directory (if it exists)
 10. Uploads `channels/` directory (if it exists) — plugin 2.10.0+; 2.7.0 never uploads the folder
 11. Uploads `embeddings/` directory (if it exists) — plugin 2.10.0+; 2.7.0 never uploads the folder
 12. Uploads `lib/` and `shared/` directories (if they exist). Every source tree drops dotfiles, `node_modules`, and `*.test.js`
-13. Runs deploy: pending SQL migrations + server-route scanning + webhook scanning + embedding use-case scanning + channel scanning (`channels/` handlers + the `channels:` relay block) + handler bundling + tool bundling (`tools/` + `mcp/`) + resource reference validation + agent upsert from `informer.yaml`
+13. Runs deploy: pending SQL migrations + server-route scanning + webhook scanning + embedding use-case scanning + channel scanning (`channels/` handlers + the `channels:` relay block) + CLI command scanning (`cli/`) + handler bundling + tool bundling (`tools/` + `mcp/` + `cli/`) + resource reference validation + agent upsert from `informer.yaml`
     - **Resource refs are validated**: all datasets, queries, datasources, integrations, and toolkits declared in `informer.yaml` must exist — deploy fails with a clear error if any are missing
     - **Channels need origin mode**: a `channels:` block or `channels/` directory on a path-mode server still deploys, with a non-fatal `channels_require_origin_mode` warning — see `references/channels.md`
     - **`channels:` entries need `on`**: an entry with nothing to relay fails the deploy; a `channels/` file may export `config`, `join`, `joined`, `leave`, and event-named inbound handlers, nothing else; a file with `config.actor` (2026.1.4+) adds `start` / `tick` / `stop` / `snapshot`, and a `config.actor` the scanner refuses (unknown key, a `tick` rate with no `tick` export, …) fails the deploy
 14. App is viewable at `/api/apps/{owner}:{slug}/view`
+
+**`inf deploy`** (plugin 2.14.0+, 2026.2.0 servers) is the same deploy, run from the app folder against the server `inf` is signed in to: it says where it will deploy and whether it updates an existing app, asks first (`--yes` in a script, and outside a terminal, which includes Claude Code's `!` commands), then builds and runs `informer-deploy`. `inf publish` deploys, then publishes to the marketplace from that server.
+
+**Who can deploy.** A deploy creates a Magic App, which takes **Admin in a team**, and an `inf` sign-in reaches the API for deploys (the `develop` scope) only while the person may mint API keys — API Token Creation, or Publisher in a team, which a team Admin is. So a team Admin can do both, on a server licensed for Magic Apps. On 2026.2.0+ ask before building: `GET /api/permissions?group=apps` answers `deploy: true` when all of it holds. `inf whoami --json` (Informer CLI 2.0.0-beta.0+) says which server and user `inf` is signed in as and whether that sign-in carries `develop` (`canDeploy`); `inf status` checks the server, the sign-in, tab completion and PATH, exiting 1 on a problem. A sign-in without `develop` makes `inf login` say so and `inf deploy` refuse; after an administrator grants it, `inf login` again. After a deploy, `inf open <owner:slug>` opens an app that has `cli/` commands in the person's browser (it finds the app among those with commands, so any other answers "No app called … is shared with you"); any app opens at `/api/apps/{owner}:{slug}/view`.
 
 ### Package.json Configuration
 
@@ -359,7 +384,7 @@ The handler receives a `context` object where each `dependencies:` slot is a pro
 |---|---|---|
 | `dataset` | `search(esQuery)` / `fields()` | `POST /api/datasets/<uuid>/_search` / `GET /api/datasets/<uuid>/fields` |
 | `query` | `execute(params)` | `POST /api/queries/<uuid>/_execute` |
-| `datasource` | `query(payload)` | `POST /api/datasources/<uuid>/_query` |
+| `datasource` | `query({ language, payload, params?, inputs?, limit? })` | `POST /api/datasources/<uuid>/_query` |
 | `integration` | `request({ method, url, params, data })` | `POST /api/integrations/<uuid>/request` |
 | `app` | `request({ method, url, params, data })` | `<method> /api/apps/<uuid>/view/_/<url>` |
 
@@ -402,10 +427,19 @@ export async function GET({ context, request }) {
     // query → execute runs the saved query with optional parameters
     const summary = await context.monthly_summary.execute({ month: '2026-05' });
 
-    // datasource → query runs SQL against the underlying connection
+    // datasource → query runs one statement on the bound datasource and
+    // returns an array of row objects. The argument is the body of
+    // POST /api/datasources/<uuid>/_query; `language` follows the datasource
+    // ('sql', 'u2', 'informer' for jBASE, 'web'). In SQL, `$name` binds from
+    // `params` and is escaped; `:name` and `$1` are not parameters. Never
+    // interpolate request input into `payload` — write `$name`, not `${name}`,
+    // even in a template literal. Declared `inputs` bind from 2026.1.3,
+    // `params` alone from 2026.1.4: references/informer-yaml.md → "Datasource
+    // slot queries" has the rules and the fallback for older servers.
     const events = await context.analytics.query({
-        sql: 'SELECT type, COUNT(*) AS n FROM events WHERE day = $1 GROUP BY type',
-        params: ['2026-05-12']
+        language: 'sql',
+        payload: 'SELECT type, COUNT(*) AS n FROM events WHERE day = $day::date GROUP BY type',
+        params: { day: request.query.day }
     });
 
     // integration → request proxies to the external service. The options are
@@ -669,7 +703,7 @@ Apps are configured with an `informer.yaml` file in the project root. It declare
 
 > **For typed resources (dataset / query / datasource / integration): always use `dependencies:` slots. Never `access: datasets:`, `access: queries:`, `access: integrations:`, or `access: datasources:`.**
 
-The legacy `access:` block for typed resources still works at runtime, but it bypasses the install/rebind UI, doesn't support the typed-proxy dispatch (`context.<slot>.search(...)`), and silently breaks the install flow. `access:` keeps one legitimate use: the `apis:` sub-block for raw API paths that don't fit the typed-slot model (e.g. AI model endpoints).
+The legacy `access:` block for typed resources still works at runtime, but it bypasses the install/rebind UI, doesn't support the typed-proxy dispatch (`context.<slot>.search(...)`), and silently breaks the install flow. `access:` keeps one legitimate use: the `apis:` sub-block for raw API paths that don't fit the typed-slot model (e.g. `GET /api/chat-models`; the AI model routes are granted automatically).
 
 **Without either a populated `dependencies:` section or an `access:` declaration, ALL API access is blocked when the app runs in Informer.**
 
@@ -694,7 +728,7 @@ roles:
     name: Viewer
 ```
 
-For the full schema — slot field reference (`target` / `runAs` / `options` / `defaultBinding`), row-level security with `$user.*` variables, the modernization recipe for converting a legacy `access:` block to `dependencies:`, integration credential injection, the `libraries:` legacy carve-out, and declaring env-var keys with `env:` (encrypted per-tenant values configured in Admin → Environment) — load `references/informer-yaml.md`.
+For the full schema — slot field reference (`target` / `runAs` / `options` / `defaultBinding`), row-level security with `$user.*` variables, the modernization recipe for converting a legacy `access:` block to `dependencies:`, integration credential injection, the `libraries:` legacy carve-out, declaring env-var keys with `env:` (encrypted per-tenant values configured in Admin → Environment), and binding SQL parameters in a datasource slot's `query()` — load `references/informer-yaml.md`.
 
 ## Widgets — overview
 
@@ -754,15 +788,17 @@ export async function POST({ query, request }) {
 }
 ```
 
-Handlers receive a single argument with the sandbox helpers (`query`, `transaction`, `fetch`, `context`, `respond`, `emit`, `broadcast`, `notify`, `email`, `log`, `crypto`, `env`, `request`). Globals available without destructuring: `markdown`, `base64Encode` / `base64Decode` / `base64UrlEncode` / `base64UrlDecode`, `atob` / `btoa`.
+Handlers receive a single argument with the sandbox helpers (`query`, `transaction`, `fetch`, `context`, `respond`, `emit`, `broadcast`, `notify`, `email`, `log`, `crypto`, `markdown`, `extractText`, `env`, `request`); `markdown` and `extractText` are also callable by name. `base64Encode` / `base64Decode` / `base64UrlEncode` / `base64UrlDecode` and `atob` / `btoa` are globals only: call them by name, since destructuring one from the argument binds `undefined`.
 
 Sandbox constraints: no Node APIs, no filesystem, no direct network — all I/O is through the injected callbacks. 128 MB memory, 30s default wall-clock timeout (configurable via `config.timeout`).
 
-Load `references/server-routes.md` for: full file-convention routing rules, every sandbox helper's calling shape and edge cases, return-value semantics, `respond()` early-ack pattern, `log()` levels and behavior, `notify()` / `email()` (single + bulk), `config.timeout` / `config.roles`, the full orders-API worked example.
+Load `references/server-routes.md` for: full file-convention routing rules, every sandbox helper's calling shape and edge cases, return-value semantics, `respond()` early-ack pattern, `log()` levels and behavior, `notify()` / `email()` (single + bulk; **2026.2.0+** on origin-mode servers `notify()` reaches the user's installed copy of the app, and the `notifications:` declaration plus `__INFORMER__.notifications` drive the opt-in), `config.timeout` / `config.roles`, the full orders-API worked example.
+
+A `GET` route read far more often than its data changes can declare `export const config = { cache: true }` (2026.2.0+): repeat requests get `304 Not Modified` without the handler running, until a workspace write, deploy or env change. Load `references/response-cache.md` before declaring it: reads through `fetch()` / `context` slots need a `ttl`, and `tables` must list every table the handler reads.
 
 ## Webhooks — overview
 
-Apps can expose **token-gated external endpoints** under `webhooks/` for receiving callbacks from external services (Stripe, GitHub, Slack, Gmail push). Each URL embeds a signed `?token=` query parameter — unguessable, not anonymous. Handlers run as the app owner.
+Apps can expose **token-gated external endpoints** under `webhooks/` for receiving callbacks from external services (Stripe, GitHub, Slack, Gmail push). Each URL carries a revocable webhook token as `?token=` — unguessable, not anonymous. Deploy issues no token: mint one per external service with `POST /api/apps/{id}/webhook-tokens` (the signed JWT is the response's `key`), or on **2026.1.4+** use **Copy URL** on the App admin panel's **Webhooks** tab, then hand out `…/api/apps/{naturalId}/_hook/{path}?token=<key>`. Handlers run as the app owner.
 
 ```javascript
 // webhooks/github.js
@@ -778,9 +814,9 @@ export async function POST({ crypto, request, env, query }) {
 }
 ```
 
-Webhook handlers receive the **same bag as server routes** — `query`, `transaction`, `fetch`, `context`, `respond`, `emit`, `broadcast`, `notify`, `email`, `crypto`, `markdown`, `log`, `env`, plus the base64 globals and `request.rawBody` (for HMAC verification). `notify()` and `email()` **are** available (handlers run as the app owner). The only differences are inbound identity: `request.user` is `null` (no user session) and `request.roles` is `[]` — the handler still *runs as* the app owner, so `fetch()`, `notify()`, and `email()` use owner credentials.
+Webhook handlers receive the **same bag as server routes** — `query`, `transaction`, `fetch`, `context`, `respond`, `emit`, `broadcast`, `notify`, `email`, `crypto`, `markdown`, `log`, `env`, plus the base64 globals and `request.rawBody` (for HMAC verification). `notify()` and `email()` **are** available (handlers run as the app owner). The only differences are inbound identity: `request.user` is the **App owner** (a team App's first admin), never the caller, and `request.roles` is `[]` — the handler *runs as* the owner, so `fetch()`, `notify()`, and `email()` use owner credentials. Don't test `request.user` to detect a webhook call or identify who sent it.
 
-Load `references/webhooks.md` for: file-convention routing, the `?token=` issuance/verification flow, full HMAC verification examples (GitHub, Stripe, shared-secret), and reading per-app secrets via the `env` bag (configured in **Admin → Environment** or declared as keys in `informer.yaml` `env:`).
+Load `references/webhooks.md` for: file-convention routing, getting a webhook URL (minting, revoking and rotating webhook tokens, and what each `401` means), full HMAC verification examples (GitHub, Stripe, shared-secret), and reading per-app secrets via the `env` bag (configured in **Admin → Environment** or declared as keys in `informer.yaml` `env:`).
 
 ## Embeddings — overview
 
@@ -1088,21 +1124,26 @@ platform APIs — the app's own routes are their surface.
 Load `references/accounts-and-login.md` for the full route table, manifest
 shapes, and limits before building any of this.
 
-## Built-in App Copilot — overview
+## Embedded copilots — overview
 
-Every Informer App gets a **built-in AI copilot sidebar** — a chat panel that slides in from the right side of the app window. Hidden by default; activates automatically when the app calls `registerTool()`, or explicitly via `showCopilot()`, or via a paint-your-own button that calls `openChat({ prompt, context, instructions })`.
+An App's copilot is a chat it builds into its **own UI**: it streams from `POST /api/models/{model}/_chat` (granted to every App automatically, no `access.apis` entry needed), sends a static `system` prompt plus a per-turn `dynamicSystem` describing what the user is looking at, and acts through **client tools** that call the App's own routes. It works in a browser tab, on the App's own origin, as an installed PWA and inside Informer GO.
 
-```javascript
-__INFORMER__.openChat({
-    prompt: 'Why did revenue spike in Q4?',
-    context: { revenue: 1250000, quarter: 'Q4' },
-    instructions: 'Use the Informer API to query the sales-data dataset for year-over-year Q4 trends.'
-});
+```tsx
+const transport = useMemo(() => new DefaultChatTransport({
+    api: '/api/models/go_everyday/_chat',
+    prepareSendMessagesRequest: async ({ messages, id, trigger, messageId }) => ({
+        body: { id, messages, trigger, messageId, system: SYSTEM, dynamicSystem: await currentContext(), tools: CLIENT_TOOLS }   // currentContext: your own route
+    })
+}), []);   // built once, so read anything that changes between turns through a ref (copilot.md)
+// sendAutomaticallyWhen continues after tool calls, capped at 6 per user turn; the full hook is in copilot.md
+const chat = useChat({ transport, experimental_throttle: 50, sendAutomaticallyWhen, onToolCall });   // a bare `throttle` is ignored
 ```
 
-Apps can also call Informer's AI directly via three endpoints (use the `go_everyday` model slug): `_chat` (SSE stream, supports tools), `_completion` (SSE stream, simple text), `_object` (JSON, structured output). All three accept `outputSize` (`small` / `medium` / `large`) on current servers.
+**Legacy:** `__INFORMER__.openChat()`, `showCopilot()` and `registerTool()` still drive Informer GO's docked copilot sidebar through 2026.2.0. Don't add new uses; replace them with an embedded copilot (copilot.md maps each call).
 
-Load `references/copilot.md` for: full `openChat()` / `showCopilot()` / `registerTool()` reference, the report-bridge bidirectional pattern, AI SDK UIMessage format (parts arrays, not OpenAI), the inline tools object-keyed-by-name format, SSE event types and stream parsing, the `useChat` React hook pattern with `addToolOutputRef`, defensive parsing for `_object` Haiku drift, dev-mode mocks.
+Three endpoints, all granted to every App: `_chat` (UI message stream, client and server tools), `_completion` (stream, one-shot text; no `outputSize`), `_object` (JSON, structured output; the one to call from `server/` routes). `appProxyStreaming` is off by default, so replies arrive whole through the App proxy: always pace the reveal.
+
+Load `references/copilot.md` for: moving off the GO sidebar calls, the `useChat` transport and body, client tools with the continuation ceiling, server tools and approvals, streaming-markdown rendering rules, errors and session loss, persisting UIMessages, the server-route `_object` recipe, the model list, the vanilla stream reader, and defensive `_object` parsing.
 
 ## Agents — overview
 
@@ -1174,7 +1215,30 @@ export async function handler({ args, query, run }) {
 
 Connect with `claude mcp add --transport http my-app <endpoint>` (the endpoint is the `inf:app-mcp` rel and the admin panel's **MCP** tab; never hand-build it). First tool use pops a browser: RFC 9728 discovery → self-registration → PKCE → a token bound to that one app. Self-registration needs a tenant admin to enable it (Admin → Settings → Security); while it's off, clients connect with an API-token header instead.
 
-Load `references/mcp.md` for: the `mcp/` vs `tools/` decision in depth (including the `emit()`-tool trap), writing tools for a context-free caller (descriptions as API docs, self-describing returns, no guessing), the identity model (`runAs` slots, `run.user`/`run.roles`, and why the app's own workspace is not per-caller so **the tool is the access control**), the full OAuth/discovery/DCR flow, curl-testing the endpoint, observability, and gotchas.
+Load `references/mcp.md` for: the `mcp/` vs `tools/` decision in depth (including the `emit()`-tool trap), writing tools for a context-free caller (descriptions as API docs, self-describing returns, no guessing), the identity model (`runAs` slots, `run.user`/`run.roles`, and why the app's own workspace is not per-caller so **the tool is the access control**), `export const needsApproval` (whether a copilot asks before a tool runs), the full OAuth/discovery/DCR flow, curl-testing the endpoint, observability, and gotchas.
+
+## CLI commands — overview
+
+An app with a **`cli/` directory** has commands people run from their terminal with the Informer CLI (`inf`), as themselves (2026.2.0+; plugin 2.14.0+ deploys the folder; `npm run dev` doesn't run them). The file contract is the `mcp/` one — `description`, `schema`, `handler` — plus `export const cli` for positional arguments and listing; the path is the command (`cli/retro/add.js` → `inf my-app retro add`), and the schema becomes typed flags. **Only the CLI checks arguments against the schema**; a call from `curl` or a script reaches the handler as sent, so the handler checks what it relies on.
+
+```javascript
+// cli/move.js — inf my-app move I5-12 Done
+export const description = 'Move an issue to another column';
+export const schema = {
+    type: 'object',
+    properties: { key: { type: 'string' }, column: { type: 'string', enum: ['Todo', 'Doing', 'Done'] } },
+    required: ['key', 'column'],
+};
+export const cli = { positional: ['key', 'column'] };
+
+export async function handler({ args, query, reply }) {
+    const [issue] = await query('UPDATE issues SET col = $2 WHERE key = $1 RETURNING key, col', [args.key, args.column]);
+    if (!issue) throw new Error(`No issue ${args.key}`);
+    return reply(`Moved ${issue.key} to ${issue.col}.`, issue);   // a terminal sees the sentence, a pipe the JSON
+}
+```
+
+Load `references/cli.md` for: the five shapes of command and how to choose (plain, follow, a **session** whose `client` works in the person's folders, `--watch`, and a **view** — a board or dashboard the person drives with keys), the full file contract and its deploy warnings, schema → arguments, the CLI-only bag (`run.client`, `run.timeZone`, `reply()`, `follow()`, `client`), the building blocks a terminal draws, output and `--json`, who a command runs as (`inf login`, `inf install`, App API keys for CI), limits and billing, choosing between `cli/`, `mcp/` and `server/`, and the three lines to give people.
 
 ## PDF Export
 
@@ -1258,19 +1322,21 @@ The orientation above points to each file; this is the canonical list of what's 
 
 | File | Covers |
 |---|---|
-| `references/server-routes.md` | `server/` handlers, full sandbox-helper reference (`query`, `transaction`, `fetch`, `respond`, `notify`, `email`, `log`, `crypto`, base64/markdown globals), `config.timeout` / `config.roles`, worked CRUD example |
-| `references/webhooks.md` | `webhooks/` handlers, signed `?token=` flow, HMAC verification (`crypto.verifyHmac`), how webhooks differ from server routes (inbound identity only — same handler bag) |
+| `references/server-routes.md` | `server/` handlers, full sandbox-helper reference (`query`, `transaction`, `fetch`, `respond`, `notify`, `email`, `log`, `crypto`, base64/markdown globals), `fetch()` binary envelopes, `request.app`, `config.timeout` / `config.roles`, worked CRUD example, push notifications and their opt-in (`notifications:`, `__INFORMER__.notifications`, `importScripts('/_app/push-sw.js')`) |
+| `references/response-cache.md` | `config.cache` on `GET` routes — options (`ttl` / `vary` / `tables` / `edge`), what changes the `ETag` and what needs a `ttl`, never-tagged responses, the public-route store and overload relief (stale or unstored, never refused), CDN cache-key rules and `Vary`, verifying from `X-Informer-Cache`, the per-App switch and Clear, the deploy partial failures (bad declaration, non-plain `tables`, materialized views and foreign tables), `app.responseCache` / `app.heldFiles` server settings |
+| `references/webhooks.md` | `webhooks/` handlers, getting a webhook URL (`POST /webhook-tokens`, **Copy URL**, revoke, rotate, the 401s), HMAC verification (`crypto.verifyHmac`), how webhooks differ from server routes (inbound identity only — same handler bag) |
 | `references/persistence.md` | `migrations/`, dev workspace lifecycle, CRUD worked example |
 | `references/embeddings.md` | The `embeddings/` folder — declarative vector embeddings via the platform pump (`config` + `GET`/`POST` contract), revision/re-embed semantics, tombstoned failures, pgvector columns + `embed(name, text)` search, status/`_run` routes |
 | `references/ui-quality.md` | The six UI non-negotiables in depth — mobile-first layout, layout-shift prevention (skeletons, reserved dimensions, stable dialogs), TanStack Query freshness rules, sortable tables / AG Grid Community, spacing and vertical rhythm, icon brightness and where each icon surface comes from (gallery, tab, home-screen tile, marketplace, PWA manifest) |
 | `references/widgets.md` | `widgets:` declaration, self-contained HTML template, iframe constraints, SVG charts without libraries |
-| `references/copilot.md` | `openChat()` / `showCopilot()` / `registerTool()`, AI completion endpoints (`_chat` / `_completion` / `_object`), `useChat` hook pattern, defensive `_object` parsing |
+| `references/copilot.md` | Embedded copilots on `_chat` — `useChat` transport, client tools and approvals, rendering, persistence, server-route `_object` calls, endpoint reference, moving off the GO sidebar calls (`openChat` / `registerTool` / `showCopilot`) |
 | `references/agents.md` | `agents:` declaration, `tools/*.js`, event chaining via `emit()`, cron lifecycle, toolkits/assistants, agent REST API |
 | `references/channels.md` | Live broadcast to open pages and `send()` back — origin-mode requirement and `platform.originMode`, `channels:` relay block (`on` required), `channels/` handlers (`config` / `join` / `joined` / `leave` / event exports, the channel bag), `broadcast()` + error table + `{ replay: false }`, `@user/<username>`, wildcards, the `__INFORMER__.channel()` client API (`since`, `connected`, `send()`, error codes, reconnect + replay, `replay_gap`), `broadcast()` vs `emit()`, limits (`inboundRate`, `replay`), dev-mode coverage (plugin 2.11.0+, server parity from 2.12.0) |
 | `references/channel-actors.md` | Channel actors — when to use one, `config.actor` (`tick` / `idleMs` / `memoryMb` / `snapshotMs`) and its deploy checks, the exports and call order (one at a time, the queue, skipped ticks), `request.member`, the actor bag (no `fetch` / typed `context`), own-channel broadcasts, why an actor stops, snapshots across redeploys and dead servers, the cluster and `unavailable`, `ACTOR` / `ACTOR_IDLE` billing, the `app.channels.actors` limits, `serverNow()`, dev emulation (plugin 2.13.0+) |
 | `references/streams.md` | Staged uploads/downloads — `__INFORMER__.upload()` on the page, `uploads.get(id)` → `copyInto()` / bytea parameter / inline reads under the 10 MB cap, `downloads.create()` → `fromQuery()` / `writeRows()` / `return dl` / `dl.url`, the six limits, transfer events and `__INFORMER__.streams`, forwarding to an integration (`data` / `form` / `into`), error table, dev-server emulation gaps |
-| `references/mcp.md` | The `mcp/` folder, `mcp/` vs `tools/` split, writing tools for a context-free caller, identity (`runAs` / `run.user` / `run.roles`, workspace-not-per-caller), the per-app endpoint, OAuth discovery + DCR connect flow, curl testing, observability |
-| `references/informer-yaml.md` | Full `informer.yaml` schema deep dive — slot fields, `$user.*` variables, modernizing legacy `access:` blocks, declaring env-var keys with `env:` |
+| `references/mcp.md` | The `mcp/` folder, `mcp/` vs `tools/` split, writing tools for a context-free caller, identity (`runAs` / `run.user` / `run.roles`, workspace-not-per-caller), `needsApproval` in chat, the per-app endpoint, OAuth discovery + DCR connect flow, curl testing, observability |
+| `references/cli.md` | The `cli/` folder — the five shapes of command, command file contract (`cli`, `confirm`, `roles`, `complete`, `watch` + `added` / `changed` / `removed`), schema → arguments, the CLI-only bag (`run.client`, `run.timeZone`, `reply()`, `follow()`, `client`), sessions and folder access (`read` / `write` / `mirror`), `--watch`, building blocks and `client.display`, interactive views (`render`, `init`, `actions`, `event`, `loaders`, `view.follow`), output and `--json`, identity, `inf install`, App API keys for CI, limits and billing, `cli/` vs `mcp/` vs `server/` |
+| `references/informer-yaml.md` | Full `informer.yaml` schema deep dive — slot fields, `$user.*` variables, modernizing legacy `access:` blocks, declaring env-var keys with `env:`, datasource slot query parameters, the `notifications:` push opt-in |
 | `references/docs-html.md` | In-gallery `docs.html` page, in-app `?` help button, `README.md` fallback |
 | `references/api-reference.md` | Raw API surface behind the typed-slot proxy (useful for diagnostics) |
 | `references/app-templates.md` | HTML/CSS/JS starter snippets — charts, layouts |
@@ -1282,4 +1348,4 @@ The orientation above points to each file; this is the canonical list of what's 
 
 ## Terminology Note
 
-Informer Apps were previously called "Magic Reports". The underlying technology is the same — the rename reflects their broader role as full applications with built-in AI copilots, not just static reports. The deploy tool automatically detects which API your server supports (`/api/apps` or the legacy `/api/reports`) and uses the correct one.
+Informer Apps were previously called "Magic Reports". The underlying technology is the same — the rename reflects their broader role as full applications, not just static reports. The deploy tool automatically detects which API your server supports (`/api/apps` or the legacy `/api/reports`) and uses the correct one.

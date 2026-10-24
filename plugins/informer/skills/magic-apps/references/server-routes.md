@@ -1,8 +1,10 @@
 # Server-Side Routes
 
-> **Load this reference when:** writing handler files under `server/`, working with the V8 sandbox helpers (`query`, `transaction`, `fetch`, `respond`, `notify`, `email`, `log`, `crypto`, the base64/markdown/extractText globals), configuring per-handler `timeout` or `roles`, or wiring frontend calls to `/api/...`.
+> **Load this reference when:** writing handler files under `server/`, working with the V8 sandbox helpers (`query`, `transaction`, `fetch` and its base64 envelope for binary responses, `respond`, `notify`, `email`, `log`, `crypto`, the base64/markdown/extractText globals), reading `request` (including `request.app` for the App's own addresses), configuring per-handler `timeout` or `roles`, wiring frontend calls to `/api/...`, or sending push notifications and helping users opt in (`notify()`, `notifications:` in `informer.yaml`, `window.__INFORMER__.notifications`, an app service worker's `importScripts('/_app/push-sw.js')`).
 >
-> **Not in this file:** public token-gated webhook endpoints — see `webhooks.md`. Agent tool handlers — see `agents.md` (they share the same sandbox, so this file is the authoritative sandbox reference). Live broadcast to open pages (`broadcast()`, `channels/` handlers, the page-side `channel()` API) — see `channels.md`. The typed dep proxy (`context.<slot>.<method>()`) — see SKILL.md "Accessing Your Dependencies".
+> **Not in this file:** public token-gated webhook endpoints — see `webhooks.md`. Agent tool handlers — see `agents.md` (they share the same sandbox, so this file is the authoritative sandbox reference). Live broadcast to open pages (`broadcast()`, `channels/` handlers, the page-side `channel()` API) — see `channels.md`. The typed dep proxy (`context.<slot>.<method>()`) — see SKILL.md "Accessing Your Dependencies". Commands people run from a terminal (`cli/`, `reply()`, `follow()`, `client`) — see `cli.md`. Caching `GET` responses with `config.cache` (`ETag` / `304`, `ttl`, `tables`, CDN `edge`) — see `response-cache.md`.
+>
+> **Availability:** `server/` routes ship in every App release (2026.1.0+), so there is nothing to detect for the folder itself. Later additions carry their floor inline: bare `/api/{path}` routes and origin mode **2026.1.2+**, the `platform` descriptor **2026.1.4+** (absent below it, so read `platform?.version` / `platform?.capabilities`), and `notify()` reaching the installed app **2026.2.0+**. Below a floor, follow that section's fallback.
 
 Apps can include **server-side JavaScript handlers** that run on the Informer server in sandboxed V8 isolates. These handlers have direct access to the app's Postgres workspace and can make authenticated API calls — ideal for business logic, data transformations, webhooks, or anything that shouldn't run in the browser.
 
@@ -59,25 +61,27 @@ Each handler function receives a single context object with these properties:
 |----------|------|-------------|
 | `query` | `async (sql, params?) => rows` | Execute SQL against the app's workspace. Returns an array of row objects. |
 | `transaction` | `async (fn) => result` | Run `fn({ query })` in one DB transaction: commits when it resolves, rolls back if it throws. Does not nest. See [Using `transaction()`](#using-transaction). |
-| `fetch` | `async (path, options?) => { status, body }` | Make an authenticated API call through Informer (subject to the app's whitelist). Not in a channel actor, where it throws — `channel-actors.md`. |
-| `context` | `object` | Typed dep proxies keyed by slot name. Call deps as `context.<slotName>.<method>(args)`. Methods per `target`: `dataset` → `search(esQuery)` / `fields()`; `query` → `execute(params)`; `datasource` → `query(payload)`; `integration` → `request(opts)`. Throws boom 422 with `errorCode: 'dependency_unbound'` if the installer hasn't bound the slot yet, or `'dependency_broken'` if the bound target was deleted. Prefer this over raw `fetch()` — slots survive bundle export/import and resource renames; raw paths don't. Empty in a channel actor. |
+| `fetch` | `async (path, options?) => { status, body }` | Make an authenticated API call through Informer (subject to the app's whitelist). Any non-binary body that parses as JSON comes back parsed, whatever its content type (a `text/plain` `42` arrives as a number); other text comes back as a string. A binary response under 400 (any content type but JSON, `text/*` or an event stream: images including SVG, PDF, zip, wasm) comes back as a base64 envelope — see pitfall 5 under [Using `fetch()`](#using-fetch). Not in a channel actor, where it throws — `channel-actors.md`. |
+| `context` | `object` | Typed dep proxies keyed by slot name. Call deps as `context.<slotName>.<method>(args)`. Methods per `target`: `dataset` → `search(esQuery)` / `fields()`; `query` → `execute(params)`; `datasource` → `query({ language, payload, params?, inputs?, limit? })`, returning an array of rows — `language` follows the datasource (`'sql'`, `'u2'`, `'informer'`, `'web'`), and in SQL `$name` binds from `params` (declared `inputs` **2026.1.3+**, `params` alone **2026.1.4+**), so never interpolate request input into `payload` (rules: `informer-yaml.md` → "Datasource slot queries"); `integration` → `request(opts)`. Throws boom 422 with `errorCode: 'dependency_unbound'` if the installer hasn't bound the slot yet, or `'dependency_broken'` if the bound target was deleted. Prefer this over raw `fetch()` — slots survive bundle export/import and resource renames; raw paths don't. Empty in a channel actor. |
 | `respond` | `async (response) => void` | Send an early HTTP response while the handler continues running in the background. Accepts the same shape as a synchronous return — a response object (`{ status, headers?, body?, encoding? }`) or any plain value (wrapped as 200 JSON). See [Using `respond()`](#using-respond). **2026.1.4+** throws once `app.routes.maxBackgroundPerApp` (10) of the App's handlers are still running after `respond()` on this server. |
 | `emit` | `async (event, payload) => void` | Emit an app event to trigger agents. Creates an `AppEvent` record and notifies the event dispatcher. |
 | `broadcast` | `async (channel, event, payload?, options?) => { ok: true, seq }` | Push a fire-and-forget frame to every open page subscribed to `channel` (origin-mode servers only); `seq` is the frame's number in that channel's sequence, and the server keeps recent frames for reconnecting pages unless `options` is `{ replay: false }` (typing, cursors). No DB row, no delivery report; rejects on a bad or wildcard channel name, a bad or reserved (`error`, `connected`) event, a payload over 64 KiB, or the App's rate limit. The live counterpart of `emit()` — see `channels.md`. Inside a channel actor a broadcast to its **own** channel resolves `{ ok: true, queued: true, seq: null }` — `channel-actors.md`. **2026.1.4+** |
 | `uploads` | `object` | Resolve a file the page staged with `__INFORMER__.upload()` — `uploads.get(id)` returns a handle (`copyInto(table)`, `text()`, `json()`, `extractText()`, `discard()`; the handle itself binds as a `bytea` query parameter). Bytes never enter the isolate. A handle also goes out as the `data` or a `form` field of `context.<slot>.request()` — the host streams it to the integration. See `streams.md`. **2026.1.4+** |
 | `downloads` | `object` | Stage bytes for the browser — `downloads.create({ filename })` returns a handle (`fromQuery(sql)`, `writeRows(rows)`, `write(chunk)`, `end()`, `url`); return it or `respond()` with it to stream it as the response. `context.<slot>.request({ …, into: dl })` fills and seals it from an integration's response (`into: 'upload'` stages a fresh upload instead). See `streams.md`. **2026.1.4+** |
 | `embed` | `async (useCase, text) => { embedding, revision }` | Query-time vector from the platform embedding model, scoped to a declared `embeddings/` use case (unknown names throw). Returns an object, not a bare array: `revision` is the stamp the pump writes beside every stored vector, and a search must filter on it as well as ordering by distance, or a repointed model silently returns near-random neighbours. Bounded — 100k characters per call, 100 calls per invocation, refused on an exhausted compute budget. Always a function where the server has it and throws when the app type lacks the capability, so feature-detect on `platform?.capabilities?.embeddings`. See `embeddings.md`. **2026.1.4+** |
-| `notify` | `async (username, message) => { id }` | Enqueue a push notification for delivery to a user's Informer GO devices. See [Using `notify()`](#using-notify). |
+| `notify` | `async (username, message) => { id, subscribed }` | Enqueue a push notification. On an origin-mode server it goes to the recipient's installed copy of this App (a PWA with notifications turned on); otherwise to their Informer GO phones. `subscribed: false` means they have nowhere to receive it. See [Using `notify()`](#using-notify). **2026.2.0+** for the installed-App delivery and `subscribed` |
 | `email` | `async (to, message) => { id }` | Enqueue an email for delivery via the tenant's mail transport. See [Using `email()`](#using-email). |
 | `crypto` | `object` | Cryptographic helpers (all async): `hmac`, `hash`, `randomUUID`, `randomBytes`, `timingSafeEqual`, `verifyHmac`, `encrypt`/`decrypt` (AES-256-GCM), `verify`. See [Using `crypto`](#using-crypto). |
 | `log` | `function` | Structured logging. `log(message, data?)` or `log.info()`/`log.warn()`/`log.error()`/`log.debug()`. Writes to `app_log`. See [Using `log()`](#using-log). |
 | `env` | `object` | App environment variables — decrypted values from the app's Environment. Set in **Admin → Environment**; declared keys in `informer.yaml` `env:` arrive as unset placeholders for the installer to fill per tenant. Encrypted at rest; never returned by any API. |
-| `platform` | `{ version, originMode, capabilities }` | What the platform offers: the Informer build version, whether apps serve from their own origins (`originMode`, the precondition for live channels), and the app type's capability flags (`serverRoutes`, `webhooks`, `mcp`, `storage`, `embeddings`, …). Feature-detect with `platform?.capabilities?.<name>` instead of probing for a helper or comparing versions — optional chaining, because older servers inject no `platform` and a bare `platform.capabilities` throws there; the same object is `window.__INFORMER__.platform` in the browser. Informer ≥ the release carrying I5-12984; absent on older servers (treat a missing `platform` as "unknown"). **2026.1.4+** |
+| `platform` | `{ version, originMode, capabilities }` | What the platform offers: the Informer build version, whether apps serve from their own origins (`originMode`, the precondition for live channels and, **2026.2.0+**, for `notify()` reaching the installed app), and the app type's capability flags (`serverRoutes`, `webhooks`, `mcp`, `storage`, `embeddings`, …). Feature-detect with `platform?.capabilities?.<name>` instead of probing for a helper or comparing versions — optional chaining, because older servers inject no `platform` and a bare `platform.capabilities` throws there; the same object is `window.__INFORMER__.platform` in the browser. Informer ≥ the release carrying I5-12984; absent on older servers (treat a missing `platform` as "unknown"). **2026.1.4+** |
 | `request` | `object` | The incoming request (see below). |
+
+A `cli/` command gets the tool bag instead — `args` and `run` in place of `request` and `respond` — with three helpers only a command has: `reply(message, data)`, `follow(channel)` and, in a session, `client` (the terminal that ran it). See `cli.md`. **2026.2.0+**
 
 **Sandbox globals (available without destructuring):**
 
-The following are available as **globals** inside the V8 isolate — not as keys on the handler argument. Don't destructure them from the handler arg (it'll bind to `undefined`); just call them.
+The following are callable **by name** inside the V8 isolate. `markdown` and `extractText` are also passed on the handler argument, so destructuring them works; the `base64*` helpers and `atob` / `btoa` are **not** on the argument — destructure one and it binds `undefined` (`base64Decode is not a function`). Call those by name.
 
 | Global | Type | Description |
 |--------|------|-------------|
@@ -102,6 +106,7 @@ The following are available as **globals** inside the V8 isolate — not as keys
 | `request.headers` | `object` | Request headers |
 | `request.roles` | `string[]` | The viewer's assigned role IDs (see App Roles in SKILL.md) |
 | `request.user` | `object` | Current user identity (see below) |
+| `request.app` | `object` | The App's own identity and addresses: `{ id, naturalId, name, baseUrl, origin, apiUrl }`. `origin` is the App's own origin (`https://<label>.<apps-domain>`), `null` in path mode; `apiUrl` is the base an outside caller appends a route to. `baseUrl` is the App's view URL on the **Informer** origin, even in origin mode. Build absolute links (emails, share URLs) from these, never from headers. **2026.1.1+**; `origin` and `apiUrl` **2026.1.4+** |
 
 **`request.user` object:**
 
@@ -302,7 +307,7 @@ The `path` argument is relative to `/api/` — pass `'datasets/admin:sales-data/
 
 ### Common pitfalls
 
-The sandboxed `fetch` and `request` behave differently from their browser counterparts. The four mistakes below come up often because muscle memory from browser code doesn't transfer.
+The sandboxed `fetch` and `request` behave differently from their browser counterparts. The five mistakes below come up often because muscle memory from browser code doesn't transfer.
 
 **1. `fetch()` returns `{ status, body }`, not a Web `Response`.** No `.ok`, no `.json()`, no `.text()`, no `.headers` getter.
 
@@ -328,10 +333,10 @@ body: JSON.stringify({ query: { match_all: {} } })
 body: { query: { match_all: {} } }
 ```
 
-**3. Don't `new URL(request.url)`.** The sandbox doesn't ship a full origin/host on `request.url`. The fields you'd extract are already parsed:
+**3. Don't `new URL(request.url)`.** `request.url` is undefined in the sandbox (the request carries `method`, `path`, `headers`, `body`, `params`, `query`, `roles`, `apiKey`, `user` and `app`; webhooks add `rawBody`), and the isolate has no `URL` class either, so `new URL(...)` throws a `ReferenceError` on any input. The fields you'd extract are already parsed:
 
 ```javascript
-// WRONG — request.url may not be a fully-qualified URL; URL() can throw
+// WRONG — request.url is undefined, and URL is not defined in the isolate
 const url = new URL(request.url);
 const status = url.searchParams.get('status');
 
@@ -340,7 +345,17 @@ const status = request.query.status;
 const orderId = request.params.id;
 ```
 
+For the App's own address, read `request.app.origin` (`null` in path mode) or `request.app.apiUrl` (both **2026.1.4+**) — not `request.app.baseUrl`, which is on the Informer origin even in origin mode. To split another absolute URL you hold (a HAL `_links.self.href`), use a pattern: `/^(https?:\/\/[^/?#]+)/i.exec(url)?.[1]` gives the origin. A `try { new URL(...) } catch` fallback hides the `ReferenceError` and silently takes the fallback every time.
+
 **4. Plain-text upstream responses break the dev `apiFetch` body parser.** In dev mode, the Vite plugin's `apiFetch` reads the upstream body with `resp.json()` first and only falls back to `resp.text()` on failure — but `resp.json()` already consumes the stream, so the fallback throws "Body already read" and the call appears to fail silently. If you're proxying through an upstream that returns `text/plain`, parse it in the handler and return JSON, rather than passing the raw body through.
+
+**5. A binary response comes back as a base64 envelope, not bytes or text.** For a response under 400 whose content type isn't JSON, `text/*` or an event stream, `fetch()` returns `{ status, body, encoding: 'base64', contentType, headers }` with `body` base64-encoded. That includes `image/svg+xml`, so an SVG you fetch arrives as base64, not markup. Forward the envelope unchanged with `return res` or `respond(res)` (it has the response-descriptor shape), put it in a data URI with `data:${res.contentType};base64,${res.body}`, read a text-like one with the `base64Decode` global, or get bytes with `Uint8Array.from(atob(res.body), c => c.charCodeAt(0))` — not `base64Decode`, which returns UTF-8 text and corrupts binary. A **zero-length** binary body comes back with `body: ''` and **no** `encoding`, so check `res.encoding === 'base64'` before decoding rather than trusting the status. A 4xx/5xx response with a binary content type falls through to the normal `{ status, body }` path.
+
+```javascript
+// An app's icon, inlined for a page that can't load images from the Informer origin
+const res = await fetch(`apps/${id}/contents/favicon.svg`);
+const icon = res.status === 200 && res.encoding === 'base64' ? `data:${res.contentType};base64,${res.body}` : null;
+```
 
 ## Using `respond()`
 
@@ -465,6 +480,7 @@ export async function POST({ query, request }) {
 | `timeout` | `number` | `30000` | Wall-clock timeout in ms, from the request (a `respond()` does not restart it). Handler is killed if it exceeds this. **2026.1.4+** capped at `app.routes.maxTimeoutMs` (default 900000, 15 min): a larger value deploys with a warning and is stopped at the ceiling. |
 | `roles` | `string[]` | `[]` (open) | If set, only viewers with at least one matching role can call this route. Returns 403 otherwise. |
 | `api` | `'public'` | (internal) | Marks this file's routes as part of the App's **public API** — advertised in its `openapi.json` contract for other Apps to build on. |
+| `cache` | `true` \| `{ ttl, vary, tables, edge }` | none | **2026.2.0+** (older servers ignore it). `GET` only: `200` responses get an `ETag`, and a matching `If-None-Match` answers `304` before the handler loads, until a workspace write, deploy, env change or `ttl` invalidates it. Reads through `fetch()` / `context` slots need a `ttl`. Full rules: `references/response-cache.md`. |
 
 **`config`, `schema`, and `description` are read as literals.** The deploy scanner lifts `export const config = { … }` (and `export const schema = { … }`, `export const description = '…'`) out of the source text and evaluates each on its own, with none of the file's imports in scope. Write them as self-contained literals directly on the `export const`: no identifiers from imports (`enum: STATUS_OPTIONS`), no spreads of imported objects, no `export { config }` re-export. A `config` that can't be evaluated **fails the deploy** (it may carry the role gate); a `schema` or `description` that can't be evaluated is **dropped with a deploy warning** and the route publishes with no contract. Need the same values at runtime? Keep the literal in the handler and import it from there, or mirror it in a `lib/` module with a test pinning the copy.
 
@@ -474,27 +490,39 @@ Two sibling exports enrich the App's `openapi.json` contract — the document ot
 
 ## Using `notify()`
 
-Enqueue a push notification for delivery to a user's registered Informer GO devices. Messages are queued and delivered asynchronously via FCM. Returns immediately with the message ID. The app's ID is automatically attached — tapping the notification in GO opens this app.
+Enqueue a push notification. Returns immediately; delivery happens asynchronously. The notification carries this app's name, and tapping it opens this app, optionally deep-linking via `path`. Only users who can open the app receive it (**2026.2.0+**; older servers deliver to anyone named).
+
+Where it arrives depends on the server — read `platform.originMode` in the handler bag (`window.__INFORMER__.platform.originMode` on the page):
+
+- **Origin mode, 2026.2.0+:** the recipient's **installed** copy of this app — added to the Home Screen, or installed from the browser — with notifications turned on. Installing the app is how a user opts in, and the notification shows the app's own icon and name. A user who has not installed it and turned notifications on receives nothing, so check `subscribed` and fall back to `email()`.
+- **Path mode, or any server below 2026.2.0:** the recipient's Informer GO phones (FCM).
+
+> **Migrating an App that already calls `notify()`.** When an origin-mode server moves to 2026.2.0, the App's notifications stop reaching Informer GO phones. There is no fallback to GO: a recipient with no subscription for this App gets nothing, and the message goes `dead` at once. Users subscribe only through the platform banner or the App's own `enable()` button, so an App with neither reaches nobody after the upgrade. Declare `notifications: true` (or add your own button, below) and handle `subscribed === false`.
 
 ```javascript
 // Single notification
-export async function POST({ notify, request }) {
-    const { id } = await notify('jane', {
+export async function POST({ notify, email }) {
+    const { id, subscribed } = await notify('jane', {
         title: 'Order Shipped',
         body: 'Your order #1234 has shipped!',
         path: '/orders/1234'     // optional deep link within this app
     });
+    // === false, not !subscribed: below 2026.2.0 it is undefined
+    if (subscribed === false) await email('jane@acme.com', { subject: 'Order Shipped', html: '<p>Your order #1234 has shipped!</p>' });
     return { notificationId: id };
 }
 ```
 
+An App that cannot work below 2026.2.0 can instead declare `requires: { informer: '>=2026.2.0' }` in `informer.yaml` (see `informer-yaml.md`); then `subscribed` is always present, but the App no longer deploys to older servers.
+
 **Bulk notifications** — pass an array to send multiple in a single call:
 
 ```javascript
-const { ids, queued } = await notify([
+const { ids, queued, unsubscribed } = await notify([
     { username: 'jane', title: 'Report Ready', body: 'Your Q1 report is ready' },
     { username: 'bob', title: 'Report Ready', body: 'Your Q1 report is ready' },
 ]);
+// unsubscribed: usernames with nowhere to receive it (2026.2.0+; absent below)
 ```
 
 **Parameters (single):**
@@ -504,12 +532,51 @@ const { ids, queued } = await notify([
 | `username` | string | Informer username to notify |
 | `message.title` | string | **Required.** Notification title |
 | `message.body` | string | Notification body text |
-| `message.path` | string | Deep link path within the app (e.g. `/orders/123`) |
-| `message.data` | object | Custom data (values coerced to strings for FCM) |
+| `message.path` | string | Deep link within the app (e.g. `/orders/123`). Resolves against this app's view URL on tap. |
+| `message.data` | object | Custom data (values coerced to strings). Keep it small: an installed app's notification must fit in about 4 KB. The keys `appId`, `appName` and `appPath` are the platform's — values the app sets for them are replaced or dropped, so deep-link with `path`, not `data.appPath`. |
 
 **Bulk:** Array of `{ username, title, body, path?, data? }` objects.
 
-Messages are retried up to 3 times on failure, then moved to `dead` status. Message history is viewable via `GET /api/apps/{id}/messages`.
+Messages are retried up to 3 times on failure, then moved to `dead` status. **2026.2.0+:** some failures go `dead` at once, since retrying cannot fix them — the recipient is not a user, their account is disabled, they cannot open the app, they have no device to receive it (`subscribed: false`), every device it was sent to is gone, the notification was refused as too large, or the License Manager could not say whether it was delivered (`504 lm_indeterminate`; a notification is sent at most once). A License Manager older than 3.3.5 answers every Informer GO send failure that way, so against it nothing is retried. Message history is viewable via `GET /api/apps/{id}/messages`.
+
+### Helping users opt in (**2026.2.0+**, origin mode)
+
+**Declare it in `informer.yaml`** so the platform helps users opt in: Informer GO shows a bell in the app's title bar that walks them through installing it, and the installed app shows a banner ("Get notifications from {app}?" — Turn on / Not now) each time it opens while notifications are off, until the user turns them on, picks Not now, or the app calls `disable()`. Older servers ignore the key.
+
+```yaml
+notifications: true
+```
+
+Or keep the Informer GO install offer and drop the banner, when the app offers its own button:
+
+```yaml
+notifications:
+  prompt: false
+```
+
+`{ prompt: true }` (or `{}`) is the same as `true`; `false` and `null` are the same as leaving it out. Anything else, including an unknown key inside the object, fails the deploy with a 400. The declaration drives only the banner and the GO install offer: `window.__INFORMER__.notifications` is on the page either way.
+
+**Your own button** — `window.__INFORMER__.notifications` (installed app only; call `enable()` from a click handler, since the browser asks for permission inside the user's gesture). Feature-detect it: below 2026.2.0 it does not exist.
+
+```javascript
+const n = window.__INFORMER__.notifications;
+const state = n ? await n.status() : 'unsupported';
+// 'not-installed' | 'unsupported' | 'blocked' | 'off' | 'on'
+if (state === 'off') {
+    button.onclick = async () => {
+        // resolves the new status; 'blocked', 'off' and 'unsupported' are not errors
+        const next = await n.enable().catch(err => { showError(err.message); return null; });
+        if (next && next !== 'on') showHint(next);
+    };
+}
+// n.disable() turns them off again (resolves 'off')
+```
+
+`'not-installed'` means a browser tab or the app inside Informer GO — installing is the opt-in, so show install guidance there, not a button. Every method resolves `'unsupported'` on a path-mode server, and for sessions that act for someone else or have no Informer user to notify: a share link, an admin impersonating a user, an app account's sign-in (`accounts:`), and a draft preview (the App Builder's `-draft` origin is not the installed app). Web Push goes through the License Manager's relay, so on a server whose License Manager connection is configured offline every method resolves `'unsupported'` too. Where the License Manager has no relay (one older than 3.3.5), `GET /_app/push` answers `501 web_push_unavailable`: no banner shows and `enable()` resolves `'unsupported'`. Either way nobody can subscribe, so the `email()` fallback carries everything. The installed app never subscribes on its own; on load it only repairs a subscription the browser already holds, so a user's "off" stays off.
+
+**An app that ships its own service worker** must add `importScripts('/_app/push-sw.js');` to it, or its worker replaces the platform's and notifications never show. The failure is silent: `enable()` still subscribes and resolves `'on'`, and `notify()` reports `subscribed: true`, but nothing appears. The platform owns the app's push subscription: one the app makes itself, with its own VAPID key, is replaced the next time the app opens — always send through `notify()`.
+
+**Not emulated in dev.** Under `npm run dev`, `notify()` logs to the console and resolves `{ id }` with no `subscribed`, and `window.__INFORMER__.notifications` is absent, so the feature-detect above lands on `'unsupported'`. Test delivery on a deployed origin-mode server, with the **published** app installed and opened as yourself, not the draft preview.
 
 ## Using `email()`
 
@@ -606,7 +673,9 @@ Server handlers run in a sandboxed V8 isolate. This means:
 
 - **No Node.js APIs** — no `require()`, `fs`, `http`, `process`, `Buffer`, etc. The bundler blocks these as imports (see [Imports](#imports) above); even if you got one past the bundler, the runtime has no Node module system to load it.
 - **No network access** — all external calls must go through `fetch()` (which enforces the whitelist)
-- **No filesystem** — use `query()` for persistence
+- **No filesystem** — use `query()` for persistence (a `cli/` command in a session reaches the person's own folders through `client.files` — `cli.md`)
+- **No `URL` or `URLSearchParams`** — the isolate has JavaScript's built-ins, not the browser's or Node's web APIs, so `new URL(...)` throws a `ReferenceError` (inside a `try` it fails silently). Take addresses apart with a regex or string methods, and build query strings with `encodeURIComponent`. There is no `request.url` either; read `request.path` / `request.query` / `request.params`, and `request.app` for the App's own addresses.
+- **`fetch()` returns binary as a base64 envelope** — a response under 400 that isn't JSON, `text/*` or an event stream (SVG and `.wasm` included) arrives as `{ status, body, encoding: 'base64', contentType, headers }`; an empty one has no `encoding`. Forward it as-is, or decode bytes with `atob()` + `charCodeAt` (never `base64Decode()`, which returns UTF-8 text). See pitfall 5 under [Using `fetch()`](#using-fetch).
 - **Files and large data bypass the isolate** — `uploads` / `downloads` handles move bytes host-side (staging store ↔ Postgres ↔ browser); only `text()` / `json()` / `base64()` / `extractText()` bring bytes in, capped at 10 MB. A handle as `context.<slot>.request()` `data` / `form`, or `into`, moves bytes between the staging store and an integration host-side too. See `streams.md`.
 - **`embed()` is bounded** — at most 100,000 characters per call and 100 calls per handler invocation, and refused once the app's compute budget is exhausted. Every call is billed, so embed a corpus in the `embeddings/` pump, not per request. See `embeddings.md`.
 - **`btoa()` and `atob()` are available** — base64 encode/decode strings (Latin-1 only, per spec)
@@ -617,7 +686,7 @@ Server handlers run in a sandboxed V8 isolate. This means:
 - **128 MB memory limit** — the isolate is killed if it exceeds this
 - **Wall-clock timeout** — defaults to 30s, configurable via `config.timeout`
 - **Ephemeral** — a fresh isolate is created for each request; no state persists between calls (a `channels/` file that declares `config.actor` keeps one per channel instead — see `channel-actors.md`)
-- **WebAssembly works** — bundle the `.wasm` bytes with the handler (for example base64 in a module, decoded to a `Uint8Array`) and compile them with `new WebAssembly.Module(bytes)` + `new WebAssembly.Instance(module, imports)`, which work on every version. **2026.1.4+**: the async entry points (`WebAssembly.compile`, `instantiate`, and their streaming forms) settle at once too, so a library with an async init (wasm-bindgen's default export, Emscripten's `instantiate`) works unchanged; **below 2026.1.4 they never settle** and the handler hangs to its timeout (billed), so call the synchronous constructors. There is no network to fetch a `.wasm` from: `instantiateStreaming` only takes a `Response` you built yourself. See `wasm-workers.md`
+- **WebAssembly works** — bundle the `.wasm` bytes with the handler (for example base64 in a module, decoded to a `Uint8Array`) and compile them with `new WebAssembly.Module(bytes)` + `new WebAssembly.Instance(module, imports)`, which work on every version. **2026.1.4+**: the async entry points (`WebAssembly.compile`, `instantiate`, and their streaming forms) settle at once too, so a library with an async init (wasm-bindgen's default export, Emscripten's `instantiate`) works unchanged; **below 2026.1.4 they never settle** and the handler hangs to its timeout (billed), so call the synchronous constructors. There is no outside network to fetch a `.wasm` from — `fetch()` reaches only whitelisted Informer paths, and a `.wasm` from one arrives as the base64 envelope above — and `instantiateStreaming` only takes a `Response` you built yourself. See `wasm-workers.md`
 
 ## Calling Server Routes from App Code
 

@@ -1,10 +1,10 @@
 # `informer.yaml` Deep Reference
 
-> **Load this reference when:** writing or modernizing `informer.yaml` — declaring `dependencies:` slot fields (`target`, `runAs`, `options`, `defaultBinding`), wiring row-level security via `$user.*` variables, migrating a legacy `access:` block to typed slots, or deciding when `access.apis:` / `access.libraries:` still apply.
+> **Load this reference when:** writing or modernizing `informer.yaml` — declaring `dependencies:` slot fields (`target`, `runAs`, `options`, `defaultBinding`), wiring row-level security via `$user.*` variables, migrating a legacy `access:` block to typed slots, deciding when `access.apis:` / `access.libraries:` still apply, or binding SQL parameters in a datasource slot's `query()` (`$name`, `params`, `inputs`, `language`, never interpolating request input).
 >
-> **Not in this file:** how handler code calls the slots (`context.<slot>.method()`) — see SKILL.md "Accessing Your Dependencies". Widget declarations (`widgets:` block) — see `widgets.md`. Agent declarations (`agents:` / `events:` blocks) — see `agents.md`. Custom role definitions (`roles:` block) — see SKILL.md "App Roles". The `channels:` relay block's shape is below; its runtime semantics (`broadcast()`, `channels/` handlers, the page API) — see `channels.md`.
+> **Not in this file:** how handler code calls the other slots (`context.<slot>.method()`) — see SKILL.md "Accessing Your Dependencies". Widget declarations (`widgets:` block) — see `widgets.md`. Agent declarations (`agents:` / `events:` blocks) — see `agents.md`. Custom role definitions (`roles:` block) — see SKILL.md "App Roles". The `channels:` relay block's shape is below; its runtime semantics (`broadcast()`, `channels/` handlers, the page API) — see `channels.md`. The `notifications:` opt-in declaration's shape is below; `notify()` and the page API — see `server-routes.md`.
 
-Apps are configured with an `informer.yaml` file in the project root. This single file declares the app's **data dependencies** (typed slots that get bound at install time), any **raw API allowlist** the app needs, **widgets**, **agents**, **live channel relays** (`channels:`), and **custom roles**. It's uploaded automatically on deploy.
+Apps are configured with an `informer.yaml` file in the project root. This single file declares the app's **data dependencies** (typed slots that get bound at install time), any **raw API allowlist** the app needs, **widgets**, **agents**, **live channel relays** (`channels:`), the **push notification opt-in** (`notifications:`), and **custom roles**. It's uploaded automatically on deploy.
 
 ```yaml
 # informer.yaml
@@ -52,7 +52,7 @@ The legacy `access:` block for typed resources still works at runtime, but:
 - It doesn't support the typed-proxy dispatch (`context.<slot>.search(...)`) — handlers would have to hand-build URLs.
 - `npx informer-init`'s older scaffolds wrote empty `access: { datasets: [] }` blocks; if you find one in an existing `informer.yaml`, **replace it with `dependencies:`** — don't preserve the legacy shape "for consistency with the existing file."
 
-`access:` keeps **one** legitimate use: the `apis:` sub-block for raw API paths that don't fit the typed-slot model (e.g. AI model endpoints, custom server routes). Everything else goes under `dependencies:`.
+`access:` keeps **one** legitimate use: the `apis:` sub-block for raw API paths that don't fit the typed-slot model (e.g. `GET /api/chat-models`, custom server routes). Everything else goes under `dependencies:`. The AI model routes (`_chat`, `_completion`, `_object`) need no entry: every App is granted them as the viewing user.
 
 **Important:** Without either a populated `dependencies:` section or an `access:` declaration, ALL API access is blocked when the app runs in Informer.
 
@@ -78,7 +78,7 @@ App slots bind like every other target — read access to the target App is the 
 
 Before writing calls against the slot, fetch the target's contract (`GET /api/apps/{owner}:{name}/openapi.json`) and set up typed dev bindings — see `references/app-api.md`. A marketplace-destined consumer should declare `target: pack` (pin by marketplace slug + semver range) instead of `target: app`; the pack form is covered in the **marketplace-publishing** skill.
 
-**To run SQL over another App's data, don't use `target: app`.** Bind that App's **workspace datasource** through a `target: datasource` slot instead: every App has a first-class workspace Datasource, and binding it gives you the standard `query(payload)` surface with the datasource's own ownership and access rules.
+**To run SQL over another App's data, don't use `target: app`.** Bind that App's **workspace datasource** through a `target: datasource` slot instead: every App has a first-class workspace Datasource, and binding it gives you the standard `query({ language, payload, params })` surface (see "Datasource slot queries") with the datasource's own ownership and access rules.
 
 ## Migrating an old `access:` app to `dependencies:`
 
@@ -94,7 +94,7 @@ The recipe Claude follows when asked to modernize:
    - **`target`** — singular form of the parent section (`datasets` → `dataset`, etc.).
    - **`defaultBinding`** — the resource's **UUID** (resolve via the matching `*-list` endpoint, e.g. `GET /api/datasets-list`). UUIDs survive bundle round-trips and aren't broken by configId renames; configIds in `defaultBinding` will be rejected at deploy.
    - Carry `filter` / `headers` / `params` / `paths` (when present on a structured access entry) into `options:`.
-3. Remove the migrated entries from `access:`. **Keep `access.apis`** — raw paths don't have a slot model.
+3. Remove the migrated entries from `access:`. **Keep `access.apis`** — raw paths don't have a slot model. An entry for an AI model route (`POST /api/models/…/_chat`, `_completion`, `_object`) is optional, since every App is granted those as the viewing user; keep it only if it says `runAs: owner`.
 4. Update any server-side handler code that referenced these resources by `naturalId` to use the slot name instead (`context.northwind_orders.search({...})` etc. — the slot name is a property of `context`, not nested under `context.dependencies`).
 5. Deploy the draft. Auto-bind runs through `defaultBinding`. An unresolvable `defaultBinding` (target missing or unreadable on this instance) doesn't fail the deploy — it logs a warning, and a required slot surfaces a `default_binding_unresolved` warning telling the admin to bind it in Settings. Author errors (a non-UUID value like a configId, or a target type that doesn't support `defaultBinding`) are still fatal.
 6. Review via the draft diff, then commit.
@@ -110,7 +110,7 @@ access:
   queries:
     - admin:daily-summary
   apis:
-    - POST /api/models/go_everyday/_object
+    - GET /api/chat-models
 
 # After — defaultBinding values are UUIDs resolved from each
 # configId via the matching `*-list` endpoint at modernize time.
@@ -129,7 +129,7 @@ dependencies:
     defaultBinding: 9a8b7c6d-5e4f-3a2b-1c0d-fedcba987654
 access:
   apis:
-    - POST /api/models/go_everyday/_object   # raw API — stays in access
+    - GET /api/chat-models   # raw API — stays in access
 ```
 
 ## `requires:` (platform floor; Informer 2026.1.4+ enforces it, older releases ignore the key)
@@ -272,6 +272,49 @@ flags it at boot, the server drops every relayed frame (`relay_dropped`).
 - A path-mode server accepts the block but records a non-fatal
   `channels_require_origin_mode` deploy warning; a Magic Report (`type:
   report`) deploy that carries it is refused with `apps_license_required`.
+
+## `notifications:` (push opt-in; Informer 2026.2.0+, origin mode)
+
+Declares that the app sends push notifications with `notify()`, so the
+platform helps users opt in: Informer GO shows a bell in the app's title bar
+that walks them through installing the app, and the installed app shows a
+"Get notifications from {app}?" banner (Turn on / Not now) each time it opens
+while notifications are off. See `server-routes.md` → "Using `notify()`" for
+delivery, `subscribed`, the page API and service workers.
+
+```yaml
+notifications: true
+```
+
+Or keep the Informer GO install offer and drop the banner, when the app
+offers its own button:
+
+```yaml
+notifications:
+  prompt: false
+```
+
+| Value | Meaning |
+|-------|---------|
+| `true`, `{ prompt: true }` or `{}` | The app notifies; the installed app shows the banner (stored as `{ prompt: true }`) |
+| `{ prompt: false }` | The app notifies; no banner |
+| `false`, `null` or absent | Nothing declared |
+
+**Rules.**
+
+- Anything else, including an unknown key inside the object, **fails the
+  deploy** with a 400 that names the accepted shapes. Stored in
+  `app.defn.notifications`.
+- The declaration drives only the banner and the Informer GO install offer.
+  `window.__INFORMER__.notifications` is served on the installed app either
+  way, so an app's own `enable()` button works without it.
+- **Migrating:** an App that already calls `notify()` for Informer GO phones
+  stops reaching anyone when an origin-mode server moves to 2026.2.0, unless
+  it declares this key or offers its own `enable()` button — see
+  `server-routes.md` → "Using `notify()`".
+- On a path-mode server the key deploys but does nothing: `notify()` reaches
+  Informer GO phones there, which need no opt-in.
+- Servers below 2026.2.0 ignore the key.
 
 ## `integrations:` (app-sourced integrations)
 
@@ -546,13 +589,13 @@ The five typed-slot targets and what API surface each one's bound resource expos
 |----------|-------------|--------------|
 | `dataset` | `_search`, `fields` | `context.<slot>.search(esQuery)` / `.fields()` |
 | `query` | `_execute` | `context.<slot>.execute(params)` |
-| `datasource` | `_query` | `context.<slot>.query(payload)` |
+| `datasource` | `_query` | `context.<slot>.query({ language, payload, params?, inputs?, limit? })` — see "Datasource slot queries" below |
 | `integration` | `request` | `context.<slot>.request({ method, url, params, data })` (axios-shaped: `url` not `path`, `data` is the body) |
 | `app` | `request` (the target's `server/` routes) | `context.<slot>.request({ method, url, params, data })` (request-only — no SQL surface; see "`target: app` (app-to-app dependencies)" above) |
 
 > **`libraries` is not a typed slot.** Library access lives only in the legacy `access.libraries:` whitelist block (`contents/*`) — there is no `target: library` slot model. Use `access.libraries:` if your app needs to read files from another library; everything else goes under `dependencies:`.
 
-For raw API paths that don't fit the slot model (custom endpoints, AI model routes), use `access.apis:`:
+For raw API paths that don't fit the slot model (custom endpoints, `GET /api/chat-models`), use `access.apis:`. The AI model routes are granted automatically and need an entry only to run as the owner (`{ method: POST, url: /api/models/*/_object, runAs: owner }`, for sessions with no Informer user — `copilot.md`):
 
 ```yaml
 # informer.yaml
@@ -570,3 +613,32 @@ Matching rules:
   (`GET /api/apps/*/contents/**`).
 - A rejected call surfaces as a **403 naming the path** — if you see one,
   the fix is an `access.apis` entry, not a permissions change.
+
+### Datasource slot queries
+
+`query()` posts its argument as the body of `POST /api/datasources/<uuid>/_query` and returns the rows as a plain array of objects keyed by column name — no `records` / `meta` wrapper, no saved formatting.
+
+```javascript
+const rows = await context.postgres_main.query({
+    language: 'sql',
+    payload: 'SELECT id, total FROM orders WHERE status = $status AND region IN ($regions) ORDER BY id',
+    params: { status: request.query.status, regions: ['East', 'West'] },
+    inputs: { multiInput: { inputs: [
+        { name: 'status', component: { mdInputBox: {} } },
+        { name: 'regions', component: { mdInputBox: {} } }
+    ] } },
+    limit: 500
+});
+```
+
+- **`language`** follows the datasource family: `'sql'` for relational stores (Postgres, MSSQL, MySQL, DB2, Oracle / JDBC, App and workspace datasources), `'u2'` for UniData / UniVerse, `'informer'` for jBASE and for Informer-native query syntax, `'web'` for URL-driven datasources. Match it to the datasource the slot binds. The datasource's `type` in `/api/datasources-list` names the family.
+- **`$name` binds from `params`**, escaped by the driver. Never interpolate request input into `payload`.
+  - **2026.1.3+** (I5-13058): each `$name` declared under `inputs` binds, typed by its component — `{ mdInputBox: {} }` for text, `{ mdInputBox: { type: 'number' } }` for a number. Once `inputs` are declared, only declared names bind.
+  - **2026.1.4+** (I5-13071): `params` alone binds too, each type guessed from the value (number, boolean, else text). Declare `inputs` anyway for a date or timestamp, a default or a required check, which a guess can't express — or cast in SQL (`$day::date`).
+  - **Below 2026.1.3**, binding through a slot isn't supported: keep request input out of one-off SQL. Put the statement in a saved query, bind it with `target: query`, and pass its inputs to `execute()`.
+- Write `$name` even inside a template literal, never `${name}` — that's JavaScript interpolation and pastes the raw value into the SQL.
+- `:name` and `$1` are not parameters; they stay in the SQL as written (and fail there).
+- Never put `$name` inside a quoted string or a comment: it's replaced there too, and the value can break out. Put wildcards in the value — `title LIKE $q` with ``params: { q: `%${term}%` }``.
+- `null`, `''` and `[]` bind `NULL`, so compare with `IS NULL`. An array binds one value per item, so match a list with `IN ($ids)`.
+- On Postgres, MSSQL, MySQL, DB2, App and workspace datasources, write a literal `?` (the jsonb `?` operator, `'why?'`) as `\?` — `\\?` in a JavaScript string; a bare `?` counts as a placeholder once anything binds. On Oracle and generic JDBC, `\?` is not an escape.
+- `limit` caps the rows; leave it out for all of them. A non-SQL `language` passes `params` through to its driver.
