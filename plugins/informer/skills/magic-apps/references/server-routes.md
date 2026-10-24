@@ -72,7 +72,7 @@ Each handler function receives a single context object with these properties:
 | `crypto` | `object` | Cryptographic helpers (all async): `hmac`, `hash`, `randomUUID`, `randomBytes`, `timingSafeEqual`, `verifyHmac`, `encrypt`/`decrypt` (AES-256-GCM), `verify`. See [Using `crypto`](#using-crypto). |
 | `log` | `function` | Structured logging. `log(message, data?)` or `log.info()`/`log.warn()`/`log.error()`/`log.debug()`. Writes to `app_log`. See [Using `log()`](#using-log). |
 | `env` | `object` | App environment variables — decrypted values from the app's Environment. Set in **Admin → Environment**; declared keys in `informer.yaml` `env:` arrive as unset placeholders for the installer to fill per tenant. Encrypted at rest; never returned by any API. |
-| `platform` | `{ version, originMode, capabilities }` | What the platform offers: the Informer build version, whether apps serve from their own origins (`originMode`, the precondition for live channels), and the app type's capability flags (`serverRoutes`, `webhooks`, `mcp`, `storage`, `embeddings`, …). Feature-detect with `platform?.capabilities?.<name>` instead of probing for a helper or comparing versions — optional chaining, because older servers inject no `platform` and a bare `platform.capabilities` throws there; the same object is `window.__INFORMER__.platform` in the browser. Informer ≥ the release carrying I5-12984; absent on older servers (treat a missing `platform` as "unknown"). **2026.1.4+** |
+| `platform` | `{ version, originMode, capabilities }` | What the platform offers: the Informer build version, whether apps serve from their own origins (`originMode`, the precondition for live channels and, **2026.2.0+**, for `notify()` reaching the installed app), and the app type's capability flags (`serverRoutes`, `webhooks`, `mcp`, `storage`, `embeddings`, …). Feature-detect with `platform?.capabilities?.<name>` instead of probing for a helper or comparing versions — optional chaining, because older servers inject no `platform` and a bare `platform.capabilities` throws there; the same object is `window.__INFORMER__.platform` in the browser. Informer ≥ the release carrying I5-12984; absent on older servers (treat a missing `platform` as "unknown"). **2026.1.4+** |
 | `request` | `object` | The incoming request (see below). |
 
 A `cli/` command gets the tool bag instead — `args` and `run` in place of `request` and `respond` — with three helpers only a command has: `reply(message, data)`, `follow(channel)` and, in a session, `client` (the terminal that ran it). See `cli.md`. **2026.2.0+**
@@ -495,6 +495,8 @@ Where it arrives depends on the server — read `platform.originMode` in the han
 - **Origin mode, 2026.2.0+:** the recipient's **installed** copy of this app — added to the Home Screen, or installed from the browser — with notifications turned on. Installing the app is how a user opts in, and the notification shows the app's own icon and name. A user who has not installed it and turned notifications on receives nothing, so check `subscribed` and fall back to `email()`.
 - **Path mode, or any server below 2026.2.0:** the recipient's Informer GO phones (FCM).
 
+> **Migrating an App that already calls `notify()`.** When an origin-mode server moves to 2026.2.0, the App's notifications stop reaching Informer GO phones. There is no fallback to GO: a recipient with no subscription for this App gets nothing, and the message goes `dead` at once. Users subscribe only through the platform banner or the App's own `enable()` button, so an App with neither reaches nobody after the upgrade. Declare `notifications: true` (or add your own button, below) and handle `subscribed === false`.
+
 ```javascript
 // Single notification
 export async function POST({ notify, email }) {
@@ -508,6 +510,8 @@ export async function POST({ notify, email }) {
     return { notificationId: id };
 }
 ```
+
+An App that cannot work below 2026.2.0 can instead declare `requires: { informer: '>=2026.2.0' }` in `informer.yaml` (see `informer-yaml.md`); then `subscribed` is always present, but the App no longer deploys to older servers.
 
 **Bulk notifications** — pass an array to send multiple in a single call:
 
@@ -531,20 +535,24 @@ const { ids, queued, unsubscribed } = await notify([
 
 **Bulk:** Array of `{ username, title, body, path?, data? }` objects.
 
-Messages are retried up to 3 times on failure, then moved to `dead` status. **2026.2.0+:** some failures go `dead` at once, since retrying cannot fix them — the recipient is not a user, their account is disabled, they cannot open the app, they have no device to receive it (`subscribed: false`), every device it was sent to is gone, or the notification was refused as too large. Message history is viewable via `GET /api/apps/{id}/messages`.
+Messages are retried up to 3 times on failure, then moved to `dead` status. **2026.2.0+:** some failures go `dead` at once, since retrying cannot fix them — the recipient is not a user, their account is disabled, they cannot open the app, they have no device to receive it (`subscribed: false`), every device it was sent to is gone, the notification was refused as too large, or the License Manager could not say whether it was delivered (`504 lm_indeterminate`; a notification is sent at most once). A License Manager older than 3.3.5 answers every Informer GO send failure that way, so against it nothing is retried. Message history is viewable via `GET /api/apps/{id}/messages`.
 
 ### Helping users opt in (**2026.2.0+**, origin mode)
 
-**Declare it in `informer.yaml`** so the platform helps users opt in: Informer GO shows a bell in the app's title bar that walks them through installing it, and the installed app shows a banner ("Get notifications from {app}?" — Turn on / Not now) each time it opens while notifications are off, until the user turns them on or picks Not now. Older servers ignore the key.
+**Declare it in `informer.yaml`** so the platform helps users opt in: Informer GO shows a bell in the app's title bar that walks them through installing it, and the installed app shows a banner ("Get notifications from {app}?" — Turn on / Not now) each time it opens while notifications are off, until the user turns them on, picks Not now, or the app calls `disable()`. Older servers ignore the key.
 
 ```yaml
 notifications: true
-# or keep the API and drop the banner, when the app offers its own button:
+```
+
+Or keep the Informer GO install offer and drop the banner, when the app offers its own button:
+
+```yaml
 notifications:
   prompt: false
 ```
 
-Any other value fails the deploy with a 400.
+`{ prompt: true }` (or `{}`) is the same as `true`; `false` and `null` are the same as leaving it out. Anything else, including an unknown key inside the object, fails the deploy with a 400. The declaration drives only the banner and the GO install offer: `window.__INFORMER__.notifications` is on the page either way.
 
 **Your own button** — `window.__INFORMER__.notifications` (installed app only; call `enable()` from a click handler, since the browser asks for permission inside the user's gesture). Feature-detect it: below 2026.2.0 it does not exist.
 
@@ -554,17 +562,19 @@ const state = n ? await n.status() : 'unsupported';
 // 'not-installed' | 'unsupported' | 'blocked' | 'off' | 'on'
 if (state === 'off') {
     button.onclick = async () => {
-        try { await n.enable(); } catch (err) { showError(err.message); }   // resolves the new status
+        // resolves the new status; 'blocked', 'off' and 'unsupported' are not errors
+        const next = await n.enable().catch(err => { showError(err.message); return null; });
+        if (next && next !== 'on') showHint(next);
     };
 }
 // n.disable() turns them off again (resolves 'off')
 ```
 
-`'not-installed'` means a browser tab or the app inside Informer GO — installing is the opt-in, so show install guidance there, not a button. Every method resolves `'unsupported'` on a path-mode server, and for sessions that act for someone else or have no Informer user to notify: a share link, an admin impersonating a user, and an app account's sign-in (`accounts:`). The installed app never subscribes on its own; on load it only repairs a subscription the browser already holds, so a user's "off" stays off.
+`'not-installed'` means a browser tab or the app inside Informer GO — installing is the opt-in, so show install guidance there, not a button. Every method resolves `'unsupported'` on a path-mode server, and for sessions that act for someone else or have no Informer user to notify: a share link, an admin impersonating a user, an app account's sign-in (`accounts:`), and a draft preview (the App Builder's `-draft` origin is not the installed app). Web Push goes through the License Manager's relay, so on a server whose License Manager connection is configured offline every method resolves `'unsupported'` too. Where the License Manager has no relay (one older than 3.3.5), `GET /_app/push` answers `501 web_push_unavailable`: no banner shows and `enable()` resolves `'unsupported'`. Either way nobody can subscribe, so the `email()` fallback carries everything. The installed app never subscribes on its own; on load it only repairs a subscription the browser already holds, so a user's "off" stays off.
 
-**An app that ships its own service worker** must add `importScripts('/_app/push-sw.js');` to it, or its worker replaces the platform's and notifications never show. The platform owns the app's push subscription: one the app makes itself, with its own VAPID key, is replaced the next time the app opens — always send through `notify()`.
+**An app that ships its own service worker** must add `importScripts('/_app/push-sw.js');` to it, or its worker replaces the platform's and notifications never show. The failure is silent: `enable()` still subscribes and resolves `'on'`, and `notify()` reports `subscribed: true`, but nothing appears. The platform owns the app's push subscription: one the app makes itself, with its own VAPID key, is replaced the next time the app opens — always send through `notify()`.
 
-**Not emulated in dev.** Under `npm run dev`, `notify()` logs to the console and resolves `{ id }` with no `subscribed`, and `window.__INFORMER__.notifications` is absent, so the feature-detect above lands on `'unsupported'`. Test delivery on a deployed origin-mode server with the app installed.
+**Not emulated in dev.** Under `npm run dev`, `notify()` logs to the console and resolves `{ id }` with no `subscribed`, and `window.__INFORMER__.notifications` is absent, so the feature-detect above lands on `'unsupported'`. Test delivery on a deployed origin-mode server, with the **published** app installed and opened as yourself, not the draft preview.
 
 ## Using `email()`
 

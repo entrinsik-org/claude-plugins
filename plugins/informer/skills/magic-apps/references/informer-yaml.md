@@ -284,22 +284,34 @@ delivery, `subscribed`, the page API and service workers.
 
 ```yaml
 notifications: true
-# or keep window.__INFORMER__.notifications and drop the banner,
-# when the app offers its own button:
+```
+
+Or keep the Informer GO install offer and drop the banner, when the app
+offers its own button:
+
+```yaml
 notifications:
   prompt: false
 ```
 
 | Value | Meaning |
 |-------|---------|
-| `true` | The app notifies; the installed app shows the banner (`prompt: true`) |
+| `true`, `{ prompt: true }` or `{}` | The app notifies; the installed app shows the banner (stored as `{ prompt: true }`) |
 | `{ prompt: false }` | The app notifies; no banner |
-| `false` or absent | Nothing declared |
+| `false`, `null` or absent | Nothing declared |
 
 **Rules.**
 
-- Any other value **fails the deploy** with a 400 that names the accepted
-  shapes. Stored in `app.defn.notifications`.
+- Anything else, including an unknown key inside the object, **fails the
+  deploy** with a 400 that names the accepted shapes. Stored in
+  `app.defn.notifications`.
+- The declaration drives only the banner and the Informer GO install offer.
+  `window.__INFORMER__.notifications` is served on the installed app either
+  way, so an app's own `enable()` button works without it.
+- **Migrating:** an App that already calls `notify()` for Informer GO phones
+  stops reaching anyone when an origin-mode server moves to 2026.2.0, unless
+  it declares this key or offers its own `enable()` button — see
+  `server-routes.md` → "Using `notify()`".
 - On a path-mode server the key deploys but does nothing: `notify()` reaches
   Informer GO phones there, which need no opt-in.
 - Servers below 2026.2.0 ignore the key.
