@@ -74,6 +74,7 @@ Customers run a spread of Informer versions, so every newer feature carries the 
 | `_chat` `appIds` (other Apps' `mcp/` tools, run server-side), the tool-approval flow and `export const needsApproval` | 2026.1.4 (I5-12973; below it `_chat` drops `appIds` silently) | `references/copilot.md`, `references/mcp.md` |
 | Staged uploads/downloads (`uploads`, `downloads`, `__INFORMER__.upload()`) | 2026.1.4 | `references/streams.md` |
 | Streams phase 2 — transfer events (`onEvent`, `task.created`), `__INFORMER__.streams` list/status/discard, forwarding a stream to an integration (`data` / `form` / `into`) | 2026.1.4 (every released build; only unreleased previews carried phase 1 alone) | `references/streams.md` |
+| Dataset row filters match any value of a multi-value user field or YAML list, apply the field's Default Value, and match no rows when a variable is unset (older releases show every row) | 2026.1.5 (I5-13285) | `references/informer-yaml.md` |
 | Warehouse loads (`load()`, the run ledger, `schedule()`, streaming ingest) | 2026.2.0 | `references/warehouse-etl.md` |
 | `semantics.yaml` and the semantic registry | 2026.2.0 | `references/semantics.md` |
 | App accounts and public serving (`accounts:`, `public: true`, `/_auth/*`) | 2026.2.0 | `references/accounts-and-login.md` |
