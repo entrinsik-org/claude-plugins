@@ -111,7 +111,7 @@ Webhook handlers receive the **same bag as server routes** (see `server-routes.m
 | Callback | Description |
 |----------|-------------|
 | `query(sql, params?)` | Execute SQL against the app's workspace |
-| `fetch(path, options?)` | Make authenticated API calls (runs as app owner) |
+| `fetch(path, options?)` | Make authenticated API calls (runs as app owner). A binary response arrives as a base64 envelope — see pitfall 5 under "Using `fetch()`" in `server-routes.md` |
 | `context.<slot>.<method>()` | Typed bound dependencies (see `informer-yaml.md`) |
 | `emit(event, payload?)` | Fire app events (trigger agents) |
 | `broadcast(channel, event, payload?, options?)` | Push a fire-and-forget frame to every open page subscribed to `channel` — the natural way to tell dashboards a webhook landed (origin-mode servers only). Resolves `{ ok: true, seq }`; pass `{ replay: false }` for frames not worth replaying to a reconnecting page. See `channels.md`. |
@@ -128,6 +128,8 @@ Webhook handlers receive the **same bag as server routes** (see `server-routes.m
 | `env` | App environment variables — decrypted values from the app's Environment (set in the **Admin → Environment** tab, or declared as keys in `informer.yaml` `env:`). Encrypted at rest; never returned by any API. |
 
 Webhook routes also provide `request.rawBody` — the original request body as a string, preserving the exact bytes sent by the caller. Use this for HMAC signature verification (not `request.body`, which is parsed JSON).
+
+**2026.1.1+** `request.app` carries the App's identity and addresses, as on server routes (`id`, `naturalId`, `name`, `baseUrl`; **2026.1.4+** `origin` and `apiUrl`) — build confirmation links from it, never from headers. See the `request` table in `server-routes.md`.
 
 ## Sanitized Request Inputs
 

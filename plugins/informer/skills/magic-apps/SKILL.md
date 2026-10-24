@@ -46,7 +46,7 @@ This file is the orientation layer. Most topics have a dedicated reference under
 | Moving FILES or large result sets — CSV/Excel import into a workspace table, an attachment into a `bytea` column, a big CSV/JSON/JSONL export, "upload" / "download" / "save as" / "import"; `__INFORMER__.upload(file)` on the page, `uploads.get(id)` → `copyInto()` / bytea parameter / `text()`, `downloads.create()` → `fromQuery()` / `writeRows()` / `return dl` / `dl.url`, the 10 MB inline cap; watching a transfer (`onEvent`, `task.created`), `__INFORMER__.streams` list/status/discard, forwarding a staged file to an integration (`context.<slot>.request()` with a handle as `data` / in `form`, or `into`) | `references/streams.md` |
 | Exposing tools to outside AI clients (Claude Code/Desktop, Cursor) — the `mcp/` folder, why the folder is the decision, writing for a caller with no context, the per-app endpoint, the OAuth connect flow, who a tool runs as | `references/mcp.md` |
 | Commands people run from a terminal or a script — "CLI", "`inf`", "add a command", "sync / import / back up a folder", "watch a folder", "a board / dashboard in the terminal", CI calling the app; the `cli/` folder, `export const cli` / `confirm` / `roles` / `complete` / `watch`, schema → arguments, `reply()` / `follow()`, `run.client` / `run.timeZone`, sessions with `client.files` / `prompt` / `progress` / `display` and folder `access: read \| write \| mirror`, interactive views (`render` / `actions` / `event` / `loaders`), output and `--json`, `inf install`, App API keys for CI, limits | `references/cli.md` |
-| Deep `informer.yaml` work — `dependencies:` slot field reference, app-sourced `integrations:` (an app declares and owns an Integration — OAuth, `$env` secrets, icons), RLS via `$user.*`, modernizing a legacy `access:` block, `defaultBinding` lookup, declaring env-var keys with `env:` | `references/informer-yaml.md` |
+| Deep `informer.yaml` work — `dependencies:` slot field reference, app-sourced `integrations:` (an app declares and owns an Integration — OAuth, `$env` secrets, icons), RLS via `$user.*`, modernizing a legacy `access:` block, `defaultBinding` lookup, declaring env-var keys with `env:`; SQL parameters in a datasource slot's `query()` (`$name`, `params`, `inputs`, `language`) | `references/informer-yaml.md` |
 | App-to-app/pack APIs — fetching a target's contract (`openapi.json`), typed dev bindings (`.informer/app-deps.d.ts`), public-vs-internal routes, and making your own App integratable (`description`/`schema` exports, `config.api = 'public'`, root `API.md`) | `references/app-api.md` |
 | In-gallery app docs (`docs.html`), in-app `?` help button, `README.md` fallback | `references/docs-html.md` |
 | Looking up the raw API surface behind the typed-slot proxy (still useful when something fails) | `references/api-reference.md` |
@@ -64,6 +64,7 @@ Customers run a spread of Informer versions, so every newer feature carries the 
 |---|---|---|
 | Revocable webhook tokens (`POST /api/apps/{id}/webhook-tokens`, per-token revoke; no token issued at deploy) | 2026.1.0 (I5-12605) | `references/webhooks.md` |
 | Bare `/api/{path}` app routes; per-app origins (origin mode) | 2026.1.2 | `references/server-routes.md` |
+| Datasource slot `query()` binding `$name` from `params` — with declared `inputs`; `params` alone | 2026.1.3 (I5-13058); 2026.1.4 (I5-13071) | `references/informer-yaml.md` |
 | `platform` descriptor (`platform.version`, `platform.capabilities`) and the `requires:` manifest key | 2026.1.4 | `references/server-routes.md`, `references/informer-yaml.md` |
 | `respond()` background work billed, capped (`app.routes.maxBackgroundPerApp`) and written to the Logs tab when it fails; `config.timeout` capped at `app.routes.maxTimeoutMs` | 2026.1.4 (I5-13088) | `references/server-routes.md` |
 | Live broadcast channels (`broadcast()`, `channels:`, `channels/` with `join` / `leave`, `@user/`) | 2026.1.4 | `references/channels.md` |
@@ -383,7 +384,7 @@ The handler receives a `context` object where each `dependencies:` slot is a pro
 |---|---|---|
 | `dataset` | `search(esQuery)` / `fields()` | `POST /api/datasets/<uuid>/_search` / `GET /api/datasets/<uuid>/fields` |
 | `query` | `execute(params)` | `POST /api/queries/<uuid>/_execute` |
-| `datasource` | `query({ language, payload })` | `POST /api/datasources/<uuid>/_query` |
+| `datasource` | `query({ language, payload, params?, inputs?, limit? })` | `POST /api/datasources/<uuid>/_query` |
 | `integration` | `request({ method, url, params, data })` | `POST /api/integrations/<uuid>/request` |
 | `app` | `request({ method, url, params, data })` | `<method> /api/apps/<uuid>/view/_/<url>` |
 
@@ -426,17 +427,19 @@ export async function GET({ context, request }) {
     // query → execute runs the saved query with optional parameters
     const summary = await context.monthly_summary.execute({ month: '2026-05' });
 
-    // datasource → query runs one statement on the bound datasource. The
-    // payload is the body of POST /api/datasources/<uuid>/_query:
-    // { language, payload }, where `payload` is the query text. It returns an
-    // array of row objects. There are no bound parameters on a one-off query,
-    // so validate anything from the request (a whitelist, or parseInt for a
-    // number) before it goes in the text; for real parameters bind a saved
-    // query (`target: query`) and call execute() instead.
-    const day = /^\d{4}-\d{2}-\d{2}$/.test(request.query.day) ? request.query.day : '2026-05-12';
+    // datasource → query runs one statement on the bound datasource and
+    // returns an array of row objects. The argument is the body of
+    // POST /api/datasources/<uuid>/_query; `language` follows the datasource
+    // ('sql', 'u2', 'informer' for jBASE, 'web'). In SQL, `$name` binds from
+    // `params` and is escaped; `:name` and `$1` are not parameters. Never
+    // interpolate request input into `payload` — write `$name`, not `${name}`,
+    // even in a template literal. Declared `inputs` bind from 2026.1.3,
+    // `params` alone from 2026.1.4: references/informer-yaml.md → "Datasource
+    // slot queries" has the rules and the fallback for older servers.
     const events = await context.analytics.query({
         language: 'sql',
-        payload: `SELECT type, COUNT(*) AS n FROM events WHERE day = '${day}' GROUP BY type`
+        payload: 'SELECT type, COUNT(*) AS n FROM events WHERE day = $day::date GROUP BY type',
+        params: { day: request.query.day }
     });
 
     // integration → request proxies to the external service. The options are
@@ -725,7 +728,7 @@ roles:
     name: Viewer
 ```
 
-For the full schema — slot field reference (`target` / `runAs` / `options` / `defaultBinding`), row-level security with `$user.*` variables, the modernization recipe for converting a legacy `access:` block to `dependencies:`, integration credential injection, the `libraries:` legacy carve-out, and declaring env-var keys with `env:` (encrypted per-tenant values configured in Admin → Environment) — load `references/informer-yaml.md`.
+For the full schema — slot field reference (`target` / `runAs` / `options` / `defaultBinding`), row-level security with `$user.*` variables, the modernization recipe for converting a legacy `access:` block to `dependencies:`, integration credential injection, the `libraries:` legacy carve-out, declaring env-var keys with `env:` (encrypted per-tenant values configured in Admin → Environment), and binding SQL parameters in a datasource slot's `query()` — load `references/informer-yaml.md`.
 
 ## Widgets — overview
 
@@ -785,7 +788,7 @@ export async function POST({ query, request }) {
 }
 ```
 
-Handlers receive a single argument with the sandbox helpers (`query`, `transaction`, `fetch`, `context`, `respond`, `emit`, `broadcast`, `notify`, `email`, `log`, `crypto`, `env`, `request`). Globals available without destructuring: `markdown`, `base64Encode` / `base64Decode` / `base64UrlEncode` / `base64UrlDecode`, `atob` / `btoa`.
+Handlers receive a single argument with the sandbox helpers (`query`, `transaction`, `fetch`, `context`, `respond`, `emit`, `broadcast`, `notify`, `email`, `log`, `crypto`, `markdown`, `extractText`, `env`, `request`); `markdown` and `extractText` are also callable by name. `base64Encode` / `base64Decode` / `base64UrlEncode` / `base64UrlDecode` and `atob` / `btoa` are globals only: call them by name, since destructuring one from the argument binds `undefined`.
 
 Sandbox constraints: no Node APIs, no filesystem, no direct network — all I/O is through the injected callbacks. 128 MB memory, 30s default wall-clock timeout (configurable via `config.timeout`).
 
@@ -1320,7 +1323,7 @@ The orientation above points to each file; this is the canonical list of what's 
 
 | File | Covers |
 |---|---|
-| `references/server-routes.md` | `server/` handlers, full sandbox-helper reference (`query`, `transaction`, `fetch`, `respond`, `notify`, `email`, `log`, `crypto`, base64/markdown globals), `config.timeout` / `config.roles`, worked CRUD example |
+| `references/server-routes.md` | `server/` handlers, full sandbox-helper reference (`query`, `transaction`, `fetch`, `respond`, `notify`, `email`, `log`, `crypto`, base64/markdown globals), `fetch()` binary envelopes, `request.app`, `config.timeout` / `config.roles`, worked CRUD example |
 | `references/response-cache.md` | `config.cache` on `GET` routes — options (`ttl` / `vary` / `tables` / `edge`), what changes the `ETag` and what needs a `ttl`, never-tagged responses, the public-route store and overload `503`, CDN cache-key rules, verifying, the deploy partial failure, `app.responseCache` / `app.heldFiles` server settings |
 | `references/webhooks.md` | `webhooks/` handlers, getting a webhook URL (`POST /webhook-tokens`, revoke, rotate, the 401s), HMAC verification (`crypto.verifyHmac`), how webhooks differ from server routes (inbound identity only — same handler bag) |
 | `references/persistence.md` | `migrations/`, dev workspace lifecycle, CRUD worked example |
@@ -1334,7 +1337,7 @@ The orientation above points to each file; this is the canonical list of what's 
 | `references/streams.md` | Staged uploads/downloads — `__INFORMER__.upload()` on the page, `uploads.get(id)` → `copyInto()` / bytea parameter / inline reads under the 10 MB cap, `downloads.create()` → `fromQuery()` / `writeRows()` / `return dl` / `dl.url`, the six limits, transfer events and `__INFORMER__.streams`, forwarding to an integration (`data` / `form` / `into`), error table, dev-server emulation gaps |
 | `references/mcp.md` | The `mcp/` folder, `mcp/` vs `tools/` split, writing tools for a context-free caller, identity (`runAs` / `run.user` / `run.roles`, workspace-not-per-caller), the per-app endpoint, OAuth discovery + DCR connect flow, curl testing, observability |
 | `references/cli.md` | The `cli/` folder — the five shapes of command, command file contract (`cli`, `confirm`, `roles`, `complete`, `watch` + `added` / `changed` / `removed`), schema → arguments, the CLI-only bag (`run.client`, `run.timeZone`, `reply()`, `follow()`, `client`), sessions and folder access (`read` / `write` / `mirror`), `--watch`, building blocks and `client.display`, interactive views (`render`, `init`, `actions`, `event`, `loaders`, `view.follow`), output and `--json`, identity, `inf install`, App API keys for CI, limits and billing, `cli/` vs `mcp/` vs `server/` |
-| `references/informer-yaml.md` | Full `informer.yaml` schema deep dive — slot fields, `$user.*` variables, modernizing legacy `access:` blocks, declaring env-var keys with `env:` |
+| `references/informer-yaml.md` | Full `informer.yaml` schema deep dive — slot fields, `$user.*` variables, modernizing legacy `access:` blocks, declaring env-var keys with `env:`, datasource slot query parameters |
 | `references/docs-html.md` | In-gallery `docs.html` page, in-app `?` help button, `README.md` fallback |
 | `references/api-reference.md` | Raw API surface behind the typed-slot proxy (useful for diagnostics) |
 | `references/app-templates.md` | HTML/CSS/JS starter snippets — charts, layouts |

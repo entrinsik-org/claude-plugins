@@ -12,7 +12,7 @@ When your project has a `migrations/` directory containing `.sql` files, Informe
 - **Tenant-isolated** — owned by the tenant role, inaccessible to other tenants
 - **Lazily provisioned** — created on first query or explicit migration
 - **Automatically cleaned up** — dropped when the app is deleted
-- **The only schema the app gets** — migrations run as the app's own role, whose search path is pinned to its schema and which cannot create schemas. A `CREATE SCHEMA` in a migration fails the deploy (on 2026.1.4 as a bare 500 with no message). Write unqualified names, and group related tables with a name prefix (`erp_shipment`, `erp_customer`) rather than a schema of their own.
+- **The only schema the app gets** — migrations run as the app's own role, whose search path is pinned to its schema and which cannot create schemas. A `CREATE SCHEMA` in a migration fails the deploy. The JSON deploy `npm run deploy` uses answers a bare 500 with no message (still so on 2026.2.0); Postgres' error is in the server log line `App migration failed` and in the App Builder's streaming deploy. Write unqualified names, and group related tables with a name prefix (`erp_shipment`, `erp_customer`) rather than a schema of their own.
 
 ## Migration Files
 

@@ -1,8 +1,8 @@
 # `informer.yaml` Deep Reference
 
-> **Load this reference when:** writing or modernizing `informer.yaml` — declaring `dependencies:` slot fields (`target`, `runAs`, `options`, `defaultBinding`), wiring row-level security via `$user.*` variables, migrating a legacy `access:` block to typed slots, or deciding when `access.apis:` / `access.libraries:` still apply.
+> **Load this reference when:** writing or modernizing `informer.yaml` — declaring `dependencies:` slot fields (`target`, `runAs`, `options`, `defaultBinding`), wiring row-level security via `$user.*` variables, migrating a legacy `access:` block to typed slots, deciding when `access.apis:` / `access.libraries:` still apply, or binding SQL parameters in a datasource slot's `query()` (`$name`, `params`, `inputs`, `language`, never interpolating request input).
 >
-> **Not in this file:** how handler code calls the slots (`context.<slot>.method()`) — see SKILL.md "Accessing Your Dependencies". Widget declarations (`widgets:` block) — see `widgets.md`. Agent declarations (`agents:` / `events:` blocks) — see `agents.md`. Custom role definitions (`roles:` block) — see SKILL.md "App Roles". The `channels:` relay block's shape is below; its runtime semantics (`broadcast()`, `channels/` handlers, the page API) — see `channels.md`. The `notifications:` opt-in declaration's shape is below; `notify()` and the page API — see `server-routes.md`.
+> **Not in this file:** how handler code calls the other slots (`context.<slot>.method()`) — see SKILL.md "Accessing Your Dependencies". Widget declarations (`widgets:` block) — see `widgets.md`. Agent declarations (`agents:` / `events:` blocks) — see `agents.md`. Custom role definitions (`roles:` block) — see SKILL.md "App Roles". The `channels:` relay block's shape is below; its runtime semantics (`broadcast()`, `channels/` handlers, the page API) — see `channels.md`. The `notifications:` opt-in declaration's shape is below; `notify()` and the page API — see `server-routes.md`.
 
 Apps are configured with an `informer.yaml` file in the project root. This single file declares the app's **data dependencies** (typed slots that get bound at install time), any **raw API allowlist** the app needs, **widgets**, **agents**, **live channel relays** (`channels:`), the **push notification opt-in** (`notifications:`), and **custom roles**. It's uploaded automatically on deploy.
 
@@ -78,7 +78,7 @@ App slots bind like every other target — read access to the target App is the 
 
 Before writing calls against the slot, fetch the target's contract (`GET /api/apps/{owner}:{name}/openapi.json`) and set up typed dev bindings — see `references/app-api.md`. A marketplace-destined consumer should declare `target: pack` (pin by marketplace slug + semver range) instead of `target: app`; the pack form is covered in the **marketplace-publishing** skill.
 
-**To run SQL over another App's data, don't use `target: app`.** Bind that App's **workspace datasource** through a `target: datasource` slot instead: every App has a first-class workspace Datasource, and binding it gives you the standard `query(payload)` surface with the datasource's own ownership and access rules.
+**To run SQL over another App's data, don't use `target: app`.** Bind that App's **workspace datasource** through a `target: datasource` slot instead: every App has a first-class workspace Datasource, and binding it gives you the standard `query({ language, payload, params })` surface (see "Datasource slot queries") with the datasource's own ownership and access rules.
 
 ## Migrating an old `access:` app to `dependencies:`
 
@@ -577,7 +577,7 @@ The five typed-slot targets and what API surface each one's bound resource expos
 |----------|-------------|--------------|
 | `dataset` | `_search`, `fields` | `context.<slot>.search(esQuery)` / `.fields()` |
 | `query` | `_execute` | `context.<slot>.execute(params)` |
-| `datasource` | `_query` | `context.<slot>.query({ language, payload })` |
+| `datasource` | `_query` | `context.<slot>.query({ language, payload, params?, inputs?, limit? })` — see "Datasource slot queries" below |
 | `integration` | `request` | `context.<slot>.request({ method, url, params, data })` (axios-shaped: `url` not `path`, `data` is the body) |
 | `app` | `request` (the target's `server/` routes) | `context.<slot>.request({ method, url, params, data })` (request-only — no SQL surface; see "`target: app` (app-to-app dependencies)" above) |
 
@@ -601,3 +601,32 @@ Matching rules:
   (`GET /api/apps/*/contents/**`).
 - A rejected call surfaces as a **403 naming the path** — if you see one,
   the fix is an `access.apis` entry, not a permissions change.
+
+### Datasource slot queries
+
+`query()` posts its argument as the body of `POST /api/datasources/<uuid>/_query` and returns the rows as a plain array of objects keyed by column name — no `records` / `meta` wrapper, no saved formatting.
+
+```javascript
+const rows = await context.postgres_main.query({
+    language: 'sql',
+    payload: 'SELECT id, total FROM orders WHERE status = $status AND region IN ($regions) ORDER BY id',
+    params: { status: request.query.status, regions: ['East', 'West'] },
+    inputs: { multiInput: { inputs: [
+        { name: 'status', component: { mdInputBox: {} } },
+        { name: 'regions', component: { mdInputBox: {} } }
+    ] } },
+    limit: 500
+});
+```
+
+- **`language`** follows the datasource family: `'sql'` for relational stores (Postgres, MSSQL, MySQL, DB2, Oracle / JDBC, App and workspace datasources), `'u2'` for UniData / UniVerse, `'informer'` for jBASE and for Informer-native query syntax, `'web'` for URL-driven datasources. Match it to the datasource the slot binds. The datasource's `type` in `/api/datasources-list` names the family.
+- **`$name` binds from `params`**, escaped by the driver. Never interpolate request input into `payload`.
+  - **2026.1.3+** (I5-13058): each `$name` declared under `inputs` binds, typed by its component — `{ mdInputBox: {} }` for text, `{ mdInputBox: { type: 'number' } }` for a number. Once `inputs` are declared, only declared names bind.
+  - **2026.1.4+** (I5-13071): `params` alone binds too, each type guessed from the value (number, boolean, else text). Declare `inputs` anyway for a date or timestamp, a default or a required check, which a guess can't express — or cast in SQL (`$day::date`).
+  - **Below 2026.1.3**, binding through a slot isn't supported: keep request input out of one-off SQL. Put the statement in a saved query, bind it with `target: query`, and pass its inputs to `execute()`.
+- Write `$name` even inside a template literal, never `${name}` — that's JavaScript interpolation and pastes the raw value into the SQL.
+- `:name` and `$1` are not parameters; they stay in the SQL as written (and fail there).
+- Never put `$name` inside a quoted string or a comment: it's replaced there too, and the value can break out. Put wildcards in the value — `title LIKE $q` with ``params: { q: `%${term}%` }``.
+- `null`, `''` and `[]` bind `NULL`, so compare with `IS NULL`. An array binds one value per item, so match a list with `IN ($ids)`.
+- On Postgres, MSSQL, MySQL, DB2, App and workspace datasources, write a literal `?` (the jsonb `?` operator, `'why?'`) as `\?` — `\\?` in a JavaScript string; a bare `?` counts as a placeholder once anything binds. On Oracle and generic JDBC, `\?` is not an escape.
+- `limit` caps the rows; leave it out for all of them. A non-SQL `language` passes `params` through to its driver.
