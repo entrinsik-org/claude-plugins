@@ -24,8 +24,9 @@ usually one of these.
 - **Incremental**: filter `MetaData.LastUpdatedTime >= '<watermark>'` (read
   the watermark from your own table, overlap the boundary — the merge
   dedupes). Deletions do NOT appear here: use the ChangeDataCapture endpoint
-  (`/cdc?entities=...&changedSince=...`) to learn about deleted ids, or
-  schedule a periodic full sync (`prune: true`) to reconcile.
+  (`/cdc?entities=...&changedSince=...`) to learn about deleted ids and
+  return them as the page's `deletes` (`warehouse-etl.md` §4d), or schedule
+  a periodic full sync (`prune: true`) to reconcile.
 - **Custom/undocumented fields**: org-specific custom fields ride in
   `CustomField` arrays with numeric `DefinitionId`s — map them explicitly;
   never assume their presence or order across orgs.
@@ -46,8 +47,9 @@ usually one of these.
   `>=` overlap; second-precision truncation can never skip a row and the
   merge dedupes.
 - **Soft deletes**: `queryAll` + `IsDeleted` reveals recycle-bin rows;
-  a plain query never shows deletions — same remedy as QBO (periodic full
-  sync with `prune: true`).
+  a plain query never shows deletions. Walk `queryAll` and return the
+  `IsDeleted` rows' ids as the page's `deletes` (`warehouse-etl.md` §4d),
+  or reconcile with a periodic full sync (`prune: true`).
 
 ## Postgres WAL (test_decoding shippers)
 

@@ -107,7 +107,7 @@ await load({
 
     batch: {
         size: 5000,
-        handler: 'etl/clean',      // per-batch transform route (rows in → rows out)
+        handler: 'etl/clean',      // per-batch transform route (rows in → rows out, or { rows, deletes } §4d)
         onError: 'fail' | 'skip' | { retry: 3 }   // 'skip' is invalid for pages sources
     },
     onComplete: 'etl/finalize',    // runs against the STAGING build (run.target), pre-publish
@@ -125,7 +125,8 @@ Teaching errors land on the task's `error` (`GET /api/tasks/{id}`):
 `table_missing` (write a migration), `schema_drift` (`{ newColumns,
 typeChanges }` — write an ALTER migration), `upsert_key_missing` (declare a
 PK or pass `key`), `upsert_key_unindexed` (dry runs, §4c),
-`prune_scope_missing`, `dependency_unbound` / `dependency_broken` (the
+`prune_scope_missing`, `key_order_ambiguous` and `delete_key_invalid`
+(targeted deletes, §4d), `dependency_unbound` / `dependency_broken` (the
 source slot), `all_batches_skipped` (`onError: 'skip'` skipped every batch,
 so nothing was published), and `empty_source` (a `replace` load whose pages
 walker returned no rows: the table keeps its rows. Pass `allowEmpty: true`
@@ -243,6 +244,49 @@ Make a dry run part of every new pipeline's bring-up: build the walker →
 `POST etl/sync {"dryRun": true}` (with the §2 passthrough) → read the
 receipts → then wire the schedule.
 
+## 4d. Deleting rows: `prune` or targeted `deletes`
+
+An `upsert` load removes rows two ways. Pick by what the source can tell you.
+
+- **`prune`** (§4, §4b): the load carries everything that should exist, and
+  whatever it did not carry is removed. Right for a full sync, or scoped to
+  the parents an incremental run touched.
+- **`deletes`**: the source names the keys that were removed (a change feed,
+  a deleted-records endpoint, a soft-delete flag, a CDC delete event). Right
+  for an incremental load, which carries only what changed.
+
+`deletes` comes from three places, in one shape:
+
+```javascript
+// a page walker's reply (§5)
+return { rows, deletes: [41, 42], cursor };
+
+// a batch handler, over a query or a pages source: answer an object, not the rows alone
+return { rows: kept, deletes: gone.map(r => r.id) };
+
+// an ingest drain's mapping handler (§7)
+return { rows, deletes, dead };
+```
+
+- **A key** is a bare value for a one-column key (`41`), or an object with a
+  value for every key column (`{ invoice_id: 'A', line_index: 2 }`). The
+  columns are the load's merge key: `key`, or the table's PRIMARY KEY.
+- **Multi-table `into`**: `deletes` is a `{ table: [...] }` map, like `rows`
+  (a batch handler answers `{ rows: { invoices: [...] }, deletes: {
+  invoice_lines: [...] } }`). Deletes apply children first.
+- **One publish**: deletes apply in the merge's transaction, after the merge.
+  A load that carries deletes and no rows still publishes. The receipt
+  reports `deleted`, per table under `progress.tables`.
+- **`upsert` only.** A delete in a `replace` or `append` load fails the task.
+- **The last event for a key wins.** Across pages and batches the pump keeps
+  the order: a row in a later batch brings back a key an earlier one
+  deleted, and a later delete removes a row an earlier one staged. Inside
+  ONE batch the two lists carry no order, so a key in both `rows` and
+  `deletes` fails the task with `key_order_ambiguous`. Return each key once
+  per batch, as its last event (the drain handler in §7 shows how).
+- A delete with no value for a key column fails with `delete_key_invalid`.
+- A dry run reports no would-be `deleted` count.
+
 ## 5. Page walkers (integration sources)
 
 A `pages` source names an internal route the pump invokes once per page.
@@ -267,10 +311,12 @@ export async function POST({ context, query, request }) {
 }
 ```
 
-Reply shape: `{ rows, cursor?, total?, done?, retryAfterMs? }`. Guards the
-pump enforces: the cursor must advance, must stay small (≤4KB), and 25
-consecutive empty pages without `done` aborts the walk. With `upsert`,
-overlap your watermark window (`>=`) freely — the merge dedupes.
+Reply shape: `{ rows, deletes?, cursor?, total?, done?, retryAfterMs? }`.
+`deletes` names keys the source says were removed (`upsert` only, §4d); a
+page may carry deletes and no rows. Guards the pump enforces: the cursor
+must advance, must stay small (≤4KB), and 25 consecutive empty pages
+without `done` aborts the walk. With `upsert`, overlap your watermark
+window (`>=`) freely — the merge dedupes.
 
 **Datasource-slot walkers.** `pages` works over a `target: datasource` slot
 too — the walker fetches through `context.<slot>.query(...)` with a keyset
@@ -366,19 +412,28 @@ return await load({
 export const config = { internal: true };
 export async function POST({ request }) {
     const out = { rows: [], deletes: [], dead: [] };
-    for (const e of request.body.rows) {           // [{ seq, payload, receivedAt }]
+    const last = new Map();                        // key → its LAST event in this batch
+    for (const e of request.body.rows) {           // [{ seq, payload, receivedAt }], in arrival order
         const p = e.payload;
         if (!p.op) { out.dead.push({ seq: e.seq, reason: 'no op' }); continue; }
+        last.set((p.after || p.before).id, p);
+    }
+    for (const p of last.values()) {
         if (p.op === 'd') out.deletes.push({ id: p.before.id });
-        else out.rows.push(p.after);               // c/u/r — snapshot reads
-    }                                              // flow the SAME path: backfill
-    return out;                                    // and stream are one code path
+        else out.rows.push(p.after);               // c/u/r — snapshot reads flow the SAME
+    }                                              // path: backfill and stream are one
+    return out;                                    // code path
 }
 ```
 
 The contract, and why it's safe:
 - **`deletes`** apply as targeted key deletes in the same atomic publish —
-  the CDC delete primitive (prune remains full-sync-only).
+  the CDC delete primitive, the same one a page walker or batch handler has
+  (§4d).
+- **Each key once per batch, as its last event.** Events arrive in buffer
+  order, and the pump keeps a key's order ACROSS batches, but inside one
+  batch `rows` and `deletes` carry no order. A key in both stalls the drain
+  with `key_order_ambiguous`; the `last` map above is the whole fix.
 - **`dead`** is for events the mapping DECIDES are trash (→ `_ingest_dead`
   with a reason; drain continues) — never a fallback for events it failed
   to handle.
@@ -389,9 +444,9 @@ The contract, and why it's safe:
   the ALTER migration → the drain resumes and replays.
 - **Bring-up ritual**: let real events accumulate, run the drain with
   `dryRun: true`, read the would-be receipts, THEN schedule it.
-- Receipts add `deleted` and `dead`; per-key ordering is the transport's
-  job (buffer seq preserves arrival). Multi-table `into` maps work — the
-  handler returns `{ table: [...] }` maps per channel.
+- Receipts add `deleted` and `dead`. Delivering a key's events in order is
+  the transport's job (buffer seq preserves arrival). Multi-table `into`
+  maps work — the handler returns `{ table: [...] }` maps per channel.
 - The buffer tables are owner-only (consumers can never read them) and
   applied events age out after 72h.
 
