@@ -64,9 +64,12 @@ tables:
   `currency`). Use Informer datatype vocabulary — the same one `load()`'s
   `columns:` declaration uses — never raw SQL types.
 - `decimals` pins the fraction digits of a numeric, currency, or duration
-  field; separators and date order stay with the viewer's locale.
+  field: a whole number from 0 to 12, unquoted (`decimals: 2`). Anything
+  else is ignored with a warning. Separators and date order stay with the
+  viewer's locale.
 - `expr` declares a computed field: one SQL expression over the table's own
-  columns (`expr: '"qty" * "unit_price"'`), single statement by grammar.
+  columns (`expr: '"qty" * "unit_price"'`). Keep it to one expression with
+  no `;` — deploy stores the string as written and does not check it.
 - **Quote any flow-map string containing a comma.** In
   `{ label: X, description: One thing, another thing }` YAML parses
   `another thing` as a NEW KEY — your description silently truncates and
@@ -111,8 +114,9 @@ tables:
 - **Hiding a foreign-key column does NOT hide the relationship** — the
   Explorer still offers the hop to the target table; only the raw id column
   disappears from rails and menus. Hide FK plumbing freely.
-- Underscore-prefixed tables are already excluded everywhere; `hidden` is
-  for plumbing that can't wear a `_` prefix.
+- Only the platform's own tables (`_migrations`, `_secrets`, `_ingest`,
+  `_ingest_dead`, load staging) are excluded for you. A table of yours is
+  listed whatever its name, `_`-prefixed included: mark plumbing `hidden`.
 
 ## Exposure — open sources and curated sources
 
@@ -239,9 +243,13 @@ links:
     reverse: Tareas
 ```
 
-Never put `type`, `unit`, new `values` keys, `color`, `icon`, or a table's
-`category` reference in a locale file — deploy ignores structure in
-overlays with a warning. Locale files translate; they never define.
+Never put `type`, `unit`, `color`, `icon`, or a table's `category`
+reference in a locale file — deploy ignores structure in overlays with a
+warning. `values` is the exception to watch: a locale file's `values` map
+is merged key by key with NO warning, so a key that the structure file
+does not declare becomes a new enum value in that language only. Translate
+the keys the structure file declares and add none. Locale files translate;
+they never define.
 
 Date and number FORMATTING conventions (12/08 vs 08/12) come from the
 viewer's locale at render time — never author them.
@@ -270,10 +278,12 @@ The registry resolves three layers, top wins per key, each key tagged with
 its provenance: the customer's **tenant** rows over your **vendor** rows
 over the **scan** layer — what Informer already knows about a source from
 its own scan, such as labels curated in the datasource admin. Customers can
-overlay your semantics (relabel a column for their org) and, in a later
-release, define their own SQL views over your schema — including **shadow
-views** that replace a table for their BI users (their column-level
-security). Two consequences for you as the vendor:
+overlay your semantics (relabel a column for their org) and define their
+own SQL views over your schema — including **shadow views** that stand in
+for a table of the same name on their BI surfaces. A shadow view is a
+convenience, not security: the table stays readable by its qualified name.
+Who sees which rows and columns is decided by row and column rules and
+data roles (Manage › Data access). Two consequences for you as the vendor:
 
 1. **Your semantics refresh wholesale on every deploy** — they are
    author-owned, like dependency descriptions. Customer overlays ride a
