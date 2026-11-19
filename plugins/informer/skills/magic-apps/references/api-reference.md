@@ -266,6 +266,8 @@ dependencies:
         owner: $user.username
 ```
 
+**2026.1.5+**: a multi-value user field or a YAML list matches any of its values; a key whose variable resolves to nothing matches no rows. See `informer-yaml.md` "With Row-Level Security" for the full rules.
+
 ### Integration Credentials
 
 ```yaml
@@ -283,9 +285,11 @@ dependencies:
 ### Variables
 
 - `$user.username`, `$user.email`, `$user.displayName`
-- `$user.custom.xxx` - Custom user fields
-- `$tenant.id`
-- `$app.id`, `$app.name`
+- `$user.custom.xxx` - Custom user fields (**2026.1.5+**: the field's Default Value when the user has none)
+- `$tenant.id`, `$tenant.name`
+- `$app.id`, `$app.name`, `$app.naturalId`, `$app.owner`
+
+See `informer-yaml.md` "Available Variables" for what each resolves to and what an unresolved path does.
 
 ## Error Handling
 
