@@ -115,7 +115,7 @@ tables:
   Explorer still offers the hop to the target table; only the raw id column
   disappears from rails and menus. Hide FK plumbing freely.
 - Only the platform's own tables (`_migrations`, `_secrets`, `_ingest`,
-  `_ingest_dead`, load staging) are excluded for you. A table of yours is
+  `_ingest_dead`, `_inf_principal`, load staging) are excluded for you. A table of yours is
   listed whatever its name, `_`-prefixed included: mark plumbing `hidden`.
 
 ## Exposure — open sources and curated sources

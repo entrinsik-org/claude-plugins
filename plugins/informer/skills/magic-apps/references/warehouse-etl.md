@@ -86,10 +86,15 @@ const res = await fetch('/api/_server/etl/sync', { method: 'POST', headers: { 'C
 const { id } = await res.json();
 const events = new EventSource(`/api/tasks/${id}/events`);
 // The feed sends NAMED events, so `onmessage` never fires. Each carries the task row.
-const draw = e => render(JSON.parse(e.data));   // progress.records / progress.total → your progress bar
-events.addEventListener('snapshot', draw);      // the current row, sent first
+const TERMINAL = ['succeeded', 'failed', 'cancelled', 'interrupted'];
+const draw = e => {
+    const task = JSON.parse(e.data);
+    render(task);                                // progress.records / progress.total → your progress bar
+    if (TERMINAL.includes(task.status)) events.close();   // or EventSource reconnects forever
+};
+events.addEventListener('snapshot', draw);      // the current row, sent first; the ONLY event if the task already ended
 events.addEventListener('update', draw);        // every change after it
-events.addEventListener('end', e => { draw(e); events.close(); });   // terminal status
+events.addEventListener('end', draw);           // terminal status
 ```
 
 ## 3. The `load()` spec
@@ -126,14 +131,17 @@ Teaching errors land on the task's `error` (`GET /api/tasks/{id}`):
 typeChanges }` — write an ALTER migration), `upsert_key_missing` (declare a
 PK or pass `key`), `upsert_key_unindexed` (dry runs, §4c),
 `prune_scope_missing`, `key_order_ambiguous` and `delete_key_invalid`
-(targeted deletes, §4d), `dependency_unbound` / `dependency_broken` (the
-source slot), `all_batches_skipped` (`onError: 'skip'` skipped every batch,
+(targeted deletes, §4d), `all_batches_skipped` (`onError: 'skip'` skipped every batch,
 so nothing was published), and `empty_source` (a `replace` load whose pages
 walker returned no rows: the table keeps its rows. Pass `allowEmpty: true`
-when an empty source really should empty the table). Two errors come from
-`load()` itself instead: a 409 `load_already_running` whose `data.taskId`
-names the task already touching those tables, and a 402
-`compute_budget_exhausted` when the app's compute budget is spent.
+when an empty source really should empty the table). Four errors come from
+`load()` itself instead, before any task exists: a 422
+`dependency_unbound` / `dependency_broken` (the source slot is not bound, or
+its target was deleted; `data.dependencyName` names the slot), a 409
+`load_already_running` whose `data.taskId` names the task already touching
+those tables, and a 402 `compute_budget_exhausted` when the app's compute
+budget is spent. A sync route that catches none of them hands the page an
+error body with no `id`.
 
 ## 4. Publish semantics — pick the right mode
 
@@ -355,7 +363,9 @@ What the platform provides (observation, not orchestration):
   caller's own tasks.)
 - `GET  /api/tasks/{taskId}` — one task. `GET /api/tasks/{taskId}/events` —
   its live SSE feed: a `snapshot` event with the current row, an `update`
-  per change, and `end` at a terminal status.
+  per change, and `end` at a terminal status. A task already terminal when
+  the feed opens answers `snapshot` only and closes, so close on a terminal
+  status from any event, not on `end`.
   `POST /api/tasks/{taskId}/_cancel` — cooperative cancel, honored at the
   next batch boundary.
 

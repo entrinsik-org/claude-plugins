@@ -47,9 +47,10 @@ usually one of these.
   `>=` overlap; second-precision truncation can never skip a row and the
   merge dedupes.
 - **Soft deletes**: `queryAll` + `IsDeleted` reveals recycle-bin rows;
-  a plain query never shows deletions. Walk `queryAll` and return the
-  `IsDeleted` rows' ids as the page's `deletes` (`warehouse-etl.md` §4d),
-  or reconcile with a periodic full sync (`prune: true`).
+  a plain query never shows deletions. Walk `queryAll`, filter the
+  `IsDeleted` records out of `rows`, and return their ids as the page's
+  `deletes` (`warehouse-etl.md` §4d): a key in both `rows` and `deletes` of
+  one page fails the load with `key_order_ambiguous`. Or reconcile with a periodic full sync (`prune: true`).
 
 ## Postgres WAL (test_decoding shippers)
 
