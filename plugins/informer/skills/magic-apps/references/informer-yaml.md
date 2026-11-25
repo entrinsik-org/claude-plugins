@@ -4,7 +4,7 @@
 >
 > **Not in this file:** how handler code calls the other slots (`context.<slot>.method()`) — see SKILL.md "Accessing Your Dependencies". Widget declarations (`widgets:` block) — see `widgets.md`. Agent declarations (`agents:` / `events:` blocks) — see `agents.md`. Custom role definitions (`roles:` block) — see SKILL.md "App Roles". The `channels:` relay block's shape is below; its runtime semantics (`broadcast()`, `channels/` handlers, the page API) — see `channels.md`. The `notifications:` opt-in declaration's shape is below; `notify()` and the page API — see `server-routes.md`.
 >
-> **Availability:** `informer.yaml` ships in every App release (2026.1.0+), so there is nothing to detect for the file itself. Later additions carry their floor in their own section: `altBaseUris` on the Integration record **2026.1.1+**, SQL parameter binding **2026.1.3+** (`inputs`) and **2026.1.4+** (`params` alone), `requires:` and `channels:` **2026.1.4+**, the dataset row-filter rules (any-of matching, Default Value, fail-closed) **2026.1.5+**, and `notifications:` plus row filters on every search path **2026.2.0+**. Below a floor, follow that section's fallback.
+> **Availability:** `informer.yaml` ships in every App release (2026.1.0+), so there is nothing to detect for the file itself. Later additions carry their floor in their own section: `altBaseUris` on the Integration record **2026.1.1+**, SQL parameter binding **2026.1.3+** (`inputs`) and **2026.1.4+** (`params` alone), `requires:` and `channels:` **2026.1.4+**, the dataset row-filter rules (any-of matching, Default Value, fail-closed) **2026.1.5+**, and `notifications:`, `share:` and row filters on every search path **2026.2.0+**. Below a floor, follow that section's fallback.
 
 Apps are configured with an `informer.yaml` file in the project root. This single file declares the app's **data dependencies** (typed slots that get bound at install time), any **raw API allowlist** the app needs, **widgets**, **agents**, **live channel relays** (`channels:`), the **push notification opt-in** (`notifications:`), and **custom roles**. It's uploaded automatically on deploy.
 
@@ -561,6 +561,8 @@ Restrict data based on the viewing user's profile. Filters live under each slot'
 
 ```yaml
 # informer.yaml
+requires:
+  informer: '>=2026.1.5'                 # the list below and fail-closed matching need it
 dependencies:
   orders:
     target: dataset
@@ -574,7 +576,7 @@ dependencies:
     options:
       filter:
         sales_rep: $user.username        # Users only see their own records
-        status: [open, pending]          # Either value matches (2026.1.5+)
+        status: [open, pending]          # Either value matches; 2026.1.4 reads it as the one term "open,pending"
 ```
 
 Each key is a dataset field and a row must match every key. How a key's value matches (**2026.1.5+**):
@@ -583,11 +585,16 @@ Each key is a dataset field and a row must match every key. How a key's value ma
 - **A multi-value user field** (stored as an array, e.g. `["Nursing","Pharmacy"]`) → rows equal to any element (`terms`). Text around the variable joins each element: `org-$user.custom.school` → `org-Nursing` or `org-Pharmacy`.
 - **A YAML list** is the any-of syntax. Variable entries add every value they hold: `school: [Shared, $user.custom.school]`. An entry that resolves to nothing adds nothing. Don't write an ES `terms:` block as the value; a mapping is not a filter value.
 - **An empty user field** (no value, `[]`, or `[null]` from a directory sync) falls back to the field's admin Default Value.
-- **Fails closed.** A key left with nothing to match on (its variable is unset with no default, a missing variable embedded in text like `org-$user.custom.dept`, missing credentials, an empty `''`/`[]` value, or a non-scalar value) injects `{ match_none: {} }`: the viewer gets zero rows from the slot, never everything the slot's `runAs` identity can read. A slot `filter:` that isn't a field map (including a bare `filter:` with nothing under it, which is YAML null) fails the deploy; in a legacy `access.datasets` entry it injects a single `match_none`. An explicit `filter: {}` has no keys and restricts nothing. `$env.*` is not resolved in dataset filters, so it always matches no rows. Make sure every user who opens the app has a value, or give the field a Default Value.
+- **Fails closed.** A key left with nothing to match on (its variable is unset with no default, a missing variable embedded in text like `org-$user.custom.dept`, a variable with no signed-in viewer to read it from, an empty `''`/`[]` value, or only entries that are not text, a number or `true`/`false`, such as a mapping, which are ignored) injects `{ match_none: {} }`: the viewer gets zero rows from the slot, never everything the slot's `runAs` identity can read. A slot `filter:` that isn't a field map (including a bare `filter:` with nothing under it, which is YAML null) fails the deploy; in a legacy `access.datasets` entry it injects a single `match_none`. An explicit `filter: {}` has no keys and restricts nothing. `$env.*` is not resolved in dataset filters, so it always matches no rows. Make sure every user who opens the app has a value, or give the field a Default Value.
 
-Where the filter holds: before 2026.2.0 a slot filter's clauses go into the `query` of that slot's `search()` only. A read of the same Dataset through `fetch()` or an `access.apis` route skips them, and a body part that reads outside the query (`global` aggregations, `suggest`, `knn`) answers from the whole index, so don't forward a viewer-built ES body to a filtered slot. **2026.2.0+** (I5-13289) applies the filter to every search the App runs (`search()`, `fields()`, `fetch()`, `access.apis`, snapshots), bounds a top-level `global` aggregation to the allowed rows, and answers `400` to a search part that would read past it (`suggest`, `knn`, `significant_terms`, `terms` with `min_doc_count` below 1, `explain`, `profile`, `runtime_mappings` that define a field). Through `fetch()` or `access.apis`, a filtered Dataset then answers only its search routes and `GET .../fields`; any other route of it answers `403`.
+Where the filter holds: before 2026.2.0 a slot filter's clauses go into the `query` of that slot's `search()` only. A read of the same Dataset through `fetch()` or an `access.apis` route skips them, and a body part that reads outside the query (`global` aggregations, `suggest`, `knn`) answers from the whole index, so don't forward a viewer-built ES body to a filtered slot. **2026.2.0+** (I5-13289) applies the filter to every search the App runs (`search()`, `fields()`, `fetch()`, `access.apis`, snapshots), bounds a top-level `global` aggregation to the allowed rows, and answers `400` to a search part that would read past it (`suggest`, `knn`, `significant_terms`, `terms` with `min_doc_count` below 1, `explain`, `profile`, `runtime_mappings` that define a field). Through `fetch()` or `access.apis`, a filtered Dataset then answers only the routes that search it, each with the filter applied: `GET`/`POST .../_search`, `GET .../data`, `POST .../group`, `POST .../group-rows`, `POST .../_search-aggregates`, `GET`/`POST .../export/{exporter}`, and `GET .../fields` (whose `sample=true` values come from the allowed rows). Any other route of it answers `403`, the Dataset itself (its record count) included. A route that lists Datasets, such as `GET /api/datasets`, is outside the check: if the allowlist includes it, it still answers a filtered Dataset's total record count. When several filters name one Dataset (two slots bound to it, or a slot and an `access.datasets` entry), each slot's `search()` applies its own filter, while `fetch()` and `access.apis` apply all of them and read only rows every filter allows.
 
-Older releases (2026.1.4 and earlier) ignore the Default Value. They drop any key whose value expands to `''` (a bare unset variable, `''`, `[]`, `$env.*`), so that key restricts nothing. They turn arrays and YAML lists into one comma-joined term (`"Nursing,Pharmacy"`, `"open,pending"`) that matches nothing, and they treat a `filter:` left null in `access.datasets` as no filter. There is no capability flag, so `requires: { informer: '>=2026.1.5' }` is the only gate. Floor the app with it if it relies on any rule above.
+Older releases (2026.1.4 and earlier) ignore the Default Value. They drop a key only when its whole value expands to `''` (a bare unset variable, `''`, `[]`, `$env.*`), so that key restricts nothing; text around an unresolved variable stays as a literal term (`org-$user.custom.dept` → `org-`, which matches rows whose value is `org-`). They turn arrays and YAML lists into one comma-joined term (`"Nursing,Pharmacy"`, `"open,pending"`) that matches nothing, and they treat a `filter:` left null in `access.datasets` as no filter.
+
+There is no capability flag. `requires: { informer: '>=2026.1.5' }` refuses the install on 2026.1.4, so floor the app with it if it relies on any rule above. It is no gate below that: releases before 2026.1.4 ignore `requires:` (see `requires:` above), so on 2026.1.0–2026.1.3 the app installs, and a viewer whose `$user.*` key expands to `''` sees every row the slot's `runAs` identity can read. If the app may land there, don't let a bare `$user.*` key be the only restriction:
+
+- **A `$user.username` key:** read the Dataset only through a server route that adds the term itself from `request.user.username`, and keep the Dataset out of what the page can reach directly.
+- **A custom user field:** a handler cannot read it (`request.user` carries only `username`, `displayName`, `email` and `timezone`), so every user who opens the app must have a value. Say so in the app's install notes.
 
 ## Integration with Credentials
 
@@ -621,7 +628,7 @@ dependencies:
 | `$app.naturalId` | App natural id (`owner:slug`) |
 | `$app.owner` | App owner (principal id) |
 
-Any other `$tenant.*` / `$app.*` path, or a `$user.<name>` that is neither built in nor a defined user field (bare `$user.<field>` is the same as `$user.custom.<field>`), doesn't resolve: it becomes `''` in a header or param and (**2026.1.5+**) matches no rows in a dataset filter; older releases drop the key. `$report.*` is not a variable namespace at all and stays literal text; use `$app.*`.
+Any other `$tenant.*` / `$app.*` path, or a `$user.<name>` that is neither built in nor a defined user field (bare `$user.<field>` is the same as `$user.custom.<field>`), doesn't resolve: it becomes `''` in a header or param and (**2026.1.5+**) matches no rows in a dataset filter; older releases drop the key when that variable is its whole value. `$report.*` is not a variable namespace at all and stays literal text; use `$app.*`.
 
 ## Resource Types
 
