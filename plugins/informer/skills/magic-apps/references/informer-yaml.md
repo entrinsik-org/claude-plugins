@@ -316,6 +316,27 @@ notifications:
   Informer GO phones there, which need no opt-in.
 - Servers below 2026.2.0 ignore the key.
 
+## `share:` (row and column security for the app's database; Informer 2026.2.0+)
+
+Declares who may read which rows and columns of the app's own workspace
+tables when its Datasource is shared: `variables` (slots an admin fills),
+`rules` (row rules), `columns` (masked columns, each tested by a flag from
+`roles:`) and `roles` (starter data roles). The grammar, the deploy
+failures and the traps are in `data-security.md`.
+
+```yaml
+share:
+  variables:
+    region: Sales region code
+  rules:
+    - { table: orders, column: region, variable: region }
+  columns:
+    - { table: customers, column: email, flag: pii, mask: email }
+```
+
+A malformed entry fails the deploy. Below 2026.2.0 nothing in it is
+enforced.
+
 ## `integrations:` (app-sourced integrations)
 
 A `dependencies:` slot with `target: integration` **binds to** an Integration
@@ -534,7 +555,7 @@ dependencies:
 
 ## With Row-Level Security
 
-Restrict data based on the viewing user's profile. Filters live under each slot's `options`:
+Restrict data based on the viewing user's profile. Filters live under each slot's `options`. They narrow a Dataset the app reads; to decide who sees which rows and columns of the app's OWN tables, declare `share:` instead (`data-security.md`, **2026.2.0+**):
 
 ```yaml
 # informer.yaml
@@ -607,7 +628,7 @@ access:
 Matching rules:
 
 - Patterns match the **path only** — a query string never affects matching.
-  `GET /api/runs` allows `runs?appId=…`; you never need a `*` just to
+  `GET /api/tasks` allows `tasks?appId=…`; you never need a `*` just to
   admit query params.
 - `*` matches one path segment, `**` matches across segments
   (`GET /api/apps/*/contents/**`).
